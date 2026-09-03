@@ -1,0 +1,860 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Goberna design tokens (azul + dorado, light-mode institucional).
+ * Fuente: skill goberna-design-system — mantener estos valores en sync si el
+ * token oficial cambia. --primary/--accent/etc siguen la convención de
+ * shadcn/ui para que sus componentes salgan con la marca ya puesta.
+ */
+:root {
+  --background: #F5F7FB;
+  --foreground: #16213A;
+
+  --card: #FFFFFF;
+  --card-foreground: #16213A;
+  --popover: #FFFFFF;
+  --popover-foreground: #16213A;
+
+  --primary: #2563EB;
+  --primary-hover: #1D4ED8;
+  --primary-foreground: #FFFFFF;
+
+  --secondary: #EFF4FE;
+  --secondary-foreground: #0E2A52;
+
+  --muted: #F5F7FB;
+  --muted-foreground: #5B6B86;
+
+  /* shadcn usa --accent para hover/estado activo de muchos componentes — aquí
+     va un celeste sutil, NO el dorado. El dorado es señal funcional escasa
+     (racha, cifra héroe), nunca un color de hover genérico. */
+  --accent: #EFF4FE;
+  --accent-foreground: #0E2A52;
+
+  --destructive: #DC2626;
+  --destructive-foreground: #FFFFFF;
+
+  --success: #16A34A;
+  --success-foreground: #FFFFFF;
+
+  --warning: #F59E0B;
+  --warning-foreground: #78350F;
+
+  --border: #E6EAF2;
+  --input: #E6EAF2;
+  --ring: #2563EB;
+  --radius: 0.75rem;
+
+  /* El riel de las barras de scroll. Token y no literal: en el tema oscuro un
+     gris claro sobre #0F1419 es una cicatriz que cruza la pantalla. */
+  --riel: #C9D4E5;
+  --riel-activo: var(--navy);
+
+  /* La tinta del resalte de selección — el porqué está en el bloque
+     `::selection`, abajo. */
+  --selection-ink: #FFFFFF;
+
+  /* Marca */
+  --navy: #0E2A52;
+  /* EL MISMO AZUL, CON EL PAPEL ESCRITO EN EL NOMBRE. `--navy` es SUPERFICIE
+     (`bg-navy text-white`, el velo `bg-navy/20` de los modales, el borde de una
+     chapa); `--navy-ink` es TINTA (`text-navy-ink`, el título de cada pantalla).
+     En el tema claro valen exactamente lo mismo y por eso durante meses fueron
+     un solo token — no había con qué notar la diferencia. En oscuro se separan,
+     y no un poco: una superficie oscura SIGUE oscura, y una tinta oscura
+     desaparece. Un token con dos papeles no se puede cambiar de tema; dos
+     tokens, sí.
+     Elegir el papel es de quien escribe el marcado, no de una regla que adivine
+     por él: `text-navy-ink` para lo que se lee, `text-navy` para la excepción
+     rara —hoy una sola— de tinta oscura sobre una chapa que en oscuro sigue
+     clara (la chapa de pendientes, `bg-gold`). */
+  --navy-ink: #0E2A52;
+  --navy-muted: #CDDCF2;
+  --gold: #FFC800;
+  --gold-ink: #CAA106;
+
+  /* CATEGORÍAS — la paleta fija de las etiquetas con color elegible (#48).
+     Armoniosa y SIN ORO a propósito: el oro es señal de tiempo que se acaba, no
+     decoración. Se excluye toda la familia ámbar/amarillo. Genérica de nombre:
+     la reusa el chip de curso (#72). */
+  --cat-pizarra: #64748B;
+  --cat-rojo: #DC2626;
+  --cat-naranja: #EA580C;
+  --cat-verde: #16A34A;
+  --cat-azul: #2563EB;
+  --cat-cian: #0891B2;
+  --cat-morado: #7C3AED;
+  --cat-rosa: #DB2777;
+
+  /* Única excepción documentada: color de marca externa (Meta), para el CTA
+     "Ver en Ads Manager" — ver crear_campana.html en goberna-dashboard. */
+  --meta-blue: #1877F2;
+  --meta-blue-hover: #1558B0;
+
+  /* TEMPERATURA DEL DATO — no es decoración, codifica el problema central.
+     Un lead recién llegado está "tibio" (todavía se puede convertir); cada día
+     que pasa se enfría. La rampa va de dorado (fresco) a acero (frío/muerto).
+     Se usa en la banda de severidad de cada lead y en el Pulso. */
+  --temp-fresco: #16A34A;   /* < 1 día  — todavía a tiempo */
+  --temp-tibio: #CAA106;    /* < 3 días — se está yendo */
+  --temp-frio: #C2410C;     /* < 14 días — difícil */
+  --temp-helado: #64748B;   /* 14+ días — prácticamente perdido */
+}
+
+/* ── EL TEMA OSCURO — UNA SOLA LISTA ──────────────────────────────────────────
+   Vive bajo `[data-theme="dark"]` y en ningún otro lado. El atributo lo estampa
+   `src/lib/tema.ts` sobre `<html>`, y `main.tsx` lo llama ANTES de montar React:
+   para cuando hay algo que pintar, el tema ya está resuelto.
+
+   🔴 POR QUÉ NO HAY UNA SEGUNDA COPIA ADENTRO DE `@media`. La había. El commit
+   546645f dejó la paleta oscura DUPLICADA —una copia en la media query y otra
+   en el atributo— y las dos había que mantener a mano. Nadie las mantuvo: el
+   `::selection` se arregló para el tema claro (14b97bd) y la copia oscura quedó
+   con 2.3:1, o sea invisible otra vez. Dos listas que tienen que decir lo mismo
+   terminan diciendo cosas distintas. Acá hay UNA.
+
+   La media query de abajo NO es la paleta: son los dos únicos tokens que se
+   pintan antes de que corra un byte de JS (el fondo del `<body>` todavía
+   vacío). Sin ella, quien tiene el sistema en oscuro abre Hermes con un
+   fogonazo blanco. Todo lo demás espera al atributo, que llega antes que el
+   contenido. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #0F1419;
+    --foreground: #F1F5F9;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #0F1419;
+  --foreground: #F1F5F9;
+
+  --card: #1A2332;
+  --card-foreground: #F1F5F9;
+
+  /* 🔴 LA TINTA DE ADVERTENCIA SE ACLARA, y es una corrección con número: en
+     claro `--warning-foreground` es `#78350F` (marrón), que sobre esta mesa
+     oscura da **1,74:1** — o sea invisible. Se veía en el aviso «Cerberus cortó
+     la consulta» del panel de contacto, que es justo el mensaje que hay que
+     poder leer cuando algo falla.
+
+     Sobrevivió porque `temaOscuroLegible.test.ts` medía SÓLO `--foreground` y
+     `--navy-ink`: una lista de tintas incompleta no falla, deja de mirar. Ahora
+     `--warning-foreground` está adentro de esa lista.
+
+     ⚠️ Ámbar y NO oro: el dorado significa tiempo que se acaba y nada más
+     (arriba en este archivo). Éste es el ámbar de la familia `--warning`, que ya
+     existía como fondo — lo que cambia es que ahora su tinta se lee. */
+  --warning-foreground: #FBBF24;
+  --popover: #1A2332;
+  --popover-foreground: #F1F5F9;
+
+  --primary: #3B82F6;
+  --primary-hover: #60A5FA;
+  --primary-foreground: #F1F5F9;
+
+  --secondary: #1E293B;
+  --secondary-foreground: #CBD5E1;
+
+  --muted: #334155;
+  /* 🔴 SUBE UN ESCALÓN RESPECTO DEL CLARO, y es la corrección del reporte de
+     «texto secundario que se pierde». Valía #94A3B8, que sobre `--card` da
+     6,16:1 pero sobre las superficies LEVANTADAS (`--sup-3`, `--sup-4`, abajo)
+     cae a 5,06 y 4,62 — el borde del mínimo. #A6B3C7 es el mismo gris azulado
+     un paso más claro: 7,44 sobre `--card` y 5,58 en la peor superficie de la
+     app. Sigue siendo GRIS, no blanco: contra `--foreground` (#F1F5F9) mantiene
+     1,94 de separación, así que la jerarquía se ve. */
+  --muted-foreground: #A6B3C7;
+
+  --accent: #1E293B;
+  --accent-foreground: #CBD5E1;
+
+  --border: #2D3A4A;
+  --input: #2D3A4A;
+
+  --navy-muted: #334155;
+
+  /* 🔴 `--navy` NO SE INVIERTE, y es a propósito: sus más de 200 usos son
+     superficie (`bg-navy text-white`, los velos de los modales, bordes y
+     anillos) y ahí tiene que seguir siendo oscuro. El que se da vuelta es el
+     token de TINTA: sin esto, los `text-navy-ink` de la app —empezando por el
+     título de CADA pantalla, que va sobre `bg-card`— darían #0E2A52 sobre
+     #1A2332, contraste 1.1:1. Un título que ocupa su lugar y no se lee.
+     Lo mide `src/temaOscuroLegible.test.ts`. */
+  --navy-ink: #DCE7F7;
+
+  --riel: #334155;
+  --riel-activo: #64748B;
+
+  --selection-ink: #0E2A52;
+
+  /* ── EL TERCER NIVEL DE TINTA: lo tenue, que ya no es «lo invisible» ───────
+     La jerarquía del tema oscuro son TRES tonos sólidos, no una rampa de
+     opacidades: `--foreground` (principal) · `--muted-foreground` (secundario)
+     · éste (deshabilitado). Sobre `--card` da 4,56:1 — sigue siendo el más
+     apagado de los tres, pero se lee. El alfa que reemplaza daba 2,13. */
+  --texto-tenue: #7C8BA1;
+
+  /* ── LA ESCALERA DE SUPERFICIES SÓLIDAS ───────────────────────────────────
+     Los valores NO están elegidos a ojo: son el color que HOY produce cada
+     `bg-muted/NN` al componerse sobre `--card`, redondeado a un escalón. Por
+     eso el tema se ve igual — lo que cambia es que el color ya no depende de
+     lo que haya debajo.
+
+     🔴 EL PORQUÉ. Un fondo con alfa no tiene un color: tiene el de lo que
+     tenga detrás. La misma tarjeta compone #242F40 sobre `--card` y #1D2631
+     sobre `--background`, así que el contraste del texto encima depende de
+     dónde se monte el componente. Con sólidos deja de depender.
+
+     ⚠️ **LO QUE LA MEDICIÓN NO RESPALDA, y conviene que quede escrito.** El
+     reporte decía «al reducir la pantalla empeora», y eso hacía sospechar que
+     al angostar los paneles caían sobre otra superficie. **No pasa**: corrido
+     sobre las galerías a 390/768/1280 px, de 174 elementos vistos en más de un
+     ancho, **cero** cambian de contraste — la deriva máxima es 0,00. El
+     apilado no cambia de padre. Lo que la pantalla chica sí hace es amontonar
+     más texto de 9-11 px a la vez, así que el mismo gris flojo se nota más.
+     La dependencia del fondo es real como MECANISMO y por eso el sólido es
+     mejor; simplemente no era la causa del síntoma reportado. */
+  --sup-2: #212C3C; /* el realce sutil  — era bg-secondary/*, bg-muted/20-30 */
+  --sup-3: #263243; /* el realce medio  — era bg-muted/40-50 */
+  --sup-4: #2C384B; /* el realce fuerte — era bg-muted/60-80 */
+
+  /* Los tintes semánticos, también sólidos. Mismo método: el composite de hoy
+     sobre `--card`, congelado. */
+  --tinte-destructive: #2D2331;
+  --tinte-destructive-fuerte: #412430;
+  --tinte-warning: #302F2E;
+  --tinte-warning-fuerte: #463C2A;
+  --tinte-success: #1A3034;
+  --tinte-success-fuerte: #193D37;
+  --tinte-primary: #1D2D46;
+  --tinte-primary-fuerte: #213659;
+  --tinte-gold: #31342D;
+
+  /* Las ocho categorías y las cuatro temperaturas. `/10` y `/12` estaban a un
+     punto de distancia y no se distinguían: un solo tono por familia. */
+  --tinte-cat-pizarra: #222C3C;
+  --tinte-cat-rojo: #2F2331;
+  --tinte-cat-naranja: #31292E;
+  --tinte-cat-verde: #1A3135;
+  --tinte-cat-azul: #1B2A46;
+  --tinte-cat-cian: #182F40;
+  --tinte-cat-morado: #252647;
+  --tinte-cat-rosa: #2F233A;
+  --tinte-temp-fresco: #1A3135;
+  --tinte-temp-tibio: #2D312D;
+  --tinte-temp-frio: #2C262E;
+  --tinte-temp-helado: #222C3C;
+}
+
+/* ── SÓLIDOS EN VEZ DE ALFA — LA TRADUCCIÓN, SÓLO EN OSCURO ───────────────────
+   Este bloque reemplaza al «piso de opacidad» que estuvo acá hasta el
+   27-ago-2026. Aquél subía el ALFA de la tinta apagada (de 40 % a 85 %); éste
+   saca el alfa de la ecuación y pone COLOR SÓLIDO, que es lo que se pidió.
+
+   🔴 POR QUÉ SÓLIDO Y NO UN ALFA MÁS ALTO. Subir el alfa mejora el número sin
+   tocar el mecanismo: un color con alfa **no tiene un color**, tiene el del
+   fondo que le toque. `bg-muted/40` compone #242F40 sobre `--card` y #1D2631
+   sobre `--background`, así que el contraste del texto encima queda a merced
+   de dónde se monte el componente. Un sólido no tiene esa cuerda floja.
+
+   ⚠️ Eso NO es lo mismo que decir que el ancho lo cambiaba: medido a
+   390/768/1280 px, ningún elemento deriva (§ el comentario de `--sup-2`). El
+   síntoma de «en chico se pierde» es densidad, no composición.
+
+   ⚠️ **LOS VELOS NO SE TOCAN, y no es un olvido.** `bg-navy/20 /25 /30 /40 /85`
+   sobre `fixed inset-0`, `bg-foreground/20` y `bg-background/60` son los velos
+   de los modales: existen para dejar ver atenuado lo que hay detrás. Ahí la
+   transparencia no es «innecesaria», es la función — solidificarlos taparía la
+   pantalla con un rectángulo opaco. Por eso la conversión va utility por
+   utility y no con un comodín.
+
+   El `:where()` deja estas reglas en especificidad de clase: le ganan a la
+   utility base y PIERDEN contra cualquier `hover:` / `focus:` (0,2,0), así que
+   los estados siguen mandando. */
+@layer utilities {
+  /* ── LA TINTA: tres niveles sólidos ─────────────────────────────────────
+     `text-muted-foreground` a secas ya sube solo, porque cambió el token.
+     Acá caen los que llevaban alfa. */
+
+  /* Secundario — «gris pero visible». */
+  :where(html[data-theme='dark'])
+    :is(
+      .text-muted-foreground\/50,
+      .text-muted-foreground\/60,
+      .text-muted-foreground\/70,
+      .text-muted-foreground\/80
+    ):not(svg) {
+    color: var(--muted-foreground);
+  }
+
+  /* Deshabilitado — el más tenue de los tres, pero legible (4,56 sobre card).
+     `/25` es el día deshabilitado de `SelectorFechaHora` y `/40` los días de
+     otro mes y los «sin dato»: mismo papel, mismo tono. */
+  :where(html[data-theme='dark'])
+    :is(.text-muted-foreground\/25, .text-muted-foreground\/40):not(svg) {
+    color: var(--texto-tenue);
+  }
+
+  /* Los íconos grandes de estado vacío. Van al tono tenue —sólido, sin alfa—
+     para que sigan pesando lo mismo en la composición: son el dibujo de «acá
+     no hay nada», no un texto que haya que leer. */
+  :where(html[data-theme='dark'])
+    svg:is(
+      .text-muted-foreground\/25,
+      .text-muted-foreground\/40,
+      .text-muted-foreground\/50,
+      .text-muted-foreground\/60
+    ) {
+    color: var(--texto-tenue);
+  }
+
+  /* El hint del campo de la Agenda: la utility de `placeholder:` sale con
+     pseudo-elemento, así que la de arriba no la alcanza. */
+  :where(html[data-theme='dark']) .placeholder\:text-muted-foreground\/70::placeholder {
+    color: var(--muted-foreground);
+  }
+
+  /* El conteo adentro de la píldora de filtro ACTIVA: #F1F5F9 al 70 % sobre el
+     azul daba 2,40:1. Sólido, llega a 3,36 — el techo lo pone el color del
+     fondo, no el alfa, y ése es otro asunto (la paleta). */
+  :where(html[data-theme='dark']) .text-primary-foreground\/70:not(svg) {
+    color: var(--primary-foreground);
+  }
+
+  /* ── LAS SUPERFICIES: la escalera sólida ────────────────────────────────
+     Cada rung es el composite que la utility producía sobre `--card`. */
+  :where(html[data-theme='dark'])
+    :is(.bg-secondary\/5, .bg-secondary\/20, .bg-secondary\/30, .bg-secondary\/40,
+        .bg-secondary\/50, .bg-secondary\/60, .bg-secondary\/70,
+        .bg-muted\/20, .bg-muted\/30) {
+    background-color: var(--sup-2);
+  }
+
+  :where(html[data-theme='dark']) :is(.bg-muted\/40, .bg-muted\/50) {
+    background-color: var(--sup-3);
+  }
+
+  :where(html[data-theme='dark'])
+    :is(.bg-muted\/60, .bg-muted\/70, .bg-muted\/80) {
+    background-color: var(--sup-4);
+  }
+
+  /* Las barras pegajosas y la tarjeta translúcida: ya eran opacas al 80-95 %,
+     así que solidificarlas es imperceptible y quita la dependencia del fondo. */
+  :where(html[data-theme='dark'])
+    :is(.bg-card\/50, .bg-card\/80, .bg-card\/90, .bg-card\/95) {
+    background-color: var(--card);
+  }
+  :where(html[data-theme='dark']) .bg-secondary\/95 {
+    background-color: var(--secondary);
+  }
+
+  /* ── LOS TINTES SEMÁNTICOS ──────────────────────────────────────────────
+     Mismo método: el composite de hoy sobre `--card`, congelado en un token. */
+  :where(html[data-theme='dark']) :is(.bg-destructive\/5, .bg-destructive\/10) {
+    background-color: var(--tinte-destructive);
+  }
+  :where(html[data-theme='dark']) :is(.bg-destructive\/15, .bg-destructive\/20) {
+    background-color: var(--tinte-destructive-fuerte);
+  }
+  :where(html[data-theme='dark']) :is(.bg-warning\/5, .bg-warning\/10, .bg-warning\/15) {
+    background-color: var(--tinte-warning);
+  }
+  :where(html[data-theme='dark']) .bg-warning\/20 {
+    background-color: var(--tinte-warning-fuerte);
+  }
+  :where(html[data-theme='dark'])
+    :is(.bg-success\/5, .bg-success\/10, .bg-success\/12, .bg-success\/15) {
+    background-color: var(--tinte-success);
+  }
+  :where(html[data-theme='dark']) .bg-success\/20 {
+    background-color: var(--tinte-success-fuerte);
+  }
+  :where(html[data-theme='dark']) :is(.bg-primary\/5, .bg-primary\/10, .bg-primary\/12) {
+    background-color: var(--tinte-primary);
+  }
+  :where(html[data-theme='dark']) .bg-primary\/15 {
+    background-color: var(--tinte-primary-fuerte);
+  }
+
+  /* ── CATEGORÍAS Y TEMPERATURA ───────────────────────────────────────────
+     Los chips de etiqueta y las bandas de antigüedad. El `/10` y el `/12` que
+     el marcado alterna daban colores a un punto de distancia —invisible—, así
+     que cada familia colapsa a un tono sólido. */
+  :where(html[data-theme='dark']) :is(.bg-cat-pizarra\/10, .bg-cat-pizarra\/12) {
+    background-color: var(--tinte-cat-pizarra);
+  }
+  :where(html[data-theme='dark']) :is(.bg-cat-rojo\/10, .bg-cat-rojo\/12) {
+    background-color: var(--tinte-cat-rojo);
+  }
+  :where(html[data-theme='dark']) :is(.bg-cat-naranja\/10, .bg-cat-naranja\/12) {
+    background-color: var(--tinte-cat-naranja);
+  }
+  :where(html[data-theme='dark']) :is(.bg-cat-verde\/10, .bg-cat-verde\/12) {
+    background-color: var(--tinte-cat-verde);
+  }
+  :where(html[data-theme='dark']) :is(.bg-cat-azul\/10, .bg-cat-azul\/12) {
+    background-color: var(--tinte-cat-azul);
+  }
+  :where(html[data-theme='dark']) :is(.bg-cat-cian\/10, .bg-cat-cian\/12) {
+    background-color: var(--tinte-cat-cian);
+  }
+  :where(html[data-theme='dark']) :is(.bg-cat-morado\/10, .bg-cat-morado\/12) {
+    background-color: var(--tinte-cat-morado);
+  }
+  :where(html[data-theme='dark']) :is(.bg-cat-rosa\/10, .bg-cat-rosa\/12) {
+    background-color: var(--tinte-cat-rosa);
+  }
+  :where(html[data-theme='dark']) :is(.bg-temp-fresco\/10, .bg-temp-fresco\/12) {
+    background-color: var(--tinte-temp-fresco);
+  }
+  :where(html[data-theme='dark']) :is(.bg-temp-tibio\/10, .bg-temp-tibio\/12) {
+    background-color: var(--tinte-temp-tibio);
+  }
+  :where(html[data-theme='dark']) :is(.bg-temp-frio\/10, .bg-temp-frio\/12) {
+    background-color: var(--tinte-temp-frio);
+  }
+  :where(html[data-theme='dark']) :is(.bg-temp-helado\/10, .bg-temp-helado\/12) {
+    background-color: var(--tinte-temp-helado);
+  }
+
+  /* La barra que NO es hoy, en el gráfico de columnas (`graficos/Columnas.tsx`):
+     el alfa ahí codifica un dato —hoy va a color pleno, el resto atenuado—, así
+     que el sólido conserva esa distinción en vez de borrarla. */
+  :where(html[data-theme='dark']) .bg-primary\/60 {
+    background-color: #2F5A9E;
+  }
+  :where(html[data-theme='dark']) :is(.bg-gold\/10, .bg-gold\/15, .bg-gold\/20) {
+    background-color: var(--tinte-gold);
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-navy: var(--navy);
+  --color-navy-ink: var(--navy-ink);
+  --color-navy-muted: var(--navy-muted);
+  --color-gold: var(--gold);
+  --color-gold-ink: var(--gold-ink);
+  --color-cat-pizarra: var(--cat-pizarra);
+  --color-cat-rojo: var(--cat-rojo);
+  --color-cat-naranja: var(--cat-naranja);
+  --color-cat-verde: var(--cat-verde);
+  --color-cat-azul: var(--cat-azul);
+  --color-cat-cian: var(--cat-cian);
+  --color-cat-morado: var(--cat-morado);
+  --color-cat-rosa: var(--cat-rosa);
+  --color-meta-blue: var(--meta-blue);
+  --color-meta-blue-hover: var(--meta-blue-hover);
+  --color-temp-fresco: var(--temp-fresco);
+  --color-temp-tibio: var(--temp-tibio);
+  --color-temp-frio: var(--temp-frio);
+  --color-temp-helado: var(--temp-helado);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-heading: 'Montserrat', system-ui, sans-serif;
+  --font-sans: 'Open Sans', system-ui, sans-serif;
+  /* La voz "instrumento": metadatos, unidades, índices, marcas de tiempo. Le da a la matriz su
+     identidad de puente de mando sin depender de ninguna fuente externa (usa la mono del sistema). */
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+}
+
+/* La curva de la casa y la entrada estándar: una sola física de movimiento.
+   @theme (no inline) emite --ease-house como var real, así sirve tanto la
+   utility `ease-house` como `var(--ease-house)` en valores arbitrarios. */
+@theme {
+  --ease-house: cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-entrar: entrar 240ms var(--ease-house) both;
+
+  @keyframes entrar {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+}
+
+/* LOS RESETS VAN EN `base`, Y NO ES UN DETALLE DE ORDEN.
+ *
+ * En el modelo de capas de CSS, lo que está FUERA de toda capa le gana a todo lo
+ * que está adentro de una — sin importar la especificidad. `@import "tailwindcss"`
+ * declara `theme, base, components, utilities`, así que estas reglas, sueltas,
+ * le ganaban a TODAS las utilities de Tailwind.
+ *
+ * Lo que eso rompía, medido en el navegador con `getComputedStyle`:
+ *   · `border-primary`, `border-destructive`, `border-l-temp-frio` → todas
+ *     devolvían `#E6EAF2`, el gris de `--border`. **Cada borde de color de la app
+ *     se pintaba gris**: el filete de temperatura del kanban, el borde navy de la
+ *     fila fijada, las cajas de error en rojo, el banner de baneo. Escritos y
+ *     nunca vistos: 57 utilities de borde muertas.
+ *   · `.outline-none` no hacía nada, porque `:focus-visible` de abajo le ganaba.
+ *     Cada input dibujaba al enfocarse un rectángulo de 2px con esquinas vivas
+ *     ADENTRO de la píldora redondeada. Eso es lo que se sentía barato.
+ *
+ * Adentro de `base`, las utilities vuelven a ganar — que es lo que el código ya
+ * decía querer. Si alguna vez ves un borde de color que no aparece, mirá acá
+ * primero.
+ */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  /* `color-scheme` no es cosmética: de esto dependen los controles que dibuja el
+     SISTEMA y no nosotros — el desplegable de un `<select>`, el calendario de un
+     `<input type=date>`, el autocompletado, la barra de scroll por defecto.
+     Cuando la app se puso oscura y esto quedó en `light`, esos controles seguían
+     saliendo blancos adentro de una pantalla negra. */
+  /* `overflow-x: hidden` es el tope duro que le falta al layout de columnas de
+     `App.tsx` frente a un desborde interno: sin esto, cualquier hijo que se
+     desborde horizontalmente (una burbuja con una URL sin espacios, por
+     ejemplo) hace scrolleable el documento entero — en Mac el gesto de dos
+     dedos del trackpad arrastra toda la pantalla, no solo el panel donde
+     nació el desborde. */
+  html {
+    color-scheme: light;
+    overflow-x: hidden;
+  }
+
+  html[data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  /* Antes de que JS estampe el atributo manda el sistema, igual que con el fondo
+     del `<body>`. */
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      color-scheme: dark;
+    }
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    font-family: var(--font-sans);
+    color: var(--foreground);
+    background: var(--background);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+}
+
+@layer utilities {
+  /* Sombra de panel: difusa y ambiental, no la caja dura de shadow-sm. Da la
+     sensación de una placa apoyada, no pegada. Acabado, no decoración. */
+  .shadow-panel {
+    box-shadow:
+      0 1px 2px rgba(14, 42, 82, 0.04),
+      0 14px 34px -18px rgba(14, 42, 82, 0.12);
+  }
+}
+
+/* Accesibilidad: quien pidió menos movimiento, recibe menos movimiento. Las
+   transiciones se vuelven instantáneas; nada queda oculto ni roto. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── OFICIO DE ESCRITORIO: los detalles que separan una app de una página ── */
+
+/* Scrollbars de la casa: finas, calladas, navy al agarrarlas. Nada delata
+   "web genérica" más rápido que la scrollbar cruda del navegador.
+   Por token y no por literal: el gris claro de acá era el único color de este
+   archivo que no se enteraba del tema oscuro. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--riel) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--riel);
+  border-radius: 999px;
+  border: 2.5px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--riel-activo);
+  background-clip: content-box;
+}
+
+/* La excepción: una tira que se corre de lado (la barra de filtros de la cola)
+   NO lleva barra de scroll. En 400 px de panel, 9 px de riel gris debajo de los
+   chips es ruido y come una fila; que hay más a los lados lo dice el degradado
+   del borde, no un riel. Va acá y no como variante arbitraria de Tailwind
+   porque `[&::-webkit-scrollbar]:hidden` no llega a pisar el `*::-webkit-scrollbar`
+   global de arriba. */
+.sin-riel {
+  scrollbar-width: none;
+}
+.sin-riel::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+@layer base {
+  /* Seleccionar texto también es de la marca — pero antes que de la marca, tiene
+     que VERSE.
+     🔴 LA TRAMPA, Y YA MORDIÓ: el color de selección no puede coincidir con el
+     fondo de ningún contenedor de texto. Acá decía `background: var(--secondary)`
+     con `color: var(--navy)`, que son EXACTAMENTE los dos colores de la burbuja
+     saliente del hilo de WhatsApp (`bg-secondary text-navy`). Contraste 1.00 en el
+     fondo y 1.00 en el texto: arrastrar el mouse sobre un mensaje propio no
+     cambiaba un solo píxel. Sobre la burbuja entrante (`bg-card`) daba 1.10, que
+     tampoco se ve. La selección funcionaba perfecto y era invisible, así que la
+     vendedora concluía que el chat no se puede copiar.
+     `--primary-hover` es el azul de marca más oscuro que NO es fondo en reposo de
+     ningún contenedor —solo estado de hover—, así que se despega de las dos
+     burbujas y de la mesa. Sin oro: el oro es tiempo que se acaba.
+     Ese día llegó: el archivo YA tiene tema oscuro. Y la regla no se repitió —
+     con la paleta oscura, `--primary-hover` se aclara a #60A5FA y el blanco
+     encima daba 2.3:1, el mismo defecto invisible, de vuelta.
+     La salida no fue repetir la regla sino sacarle la tinta a un token propio:
+     una sola declaración, dos temas, y `--selection-ink` es el único valor que
+     cambia (blanco sobre el azul oscuro; navy sobre el azul claro, 5.6:1).
+     El contraste lo fija `src/seleccionVisible.test.ts`, que ahora mide LOS DOS
+     temas — el bug anterior existió justamente porque medía uno. */
+  ::selection {
+    background: var(--primary-hover);
+    color: var(--selection-ink);
+  }
+
+  /* El foco de teclado, uno solo y visible, en toda la app. El outline sigue el
+     radio propio de cada elemento — no se fuerza ninguna forma.
+     En `base` a propósito: suelto le ganaba a `outline-none`, y los campos que
+     dibujan su propio foco (un anillo que sí respeta el radio) quedaban con este
+     rectángulo encima. Acá abajo, el que declara `outline-none` manda. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* ── LA LIBRETA · BlockNote dentro de la marca ────────────────────────────────
+   BlockNote (`@blocknote/mantine`) trae su propio CSS con `font-family: Inter`
+   sobre `.bn-default-styles`, y un fondo blanco sobre `.bn-editor`. Es el choque
+   conocido entre Tailwind 4 y los estilos de Mantine (issue #155 del repo,
+   abierto desde 2023) — acá se manifiesta como tipografía y superficie.
+
+   Se corrige DEVOLVIÉNDOLE LA HERENCIA, con selectores más específicos que los
+   suyos, y sin tocar su hoja (que se reemplaza en cada upgrade). Su CSS se
+   inyecta desde el chunk perezoso, o sea DESPUÉS de este archivo: por eso no
+   alcanza con igualar la especificidad, hay que superarla. */
+/* El contenedor entra en la lista porque él también trae `Inter`: heredar de
+   un padre que ya está pisado no devuelve nada. */
+.bn-container.bn-mantine,
+.bn-container .bn-editor.bn-default-styles,
+.bn-container .bn-editor.bn-default-styles * {
+  font-family: inherit;
+}
+
+/* La página se apoya en el fondo de la app: la superficie ya es la Libreta.
+
+   EL ANCHO YA NO SE PONE ACÁ (19-ago-2026): antes `.bn-editor` se acotaba y
+   centraba solo — ahora lo hace `.hoja-a4`, más abajo, y esto se estira a
+   llenar lo que esa caja (o, en la pantalla dividida, el panel fluido) le
+   deje. Ponerle OTRO ancho acá encima volvería a acotar por partida doble. */
+.bn-container .bn-editor.bn-default-styles {
+  background-color: transparent;
+  /* 🔴 LO QUE EL SELECTOR DE FUENTE Y EL DE TAMAÑO AFIRMAN CUANDO NO HAY ESTILO
+     PUESTO. Los dos muestran «Arial» y «16» de entrada, así que el papel tiene
+     que ser eso de verdad — si acá dijera otra cosa, la barra estaría mintiendo
+     sobre lo que la vendedora está escribiendo.
+
+     ⚠️ Esto CAMBIA la Libreta respecto de la regla de arriba: el resto de la app
+     hereda Montserrat, y acá se fija Arial a pedido del dueño (17-ago-2026) para
+     que el selector arranque en una fuente de verdad y no en la palabra
+     «Predeterminada». El `16px` está duplicado en `estilosDeTexto.tsx`
+     (`TAMANO_POR_DEFECTO`) y hay un test que cruza los dos. */
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 16px;
+  /* Alto disponible, para que el clic en el vacío de abajo entre al editor en
+     vez de caer en el contenedor y no hacer nada. */
+  min-height: 60vh;
+}
+
+/* LA HOJA A4 (19-ago-2026, a pedido del dueño; achicada a proporción para la
+   PANTALLA DIVIDIDA el mismo día): la forma real de una hoja de Word —210:297,
+   la proporción de A4— con sus márgenes por default —2,5cm—, no una
+   aproximación en rem.
+
+   ⚠️ `aspect-ratio`, NO `width: 21cm` fijo. Dos hojas de 21cm de ancho no
+   entran una al lado de la otra en casi ninguna laptop — por eso la pantalla
+   dividida pide «tamaños CASI A4 que aprovechen el espacio libre», no A4
+   literal. `width: 100%; max-width: 21cm` le da el tamaño real de Word
+   cuando hay sitio (la vista simple, casi siempre) y la encoge MANTENIENDO
+   LA FORMA cuando no (cada mitad de la pantalla dividida) — nunca se
+   deforma en una columna angosta y alta, ni se desborda del panel.
+
+   Si el texto no entra en una hoja, la caja CRECE más alta que el `aspect-
+   ratio` en vez de recortarlo — es el comportamiento estándar de un bloque
+   con `height: auto` y contenido más largo que la proporción preferida.
+
+   El fondo es `--secondary`, EL MISMO que ya usa «Mi libreta» cuando está
+   activa (`SelectorDeEspacio.tsx`): la superficie de «acá se escribe»,
+   reusada en vez de inventar un color nuevo. Y SOLO ella lo lleva — el resto
+   del panel (la cabecera de Mover/Compartir, el margen alrededor de la hoja)
+   se queda con el fondo de la vista, como pidió el dueño.
+
+   ⚠️ AL 60% Y NO SÓLIDO: ese mismo color, de pared a pared en una hoja
+   entera, pesa mucho más que en un renglón de 2rem de alto — la misma
+   «opacidad» que se ve suave en el botón se leía sólida y pesada acá.
+   `color-mix(..., transparent)` trasluce hacia lo que sea que haya detrás
+   (el fondo de la vista) en vez de mezclar contra un color fijo, así que
+   sigue funcionando igual en claro y en oscuro.
+
+   La monta `ColumnaDeEscritura` (`perezosos.tsx`), en las dos mitades de la
+   pantalla dividida y en la vista simple por igual — MISMO tope de 21cm en
+   los dos casos (19-ago-2026: hubo una variante angosta acá, `.hoja-a4--
+   dividida` a 15cm, y se sacó el mismo día — dividir ya angosta el panel a
+   la mitad, y una hoja MÁS angosta todavía encima de eso dejaba menos lugar
+   para escribir que el que el panel realmente tenía. `width: 100%` es lo
+   que hace el trabajo solo: llena lo que el panel le deje, hasta 21cm).
+
+   ⚠️ El ancho (21cm) y el margen (2.5cm) se repiten en la cabecera de
+   acciones de `Libreta.tsx` (`anchoDeAcciones`: `w-[21cm]` + `px-[2.5cm]`) y
+   en la de `PantallaDividida.tsx`, para que «Mover / Compartir / Dividir» y
+   el título de la mitad derecha queden alineados con el borde del TEXTO, no
+   con el de la hoja — si cambia uno, mirar los otros. */
+.hoja-a4 {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 21cm;
+  aspect-ratio: 210 / 297;
+  padding: 2.5cm;
+  background-color: color-mix(in srgb, var(--secondary) 60%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14), 0 10px 24px rgba(0, 0, 0, 0.08);
+}
+
+/* MARGEN ANGOSTO PARA LA PANTALLA DIVIDIDA (19-ago-2026, a pedido del
+   dueño): 1,27cm en vez de 2,5 — el preset «Estrecho» que el propio Word
+   trae de fábrica (0,5 pulgada), no un número inventado.
+
+   ⚠️ SOLO EL MARGEN, no el ancho — a diferencia del intento anterior
+   (`.hoja-a4--dividida` achicando el ANCHO, revertido el mismo día): la
+   hoja de cada mitad ya ocupa lo que el panel le da, hasta 21cm; lo que
+   sobraba era el margen FIJO de 2,5cm comiéndose una tajada pareja de un
+   ancho que ya era la mitad de la pantalla — con dos hojas divididas, dos
+   márgenes de 2,5cm de sobra pesan el doble que en una sola hoja. Achicar
+   SOLO el padding le devuelve ese ancho al texto sin tocar el tamaño de la
+   hoja ni desbordar el panel — la oración deja de partirse antes de tiempo.
+
+   ⚠️ El 1,27cm se repite en la cabecera de acciones de `Libreta.tsx`
+   (`anchoDeAcciones`, rama `dividiendo`: `px-[1.27cm]`) y en la de
+   `PantallaDividida.tsx`, para que la barra de arriba se quede alineada con
+   el borde del texto — si cambia uno, mirar los otros. */
+.hoja-a4--dividida {
+  padding: 1.27cm;
+}
+
+
+/* EL MENÚ DE «/» — tamaño fijo, en vez de estirarse hasta llenar la pantalla.
+   `SuggestionMenuController` del paquete pone en el DIV de afuera (el que
+   posiciona floating-ui) un `max-height: <espacio disponible>px` inline, en
+   cada reposición — y con el cursor cerca del borde inferior, «espacio
+   disponible arriba, si flipea» puede ser casi el alto entero de la ventana:
+   medido, un menú de 630 px tapando toda la columna de escritura.
+
+   El propio CSS de BlockNote ya deja la puerta abierta: `.bn-suggestion-menu`
+   (el panel de ADENTRO, no el div que posiciona) hereda ese `max-height`
+   (`max-height: inherit`) y ya trae `overflow-y: auto`. Fijarlo ACÁ en vez de
+   heredarlo le pone un techo real -- una vez que el contenido de adentro no
+   crece más de esto, floating-ui mide un panel chico y el flip hacia arriba
+   pasa a decidirse contra un alto realista, no contra toda la ventana.
+
+   ⚠️ **El `!important` no es estilo, es orden de carga**: `@blocknote/mantine/style.css`
+   se importa DENTRO de `Libreta.tsx` (que es lazy), así que puede terminar
+   después de este archivo en el bundle final — y con la MISMA especificidad
+   (dos clases de cada lado), quien carga último gana. Sin el `!important` el
+   techo dependería de un orden de imports que nadie declaró a propósito. */
+.bn-mantine .bn-suggestion-menu {
+  max-height: 22rem !important;
+}
+
+/* ══ EL FONDO DEL HILO — el patrón de la casa, al modo de WhatsApp ══════════
+   (pedido del dueño, 26-ago-2026: reemplazar el fondo plano del chat)
+
+   🔴 **UNA SOLA IMAGEN PARA LOS DOS TEMAS, Y POR ESO ES UNA MÁSCARA.** El
+   archivo son los garabatos en NEGRO sobre transparente; acá no se pinta, se
+   RECORTA: la máscara deja pasar `--foreground`, que es tinta oscura en el tema
+   claro y clara en el oscuro. Con `background-image` haría falta o una segunda
+   imagen invertida —dos archivos que alguien tiene que acordarse de regenerar
+   juntos— o un `filter: invert()`, que sobre el contenedor le pegaría también a
+   los mensajes. La máscara no necesita ninguna de las dos cosas.
+
+   ⚠️ **Va en un `::before` del ENVOLTORIO, no del contenedor que scrollea.** Un
+   `absolute` adentro del scroller se ata al área desplazable: el patrón se iría
+   hacia arriba con los mensajes y dejaría pelado el resto del hilo. En el
+   envoltorio queda quieto detrás del texto, que es como se ve en el teléfono.
+
+   ⚠️ **La opacidad es bajísima a propósito.** Esto es fondo, no contenido: si
+   compite con una burbuja deja de ser fondo y pasa a ser ruido.
+
+   El tamaño de baldosa es el NATURAL del archivo (836 px), y se probó contra el
+   original: a la mitad los templos quedaban cuatro veces más juntos que en el
+   diseño que se pidió y el fondo se leía como una trama apretada. Cambiarlo es
+   cambiar el dibujo, no ajustar un número. */
+.fondo-hilo::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-color: var(--foreground);
+  -webkit-mask-image: url('/fondo-chat.png');
+  mask-image: url('/fondo-chat.png');
+  -webkit-mask-repeat: repeat;
+  mask-repeat: repeat;
+  -webkit-mask-size: 418px auto;
+  mask-size: 836px auto;
+  opacity: 0.05;
+}

@@ -1,0 +1,487 @@
+/**
+ * LA LÓGICA PURA DE LA COLA POTENCIADA (#49) — sin React, testeable con vitest.
+ *
+ * Los tabs (`Todo · No leídos · Favoritos`) son el EJE de la cola; los filtros
+ * SECUNDARIOS angostan dentro del tab, y la categoría es el tercer eje (modo
+ * Listas). Acá vive el mapeo tab/filtro → query-params, la migración del valor
+ * viejo de localStorage y el resumen de qué recorta la cola ahora.
+ *
+ * ── QUÉ PASÓ CON «POR VENCER» (censo de producción, 25-jul-2026) ──
+ * «Por vencer» filtraba `ventana_abierta`, que solo es cierto para comentarios
+ * de FB/IG de menos de 7 días. En las 1.867 conversaciones de la ventana de 30
+ * días había **0** (la cola es 100% WhatsApp). Un filtro que siempre devuelve
+ * cero no es un filtro: es un callejón sin salida con nombre confuso —«por
+ * vencer» nunca dijo QUÉ vence—. Se retira del panel. La ventana de Meta sigue
+ * viéndose donde importa: el reloj dorado de la fila, que dice los días que
+ * quedan. El server sigue aceptando `intencion=por-vencer` (el contrato no se
+ * rompe), simplemente ya no hay chip que lo dispare.
+ *
+ * En su lugar entra **«Sin responder»** (`NOT respondida`): 478 de 1.867 en el
+ * mismo censo — la deuda real de la mesa, y se entiende sin explicación.
+ *
+ * ── Y VOLVIÓ COMO TAB EL 28-ago-2026, Y SE RETIRÓ EL MISMO DÍA ──
+ * «Por expirar» compensaba el cambio de orden de ese día (la cola pasó a ser
+ * cronológica pura, `server/src/cola/consultarCola.ts`) mostrando primero lo
+ * que se está por vencer. Se retiró a pedido del dueño horas después de
+ * entrar. La ventana de Meta se sigue viendo donde importa: el reloj dorado
+ * de la fila, que dice los días que quedan.
+ */
+
+export type Tab = 'todo' | 'no-leidos' | 'favoritos';
+
+/** Los filtros secundarios: angostan dentro del tab (#49). */
+export type FiltroSec =
+  | ''
+  | 'pregunto-precio'
+  | 'te-escribieron'
+  | 'puedo-escribirle'
+  | 'bot-escalada'
+  | 'bot-caliente';
+
+/**
+ * ⚠️ **El orden de este array ES el orden de los botones** (`ColaUnificada`
+ * mapea `TABS` tal cual).
+ */
+export const TABS: { valor: Tab; label: string; vacio: string }[] = [
+  { valor: 'todo', label: 'Todo', vacio: 'No entró nada por ningún canal.' },
+  { valor: 'no-leidos', label: 'No leídos', vacio: 'Nada sin leer.' },
+  { valor: 'favoritos', label: 'Favoritos', vacio: 'No marcaste favoritos.' },
+];
+
+/**
+ * 🔴 **LOS TRES CHIPS «PREGUNTARON PRECIO» · «TE ESCRIBIERON» · «PUEDO
+ * ESCRIBIRLE» SE DESTRUYERON EL 22-AGO-2026** (pedido del dueño: «no me sirven
+ * de nada»). Lo que se destruyó es la PÍLDORA de la barra — `BarraFiltros`
+ * ya no la dibuja (ver `CHIPS_EN_BARRA` más abajo, hoy solo los dos del bot).
+ * Lo que NO se destruyó, a propósito:
+ *
+ *   · Los TRES valores siguen siendo `FiltroSec` válidos y el server sigue
+ *     aceptando `?intencion=pregunto-precio` / `te-escribieron` /
+ *     `puedo-escribirle` — mismo contrato que ya sostenía «por vencer» y «ya
+ *     compraron» de antes.
+ *   · «Preguntaron precio» se sigue PUDIENDO ACTIVAR: el botón de la cola
+ *     vacía («Ver los N que preguntaron precio →», `ColaUnificada.tsx`) llama
+ *     a `setFiltroSec('pregunto-precio')` directo, sin pasar por un chip.
+ *   · `filtrosActivos()` sigue sabiendo nombrarlos en la cabecera de recortes
+ *     («38 conversaciones con Preguntaron precio» + «Ver todo»), para quien
+ *     llegue a ese filtro por el botón de arriba.
+ *
+ * El criterio y la medición de abajo quedan como el porqué de que estos tres
+ * hayan existido y tengan nombre — no como un pedido de traerlos de vuelta.
+ *
+ * ══ EL CRITERIO: QUÉ TIENE QUE CUMPLIR UN CHIP PARA GANARSE EL LUGAR ══
+ *
+ * Salió del censo del 11-ago-2026, cuando se midió qué devolvía cada chip de esta
+ * barra sobre las 3.995 conversaciones de la ventana. Dos de seis mentían y uno
+ * era la mesa entera con otro nombre. Las cuatro condiciones:
+ *
+ *   1. **Es trabajo, no un estado.** Si la fila ya está atendida, no entra —
+ *      salvo que «atendida» no signifique terminada, y entonces hay que poder
+ *      decir por qué (ver «Preguntaron precio»).
+ *   2. **Se puede hacer hoy.**
+ *   3. **Cabe en un turno**: entre ~5 y ~50 filas. Cero es un callejón sin
+ *      salida; 500 es la mesa entera con otro nombre, y se aprende a ignorarla.
+ *   4. **No lo contesta otro chip.**
+ *
+ * Los tres que se retiraron, con su número medido:
+ *
+ *   · **«Piden info» (37)** — mentía. El 76 % de lo que enganchaba su predicado
+ *     era el texto que PRELLENA META en un anuncio click-to-WhatsApp, y contaba
+ *     como pedido a quien se despedía («gracias por la información, en otra
+ *     ocasión»). Lo reemplaza «Preguntaron precio», con el predicado arreglado en
+ *     `server/src/cola/pregunta.ts`.
+ *   · **«Sin responder» (505)** — falla la 2 y la 3: **472 (93 %) tenían más de
+ *     7 días** y solo 5 seguían dentro de la ventana de Meta. Lo reemplaza «Te
+ *     escribieron», que es lo mismo cortado a una semana.
+ *   · **«Ya compraron» (1.082)** — falla la 3: es el **27 % de la mesa**, y de
+ *     esas solo 99 hablaron alguna vez. No es una lista de trabajo, es un
+ *     atributo — y como atributo ya se ve: la fila lleva su píldora verde y la
+ *     ficha abre con la banda de cliente (#133). El server sigue aceptando
+ *     `intencion=ya-compraron`.
+ */
+export const FILTROS_SEC: { valor: Exclude<FiltroSec, ''>; label: string; ayuda: string }[] = [
+  /**
+   * «PREGUNTARON PRECIO» — y por qué **no** mira si ya se contestó.
+   *
+   * Su antecesor («Piden info») era `pide_info AND NOT respondida`, y esa segunda
+   * mitad era un parche sobre un predicado que mentía: 675 filas con el 96 % ya
+   * respondido obligaban a angostar por algún lado. Con el predicado arreglado no
+   * hace falta: **65 conversaciones en 30 días** nombran plata, y eso ya cabe en
+   * un turno.
+   *
+   * Y no DEBE mirarlo, porque acá «ya le contesté» no significa terminado: quien
+   * preguntó el precio, recibió respuesta y se calló es el seguimiento más
+   * rentable de la mesa — ADR 0044 midió **540** conversaciones que se callaron
+   * justo con el precio. Filtrarlas sería esconder exactamente las que valen.
+   *
+   * Quién espera respuesta lo contesta el chip de al lado; no hay que decirlo dos
+   * veces (condición 4).
+   */
+  {
+    valor: 'pregunto-precio',
+    label: 'Preguntaron precio',
+    ayuda: 'Habló de plata: precio, cuotas, formas de pago o cómo inscribirse — le hayas contestado o no',
+  },
+  /**
+   * «TE ESCRIBIERON» — la deuda que todavía se puede pagar.
+   *
+   * La deuda entera son 505 y no se esconde: la fila vieja sigue en la cola y el
+   * orden la sigue poniendo donde corresponde. Lo que se retira es la PROMESA de
+   * que esas 505 eran el trabajo del día. El corte vive en el server
+   * (`DIAS_DEUDA_VIVA`), no acá: el chip no puede prometer un número que la
+   * consulta después no devuelva.
+   */
+  {
+    valor: 'te-escribieron',
+    label: 'Te escribieron',
+    ayuda: 'Escribió esta semana y nadie del equipo contestó todavía',
+  },
+  /**
+   * ══ «PUEDO ESCRIBIRLE» — LA VENTANA DE CONVERSACIÓN (server: cola/ventana.ts) ══
+   *
+   * Los otros chips ordenan la DEUDA (quién espera). Éste responde la pregunta de
+   * al lado, que hasta hoy no se podía hacer: **¿a quién todavía se le puede
+   * hablar?** Meta cierra la puerta sola —24 h desde que la persona escribió en
+   * un chat, 7 días desde un comentario de FB/IG— y del otro lado el mensaje deja
+   * de ser una respuesta y pasa a ser una apertura en frío.
+   *
+   * ⚠️ **Está dicho en POSITIVO a propósito, y no puede dejar de estarlo.** El
+   * plazo es duro solo en la línea de la Cloud API (`51984429504`); en las tres
+   * líneas whatsmeow de las vendedoras Meta no rechaza nada. Un chip que dijera
+   * «ya no le puedes escribir» sería falso en tres de cuatro líneas, y el precio
+   * de esa mentira es una venta que nadie intenta. Dice a quién SÍ, nunca a quién
+   * no.
+   *
+   * Va acá, entre la deuda y la oportunidad, porque se lee justo en ese orden:
+   * primero a quién le debo, después a quién alcanzo antes de que se cierre.
+   */
+  {
+    valor: 'puedo-escribirle',
+    label: 'Puedo escribirle',
+    ayuda: 'La ventana sigue abierta: 24 h desde que escribió, 7 días desde que comentó',
+  },
+  /**
+   * ══ LOS DOS DEL BOT — y por qué SOLO aparecen cuando tienen algo que decir ══
+   *
+   * El bot corre en UNA línea de cuatro. En las otras tres estos dos chips
+   * dirían «0» para siempre, y la barra ya está llena: es la misma regla por la
+   * que el selector de línea entero no se dibuja con una sola línea («un
+   * selector de un solo elemento no es una elección, es ruido»). `BarraFiltros`
+   * los esconde con conteo cero, así que **el chip apareciendo ES el aviso**:
+   * cuando el bot escala algo, sale un chip que antes no estaba, con su número.
+   *
+   * Son dos y no uno porque se atienden distinto: una escalada dejó al bot
+   * mudo y al lead esperando (hay que ENTRAR), una caliente sin escalar es una
+   * oportunidad que el bot sigue trabajando (hay que MIRAR). Juntarlas
+   * enterraría las tres urgentes del día entre las catorce calientes.
+   */
+  {
+    valor: 'bot-escalada',
+    label: 'Pidió ayuda',
+    ayuda: 'El bot se frenó y espera a una persona: mientras nadie entre, el lead no recibe nada',
+  },
+  {
+    valor: 'bot-caliente',
+    label: 'El bot los ve calientes',
+    ayuda: 'El bot los calificó calientes: preguntaron precio, cuotas o forma de pago',
+  },
+];
+
+/**
+ * QUÉ CHIPS DE `FILTROS_SEC` DIBUJA LA BARRA — hoy, solo los dos del bot
+ * (22-ago-2026). Es una lista APARTE de `FILTROS_SEC` a propósito: ese array
+ * sigue siendo «todo filtro secundario válido, con su label» (lo necesitan
+ * `esFiltroSec` y `filtrosActivos` para los tres que ya no tienen chip, ver el
+ * docblock de arriba); esto es «cuál de esos se ofrece como botón».
+ */
+export const CHIPS_EN_BARRA: readonly Exclude<FiltroSec, ''>[] = ['bot-escalada', 'bot-caliente'];
+
+const TABS_VALIDOS: readonly string[] = TABS.map((t) => t.valor);
+
+export function esTab(x: unknown): x is Tab {
+  return typeof x === 'string' && TABS_VALIDOS.includes(x);
+}
+
+const FILTROS_VALIDOS: readonly string[] = FILTROS_SEC.map((f) => f.valor);
+
+/**
+ * ¿Este string es un filtro que HOY existe? El hermano de `esTab`, y por el mismo
+ * motivo: la lista de filtros cambia, y quien reciba un valor de afuera —el
+ * caché persistido, un link viejo, la llamada legada de `VistaEmbudo`— tiene que
+ * preguntarle a la lista y no a un `||` de valores escritos a mano. Un `||` es
+ * lo que dejó `'pide-info' || 'sin-responder'` vivo en `conversaciones.ts`
+ * después de que los dos chips se retiraran.
+ */
+export function esFiltroSec(x: unknown): x is Exclude<FiltroSec, ''> {
+  return typeof x === 'string' && FILTROS_VALIDOS.includes(x);
+}
+
+/**
+ * Sanea el valor persistido del tab a uno VÁLIDO. El default de la cola dejó de
+ * ser `puedo-escribirle` y pasó a `Todo` (#49): cualquier valor viejo o basura
+ * cae en `todo`, así el caché persistido no abre mostrando la página de un
+ * filtro que ya no existe como tab.
+ */
+export function migrarFiltroViejo(raw: string | null | undefined): Tab {
+  return esTab(raw) ? raw : 'todo';
+}
+
+/** La key vieja de la cola (el filtro por intención, pre-#49). */
+export const KEY_FILTRO_VIEJO = 'hermes.colaFiltro';
+/** La key nueva: el tab es otro eje, no el mismo valor con otro nombre. */
+export const KEY_TAB = 'hermes.colaTab';
+/**
+ * La línea elegida (#50). PERSISTE, y no por comodidad: quien vende por su
+ * propio número abre la app para trabajar SU cola, y hacérsela elegir cada
+ * mañana es pedirle que se acuerde de un filtro para no leer los chats de otra
+ * persona. Es la misma razón por la que el tab se guarda.
+ */
+export const KEY_LINEA = 'hermes.colaLinea';
+
+/**
+ * «LAS MÍAS» — el valor reservado del MISMO eje de línea, no un estado aparte.
+ *
+ * `numero_vendedora` (poblada desde #50 y sin lectores hasta hoy) dice qué
+ * líneas atiende cada vendedora. Elegir «las mías» y elegir «Walter» son la
+ * misma pregunta —¿qué cola miro?—, así que comparten el estado: dos banderas
+ * independientes habilitarían el estado imposible «las mías Y solo Walter» y
+ * alguien tendría que inventar quién gana.
+ *
+ * No es un número, así que **no viaja como `?linea=`** (la ruta lo rechazaría
+ * con 400, y con razón): `parametrosDeCola` lo traduce a `?mias=1` y el server
+ * resuelve el mapa. Que lo resuelva el server no es un detalle: si el front
+ * mandara la lista de números, habría dos lugares decidiendo cuáles son «las
+ * mías» (la lección de #37).
+ *
+ * No puede colisionar con una línea real: las líneas son solo dígitos.
+ */
+export const LINEA_MIAS = 'mias';
+
+/**
+ * Qué debería ver, la primera vez, alguien que YA venía usando la cola vieja.
+ *
+ * La key cambió, así que sin esto la migración no migra nada: quien tenía
+ * «Piden info» elegido abre en Todo y su filtro desaparece sin explicación. Se
+ * traduce UNA vez, al arrancar, y el valor viejo se borra para no volver a
+ * pisar lo que la vendedora elija después.
+ *
+ *   · `pide-info`        → tab Todo + **«Preguntaron precio»**. El chip que tenía
+ *     elegido ya no existe, y la pregunta que estaba haciendo —«¿quién quiere
+ *     algo?»— hoy la contesta ése. Mandarla a la cola entera sería castigarla por
+ *     un cambio que no pidió.
+ *   · `puedo-escribirle` → tab Todo, SIN filtro. Su reencarnación de #49 era
+ *     «Por vencer», que hoy devuelve cero filas en producción: aterrizar en una
+ *     cola vacía es peor que aterrizar en la cola entera.
+ *   · cualquier otra cosa → Todo, sin filtro.
+ *
+ * Devuelve `null` si no hay nada que migrar (usuaria nueva, o ya migrada).
+ */
+export function migracionDesdeKeyVieja(
+  leer: (k: string) => string | null,
+  borrar: (k: string) => void,
+): { tab: Tab; filtroSec: FiltroSec } | null {
+  const crudo = leer(KEY_FILTRO_VIEJO);
+  if (crudo == null) return null;
+  borrar(KEY_FILTRO_VIEJO);
+
+  // Se guardó con JSON.stringify (useLocalStorage), así que viene entrecomillado.
+  let valor = crudo;
+  try {
+    const parseado: unknown = JSON.parse(crudo);
+    if (typeof parseado === 'string') valor = parseado;
+  } catch {
+    // Valor sin JSON válido: se usa tal cual y, si no matchea, cae en el default.
+  }
+
+  if (valor === 'pide-info') return { tab: 'todo', filtroSec: 'pregunto-precio' };
+  return { tab: 'todo', filtroSec: '' };
+}
+
+/** Un recorte activo sobre la cola, con el rótulo que la vendedora ve. */
+export interface FiltroActivo {
+  clave: 'tab' | 'filtro' | 'categoria' | 'busqueda' | 'canal';
+  label: string;
+}
+
+/**
+ * QUÉ ESTÁ RECORTANDO LA COLA AHORA MISMO — la lista de recortes activos, en el
+ * orden en que se aplican.
+ *
+ * Existe porque una cola de 1.867 filas que muestra 12 sin decir por qué es una
+ * trampa: la vendedora cree que no hay trabajo. Con esto la cabecera puede
+ * nombrar cada recorte y ofrecer salir de todos con un gesto. El tab `todo` y
+ * una búsqueda en blanco NO son recortes: no esconden nada.
+ */
+export function filtrosActivos(e: {
+  tab: Tab | string;
+  filtroSec: FiltroSec | string;
+  categoria: string | null;
+  busqueda: string;
+  /** El rótulo del canal elegido en el selector «Canales» (Facebook/Messenger/Instagram/Formulario). */
+  canalLabel?: string | null;
+}): FiltroActivo[] {
+  const activos: FiltroActivo[] = [];
+  const tab = TABS.find((t) => t.valor === e.tab);
+  if (tab && tab.valor !== 'todo') activos.push({ clave: 'tab', label: tab.label });
+  const filtro = FILTROS_SEC.find((f) => f.valor === e.filtroSec);
+  if (filtro) activos.push({ clave: 'filtro', label: filtro.label });
+  if (e.categoria) activos.push({ clave: 'categoria', label: e.categoria });
+  if (e.canalLabel) activos.push({ clave: 'canal', label: e.canalLabel });
+  const q = e.busqueda.trim();
+  if (q) activos.push({ clave: 'busqueda', label: `«${q}»` });
+  return activos;
+}
+
+/** Lo mínimo que la barra necesita de una categoría del catálogo (#48). */
+export interface CategoriaEnBarra {
+  nombre: string;
+  color: string;
+  orden: number;
+  esFavorito: boolean;
+  conteo: number;
+}
+
+/** Cuántos chips de categoría entran antes de que la barra deje de ser una barra. */
+export const TOPE_CATEGORIAS_BARRA = 12;
+
+/**
+ * QUÉ CATEGORÍAS VAN EN LA BARRA, Y EN QUÉ ORDEN.
+ *
+ * Las FAVORITAS primero: para eso existe `es_favorito` en #48 —marcar cuáles
+ * merecen estar a un clic—. Dentro de cada grupo manda el orden manual de la
+ * vendedora. Se corta en un tope: una barra de 30 chips deja de ser navegable y
+ * para eso está el modo Listas, que las muestra todas.
+ *
+ * La categoría ACTIVA entra siempre, aunque el tope la dejara afuera: si se está
+ * filtrando por ella, tiene que verse y tiene que poder apagarse desde la barra.
+ */
+export function categoriasDeLaBarra(
+  catalogo: readonly CategoriaEnBarra[] | undefined,
+  activa?: string | null,
+): CategoriaEnBarra[] {
+  if (!catalogo || catalogo.length === 0) return [];
+  const ordenadas = [...catalogo].sort((a, b) => {
+    if (a.esFavorito !== b.esFavorito) return a.esFavorito ? -1 : 1;
+    return a.orden - b.orden || a.nombre.localeCompare(b.nombre, 'es');
+  });
+  const visibles = ordenadas.slice(0, TOPE_CATEGORIAS_BARRA);
+  if (activa && !visibles.some((c) => c.nombre === activa)) {
+    const suelta = ordenadas.find((c) => c.nombre === activa);
+    if (suelta) return [suelta, ...visibles.slice(0, TOPE_CATEGORIAS_BARRA - 1)];
+  }
+  return visibles;
+}
+
+export interface EstadoCola {
+  tab: Tab;
+  filtroSec: FiltroSec;
+  /** El nombre (minúsculas) de la categoría en el modo Listas; null = sin filtro. */
+  categoria: string | null;
+  canal?: string;
+  /** Filtra por etapa efectiva en el server: la carga POR COLUMNA del Pipeline
+   *  (#89/#90). Solo entra a la queryKey/URL cuando se pide, así las queries de
+   *  siempre (Mensajes) conservan su clave y su caché persistido. */
+  etapa?: string;
+  /** Solo las que ya tienen un precio encima — el recorte del Pipeline. */
+  precio?: boolean;
+  /**
+   * Solo las que tienen la VENTANA de conversación abierta (ADR 0041): se les
+   * puede escribir texto libre ahora, sin pagar una plantilla. El otro recorte
+   * del Pipeline, hermano de `precio`.
+   */
+  ventana?: boolean;
+  /**
+   * «Para seguir» (server: `cola/tiempoEnEtapa.ts`): silencio nuestro y entre 3 y
+   * 14 días en la etapa. El tercer recorte del Pipeline, y el único que recorta
+   * de verdad la columna grande — medido el 8-ago-2026, «en ventana» dejaba 1 de
+   * 3.051 Cotizados y «sin respuesta» dejaba 2.928.
+   */
+  seguir?: boolean;
+  /**
+   * «Se calló con el precio» (server: `cola/tiempoEnEtapa.ts`): venía conversando
+   * y no volvió a escribir después de recibirlo. Medido: **540 de los 798
+   * Cotizados**, contra 258 que sí respondieron.
+   */
+  seCallo?: boolean;
+  /**
+   * Recorta a UNA línea de WhatsApp: el número propio de Goberna por el que
+   * entró la conversación (#50). Vacío/ausente = todas, que es lo que había
+   * cuando había una sola línea. `LINEA_MIAS` = las que `numero_vendedora` le
+   * asigna a quien está logueada (lo resuelve el server).
+   */
+  linea?: string;
+  /**
+   * «MÍOS» — solo las conversaciones que el REPARTO me asignó (4-ago-2026).
+   *
+   * ⚠️ **Es otro eje que `linea === LINEA_MIAS`.** Aquél recorta por LÍNEA («las
+   * mías» = los números que atiendo); éste, por CONVERSACIÓN («míos» = los leads
+   * que me tocaron). Se combinan sin problema y son preguntas distintas: con siete
+   * personas en UNA línea, la línea ya no separa a nadie.
+   *
+   * Viaja como `?mios=1`. El `vendedoraId` lo resuelve el server desde el token —
+   * si el front mandara el id, habría dos lugares decidiendo de quién es cada cosa
+   * (la lección de #37) y cualquiera podría pedir la cola de otra persona.
+   */
+  mios?: boolean;
+}
+
+/**
+ * Traduce el estado de la cola a los query-params de `/api/conversaciones`. Solo
+ * emite lo que se aparta del default (tab `todo` no viaja): así la queryKey de
+ * react-query es estable y el default no ensucia la URL.
+ */
+export function parametrosDeCola(e: EstadoCola): Record<string, string> {
+  const p: Record<string, string> = {};
+  if (e.tab !== 'todo') p.tab = e.tab;
+  if (e.filtroSec) p.intencion = e.filtroSec;
+  if (e.categoria) p.categoria = e.categoria;
+  if (e.canal) p.canal = e.canal;
+  if (e.etapa) p.etapa = e.etapa;
+  if (e.precio) p.precio = '1';
+  if (e.ventana) p.ventana = '1';
+  if (e.seguir) p.seguir = '1';
+  if (e.seCallo) p.seCallo = '1';
+  // ⚠️ `mias` (LÍNEAS) y `mios` (CONVERSACIONES asignadas) son DOS recortes, se
+  // escriben con una vocal de diferencia y salen los dos de acá. Confundirlos no
+  // rompe nada visible: devuelve otra cola. Van juntos y comentados a propósito.
+  //
+  // «Las mías» es el mismo eje de la línea con otro nombre, y sale por otro
+  // parámetro: no es un teléfono, así que mandarlo como `?linea=` sería un 400.
+  if (e.linea === LINEA_MIAS) p.mias = '1';
+  else if (e.linea) p.linea = e.linea;
+  if (e.mios) p.mios = '1';
+  return p;
+}
+
+/**
+ * CON UNA ETIQUETA ACTIVA, EL ORDEN ES CRONOLÓGICO — no el de la mesa entera.
+ *
+ * `consultarCola.ts` ordena la cola SIN filtro por URGENCIA (`nivel ASC, orden
+ * ASC`, `server/src/cola/urgenciaSql.ts`), y esa escala cambia de DIRECCIÓN
+ * según el nivel a propósito: lo que espera respuesta sube el MÁS VIEJO
+ * primero (lo más atrasado es lo más urgente); lo que ya se contestó sube el
+ * MÁS NUEVO primero (lo último que se movió). Tiene sentido quién atender
+ * primero en TODA la mesa — es al revés de lo que pide una etiqueta.
+ *
+ * Una etiqueta filtra a un grupo chico y ya curado (una campaña, un evento):
+ * ahí se espera lo de siempre en cualquier chat, lo último que se movió
+ * arriba. La mezcla de direcciones de la urgencia, ahí, se lee como
+ * desorden — porque LO ES para esta pregunta puntual: dos conversaciones de
+ * niveles distintos pueden salir en cualquier orden entre sí aunque una sea
+ * de ayer y la otra de hace tres semanas.
+ *
+ * `no_leido` sigue ganando primero (pedido del dueño, 26-ago-2026: revisando
+ * respuestas de una campaña, lo ya leído tapaba lo que todavía necesitaba
+ * contestación). Dentro de cada grupo, por `referencia` — el MISMO instante
+ * que ya pinta cada tarjeta como «hace N días» (`FilaConversacion.tsx`), así
+ * lo que se lee y lo que ordena son el mismo dato y no pueden discrepar.
+ */
+export function ordenarConEtiquetaActiva<T extends { no_leido?: boolean; referencia: string }>(
+  items: readonly T[],
+): T[] {
+  return [...items].sort((a, b) => {
+    const porLeido = Number(Boolean(b.no_leido)) - Number(Boolean(a.no_leido));
+    if (porLeido !== 0) return porLeido;
+    return new Date(b.referencia).getTime() - new Date(a.referencia).getTime();
+  });
+}

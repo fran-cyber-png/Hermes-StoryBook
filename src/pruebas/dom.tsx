@@ -1,0 +1,403 @@
+import { act, type ReactNode } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+/**
+ * MONTAR UN COMPONENTE DE VERDAD, EN UN DOM DE VERDAD.
+ *
+ * ── Por qué existe ──
+ * El runner del front corría con `environment: 'node'` y solo módulos puros, y eso dejaba
+ * un agujero con forma exacta: **una regresión de TECLADO no la puede ver ningún test
+ * puro**. `escapeDePopover.ts` está testeado hasta el hueso y aun así la app perdió el
+ * Escape global, porque el defecto no estaba en la decisión sino en el CABLEADO — un
+ * `useEscape` que se registra en `window` desde un componente que está montado cerrado.
+ * Eso solo se ve montando: hay que haber un `window`, un listener y un evento que viaje.
+ *
+ * No hay librería de testing acá a propósito. Lo que hace falta es `createRoot` + `act`,
+ * que vienen con React, y `document.dispatchEvent`, que viene con el DOM. Una capa más
+ * arriba (queries por rol, `userEvent`) sería útil el día que se testee una interacción
+ * larga; hoy sería una dependencia para escribir `dispatchEvent` con otro nombre.
+ *
+ * ── Cómo se usa ──
+ * El archivo de test tiene que declarar el entorno en su primera línea:
+ *
+ *     // @vitest-environment jsdom
+ *
+ * Por archivo y no global: el resto de la suite son módulos puros y correrlos en jsdom
+ * los haría más lentos sin ganar nada. `vitest.config.ts` lo explica del otro lado.
+ */
+
+/**
+ * LOS REMIENDOS DE LA PLATAFORMA — lo que jsdom no trae y la app da por sentado.
+ *
+ * Se aplican al importar este módulo, una sola vez, y no en cada test: son ruido del
+ * entorno, no del componente, y repartirlos por los archivos de test los llenaría de
+ * andamio que no dice nada sobre lo que se está probando.
+ *
+ * · `scrollIntoView`: jsdom no lo implementa y varios componentes lo llaman al montar.
+ * · `localStorage`: vitest no lo copia de la ventana de jsdom a los globales, y `token.ts`
+ *   lo usa sin guarda — sin esto, TODA request muere con «reading 'getItem'» y un test que
+ *   mira si salió la request lee un falso negativo.
+ * · `URL.createObjectURL`: jsdom no lo trae y lo usa toda vista previa de un archivo elegido
+ *   (la miniatura del adjunto en el composer). El stub devuelve una cadena `blob:` distinta
+ *   por llamada y anota las revocadas, así un test puede verificar que el objectURL se
+ *   suelta — que es el defecto que el hook existe para evitar, no un detalle de dibujo.
+ * · `ResizeObserver`: jsdom tampoco lo trae, y lo usa toda barra que mide su propio ancho
+ *   (`BarraFiltros` decide con eso si dibuja el degradado de «hay más chips a la derecha»).
+ *   El stub NO simula nada: jsdom no hace layout, así que cualquier medida sería mentira.
+ *   Solo evita que un componente que mide se caiga al montar — lo que se testea acá es qué
+ *   chips existen, no cuántos entran.
+ */
+/** Los objectURL que la app soltó. Lo llena el stub de `revokeObjectURL`. */
+export const objectUrlsRevocados = new Set<string>();
+
+function remendarJsdom() {
+  if (typeof document === 'undefined') return;
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = function () {};
+  }
+  // Se pisa SIEMPRE, no solo si falta: jsdom no lo trae, pero Node sí tiene el
+  // suyo (para `Blob` de Node), así que la guarda «si no existe» nunca entraba y
+  // las revocaciones quedaban sin anotar — el test verde por el motivo equivocado.
+  let n = 0;
+  URL.createObjectURL = () => `blob:prueba/${++n}`;
+  URL.revokeObjectURL = (u: string) => void objectUrlsRevocados.add(u);
+  const conObserver = globalThis as { ResizeObserver?: unknown };
+  if (!conObserver.ResizeObserver) {
+    conObserver.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+  // `matchMedia`: jsdom no lo trae y Mantine lo llama al montar, para resolver el
+  // esquema de color del sistema. Es lo que envuelve al editor de la Libreta, así
+  // que sin esto CUALQUIER test que monte una página se cae con «is not a
+  // function» — un fallo del entorno disfrazado de fallo del componente.
+  // El stub responde «no matchea» y no escucha nada: jsdom no tiene media queries
+  // de verdad, así que simular una sería inventar un dato.
+  const w = globalThis as { matchMedia?: unknown };
+  if (!w.matchMedia) {
+    w.matchMedia = (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent: () => false,
+    });
+  }
+  const g = globalThis as { localStorage?: Storage };
+  if (!g.localStorage) {
+    const caja = new Map<string, string>();
+    g.localStorage = {
+      get length() {
+        return caja.size;
+      },
+      key: (i: number) => [...caja.keys()][i] ?? null,
+      getItem: (k: string) => caja.get(k) ?? null,
+      setItem: (k: string, v: string) => void caja.set(k, String(v)),
+      removeItem: (k: string) => void caja.delete(k),
+      clear: () => caja.clear(),
+    } satisfies Storage;
+  }
+  // `DOMMatrixReadOnly`: jsdom no lo trae, y React Flow lo usa para leer el
+  // zoom actual (`new DOMMatrixReadOnly(style.transform).m22`) cada vez que
+  // `useUpdateNodeInternals()` remide un nodo — sin este stub, ESE remedido
+  // (que corre en un `requestAnimationFrame`, después de que el test ya
+  // afirmó y siguió de largo) tira una excepción no atrapada que ensucia la
+  // corrida entera. Solo entiende `matrix(a,b,c,d,e,f)`; cualquier otra cosa
+  // (`"none"`, cadena vacía) cae en la identidad — jsdom no calcula el
+  // `transform` real, así que fingir más que eso sería inventar un dato.
+  const w2 = globalThis as { DOMMatrixReadOnly?: unknown };
+  if (!w2.DOMMatrixReadOnly) {
+    w2.DOMMatrixReadOnly = class {
+      m11 = 1;
+      m12 = 0;
+      m21 = 0;
+      m22 = 1;
+      m41 = 0;
+      m42 = 0;
+      constructor(inicial?: string) {
+        const coincide = typeof inicial === 'string' ? inicial.match(/matrix\(([^)]+)\)/) : null;
+        if (!coincide) return;
+        const [a, b, c, d, e, f] = coincide[1].split(',').map((n) => parseFloat(n.trim()));
+        if (!Number.isNaN(a)) this.m11 = a;
+        if (!Number.isNaN(b)) this.m12 = b;
+        if (!Number.isNaN(c)) this.m21 = c;
+        if (!Number.isNaN(d)) this.m22 = d;
+        if (!Number.isNaN(e)) this.m41 = e;
+        if (!Number.isNaN(f)) this.m42 = f;
+      }
+    };
+  }
+}
+remendarJsdom();
+
+/** El `QueryClient` de un test: sin reintentos ni caché entre casos. */
+function clienteDePrueba(conservarSembrado = false) {
+  return new QueryClient({
+    defaultOptions: {
+      /**
+       * 🔴 `gcTime: 0` BORRA LO SEMBRADO ANTES DE QUE EL COMPONENTE LO LEA.
+       *
+       * Con cero, una entrada escrita por `setQueryData` no tiene observadores
+       * todavía y se recolecta en el tick siguiente — o sea **antes del primer
+       * render**. El síntoma no es un error: el componente se dibuja como si el
+       * dato no existiera y el test pasa por el motivo equivocado (medido acá:
+       * el rótulo del chat tomado no aparecía nunca).
+       *
+       * Sólo se levanta cuando el test siembra, y no para todos, para no
+       * cambiarle el comportamiento a los 180 archivos que ya andaban. La
+       * limpieza no depende de esto igual: cada `montar` arma su propio cliente
+       * y `desmontar` llama a `clear()`.
+       */
+      queries: { retry: false, gcTime: conservarSembrado ? Infinity : 0 },
+      mutations: { retry: false },
+    },
+  });
+}
+
+export interface Montado {
+  contenedor: HTMLElement;
+  /** Vuelve a pintar con otras props, dentro de `act`. */
+  repintar(nodo: ReactNode): void;
+  desmontar(): void;
+}
+
+/**
+ * Monta `nodo` en un `<div>` colgado del `document` real.
+ *
+ * **Colgado del documento y no suelto**: un nodo huérfano no propaga eventos hasta
+ * `window`, que es justo lo que estos tests miden.
+ */
+export function montar(
+  nodo: ReactNode,
+  /**
+   * Sembrar el caché de consultas ANTES del primer render.
+   *
+   * Hace falta para los componentes que leen algo que otra pantalla ya trajo, sin
+   * pedirlo ellos (`useBloqueoDeChat` lee lo que la cola dejó en `['conversaciones']`).
+   * Sin esto ese dato es siempre `undefined` en un test, y el componente se ve
+   * como si la funcionalidad estuviera apagada — o sea que el test pasa por el
+   * motivo equivocado.
+   *
+   * ⚠️ **Antes del render y no después**: sembrarlo con el componente ya montado
+   * mide el repintado por invalidación, que es otra cosa. Lo que hay que poder
+   * fijar es el PRIMER render, que es donde este tipo de dato decide.
+   */
+  sembrarCache?: (cliente: QueryClient) => void,
+): Montado {
+  // React exige esta bandera para no gritar por cada `act`.
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  const contenedor = document.createElement('div');
+  document.body.appendChild(contenedor);
+  const cliente = clienteDePrueba(Boolean(sembrarCache));
+  sembrarCache?.(cliente);
+  let raiz: Root | null = createRoot(contenedor);
+
+  const pintar = (n: ReactNode) => {
+    act(() => {
+      raiz?.render(<QueryClientProvider client={cliente}>{n}</QueryClientProvider>);
+    });
+  };
+  pintar(nodo);
+
+  return {
+    contenedor,
+    repintar: pintar,
+    desmontar() {
+      act(() => {
+        raiz?.unmount();
+        raiz = null;
+      });
+      contenedor.remove();
+      cliente.clear();
+    },
+  };
+}
+
+/**
+ * Deja correr lo asíncrono que quedó pendiente (mutaciones de TanStack Query, `fetch`,
+ * los efectos que disparan) y vuelve con el DOM ya repintado.
+ *
+ * Hace falta porque `mutate()` no llama a su `mutationFn` en el mismo tick: sin esto,
+ * un test que mira si salió la request la ve siempre sin salir — y un test que espera
+ * que NO salga pasa por el motivo equivocado.
+ */
+export async function reposar() {
+  await act(async () => {
+    // Un turno del event loop, no un microtask: `mutate()` no llama a su `mutationFn`
+    // en el mismo tick y el reintentador de TanStack mete varios `await` en el medio.
+    await new Promise((listo) => setTimeout(listo, 0));
+  });
+}
+
+/**
+ * ESPERAR A QUE ALGO PASE — y el vencimiento va en TIEMPO, no en turnos.
+ *
+ * ══ POR QUÉ NO ALCANZA UN `reposar()` SUELTO ════════════════════════════════
+ *
+ * Alcanza para un render. No alcanza para dos consultas encadenadas (los
+ * espacios y después las páginas de ese espacio), ni para una frontera perezosa
+ * (`notas/perezosos.tsx`). Con `reposar()` a secas el test pasa o falla según la
+ * máquina — un flake que después se lee como un bug del componente.
+ *
+ * ══ 🔴 POR QUÉ EL TECHO NO PUEDE SER UN NÚMERO DE TURNOS ════════════════════
+ *
+ * Porque un tope de turnos **es un acoplamiento oculto al tamaño del bundle**, y
+ * ya mordió: esta misma función vivía copiada CINCO veces en `features/notas`
+ * con `i < 20`, más un `turno < 300` en `App.test.tsx` que había subido de 50
+ * porque la Libreta creció. Agregar UNA frontera perezosa puso rojos **11
+ * tests**, y 10 de los 11 sólo por el número — ninguno por un defecto.
+ *
+ * Un turno del event loop no es una unidad de nada: cuántos hacen falta depende
+ * de cuántos módulos haya que cargar, o sea de una decisión de empaquetado que
+ * el test no debería estar afirmando. Un vencimiento en milisegundos dice lo que
+ * el test quiere decir de verdad: «esto tendría que haber pasado ya».
+ *
+ * El tope de turnos queda **sólo como red anti-cuelgue**, muy por encima de
+ * cualquier espera real, y el mensaje dice cuál de los dos venció: sin eso, «no
+ * pasó» no distingue «tarda» de «está trabado».
+ *
+ * ⚠️ **Quedan cuatro esperas propias afuera de `features/notas`, y NO son copias
+ * de ésta**: `esperarAlCanal` y `esperarAviso` (`correos/VistaCorreos.test.tsx`),
+ * `esperarLista` (`hechos/PantallaHechos.test.tsx`) y el bucle en línea de
+ * `whatsapp/VincularMiWhatsapp.test.tsx`. Cada una espera otra cosa y una a
+ * propósito **no tira** al vencerse. Migrarlas es mecánico pero cambia lo que
+ * afirman, así que va aparte — no se hizo acá para no esconder ese cambio en un
+ * PR de rendimiento. `lib/datos/persistencia.test.ts` no puede usar esto: es un
+ * test puro y este módulo remienda jsdom al importarse.
+ *
+ * ⚠️ **No sirve con `vi.useFakeTimers()`**: `reposar()` espera un `setTimeout`,
+ * así que con el reloj detenido no vuelve nunca. Los tests de DOM de este repo
+ * corren con reloj real.
+ */
+const TOPE_ANTI_CUELGUE = 2000;
+
+export async function esperarA(
+  condicion: () => boolean,
+  queEsperaba: string,
+  /**
+   * 30 s, alineado con el `testTimeout` de `vitest.config.ts` — subir uno solo no
+   * sirve de nada, porque el que venza primero tira igual. Eran 5 s y los
+   * gastaba entera la carga de una frontera perezosa (ver la medición en
+   * `vitest.config.ts`), no la espera que el test quiere afirmar.
+   *
+   * No afloja la red: el que distingue «trabado» de «lento» es
+   * `TOPE_ANTI_CUELGUE`, que cuenta turnos del event loop y por eso tira en
+   * segundos aunque el reloj tenga treinta.
+   */
+  limiteMs = 30_000,
+): Promise<void> {
+  const arranque = Date.now();
+  let turnos = 0;
+  while (!condicion()) {
+    const vencioElReloj = Date.now() - arranque > limiteMs;
+    if (vencioElReloj || turnos >= TOPE_ANTI_CUELGUE) {
+      const porque = vencioElReloj
+        ? `pasaron ${Date.now() - arranque} ms (tope ${limiteMs})`
+        : `${turnos} turnos sin que el reloj venza: algo está trabado, no lento`;
+      throw new Error(`nunca pasó: ${queEsperaba} — ${porque}\n\n${document.body.textContent}`);
+    }
+    turnos++;
+    await reposar();
+  }
+}
+
+/**
+ * Un clic que VIAJA. Mismo motivo que `teclear`: React escucha en la raíz, así que un
+ * evento sin `bubbles` no llega a ningún `onClick` y el test daría siempre que no pasó nada.
+ *
+ * Existe para lo que un test puro no puede ver: que un `stopPropagation` esté puesto donde
+ * hace falta (un botón adentro de una fila clickeable) y que un arrastre no termine
+ * contando como clic.
+ */
+export function tocar(elemento: Element): void {
+  act(() => {
+    elemento.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+}
+
+/**
+ * Un `dragstart` de verdad sobre `elemento`, con el `dataTransfer` que el handler toca.
+ *
+ * jsdom no implementa `DragEvent`, así que el objeto se arma a mano: lo único que la app
+ * hace con él es escribir `effectAllowed`, y sin la propiedad el handler revienta antes de
+ * llegar a lo que se está probando.
+ */
+export function arrastrar(elemento: Element): void {
+  act(() => {
+    const evento = new Event('dragstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(evento, 'dataTransfer', { value: { effectAllowed: '' } });
+    elemento.dispatchEvent(evento);
+    elemento.dispatchEvent(new Event('dragend', { bubbles: true, cancelable: true }));
+  });
+}
+
+/**
+ * ESCRIBIR EN UNA CAJA CONTROLADA POR REACT.
+ *
+ * `elemento.value = 'x'` + un `input` a mano NO alcanza: React le pone al nodo un tracker
+ * del último valor, ve que no cambió respecto de lo que él escribió y **descarta el evento
+ * en silencio**. El test queda verde o rojo por el motivo equivocado: el `onChange` nunca
+ * corrió. Se escribe con el setter nativo del prototipo, que es el que el tracker vigila.
+ */
+export function escribir(elemento: HTMLTextAreaElement | HTMLInputElement, texto: string): void {
+  const proto = elemento instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(proto.prototype, 'value')?.set;
+  if (!setter) throw new Error('sin setter nativo de value: ¿cambió jsdom?');
+  act(() => {
+    setter.call(elemento, texto);
+    elemento.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+/**
+ * ⌘V DE VERDAD sobre `elemento`, con lo que traiga el portapapeles.
+ *
+ * jsdom no implementa `ClipboardEvent` ni `DataTransfer`, así que el `clipboardData` se
+ * arma a mano — igual que en `arrastrar`. Lo único que la app le pide es `.files`, y sin
+ * la propiedad el handler revienta antes de llegar a lo que se está probando.
+ *
+ * Devuelve el evento para poder preguntar si se canceló: **que un pegado de TEXTO no se
+ * cancele es la mitad de lo que hay que fijar acá**, y eso no se ve en el DOM resultante
+ * (el `preventDefault` de más no rompe nada visible en jsdom — rompe en la app real, donde
+ * la vendedora pega una frase copiada y no pasa nada).
+ */
+export function pegar(elemento: Element, archivos: File[] = []): Event {
+  const evento = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(evento, 'clipboardData', {
+    value: { files: archivos, items: archivos, getData: () => '' },
+  });
+  act(() => {
+    elemento.dispatchEvent(evento);
+  });
+  return evento;
+}
+
+/**
+ * Un `keydown` que VIAJA: nace en `target` (o en el `body`), sube y se puede cancelar.
+ *
+ * `bubbles: true` no es decoración — sin eso el evento nunca llega a los listeners de
+ * burbuja de `window`, y un test de «¿el shell recibió el Escape?» daría siempre que no.
+ */
+export function teclear(
+  tecla: string,
+  opciones: { target?: Element; meta?: boolean; ctrl?: boolean } = {},
+): KeyboardEvent {
+  const evento = new KeyboardEvent('keydown', {
+    key: tecla,
+    bubbles: true,
+    cancelable: true,
+    metaKey: opciones.meta ?? false,
+    ctrlKey: opciones.ctrl ?? false,
+  });
+  act(() => {
+    (opciones.target ?? document.body).dispatchEvent(evento);
+  });
+  return evento;
+}

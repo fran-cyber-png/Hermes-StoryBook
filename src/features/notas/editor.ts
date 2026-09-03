@@ -1,0 +1,205 @@
+import { BlockNoteSchema, defaultBlockSpecs, defaultStyleSpecs } from '@blocknote/core';
+import { es } from '@blocknote/core/locales';
+import { ESTILOS_PROPIOS, Fuente, Tamano } from './estilosDeTexto';
+
+/**
+ * CÓMO SE CONFIGURA EL EDITOR DE LA LIBRETA — y las dos cosas que estaban mal.
+ *
+ * `useCreateBlockNote` recibía SOLO `initialContent`, así que mandaba todo el
+ * default de BlockNote. Dos consecuencias, las dos visibles el primer día:
+ *
+ *  1. **El editor entero estaba en inglés** dentro de una app 100 % en español:
+ *     el menú de «/», los placeholders, la barra de formato, todo.
+ *  2. **Ofrecía bloques de archivo que no se pueden guardar.**
+ *
+ * ══ POR QUÉ SALEN LOS BLOQUES DE ARCHIVO ════════════════════════════════════
+ *
+ * `image` / `video` / `audio` / `file` tienen contenido `"none"`: su URL, su
+ * nombre y su caption viven en `props`. El server deriva el texto plano con
+ * `aTextoPlano`, que lee `text`/`content`/`children`/`rows`/`cells` y **nunca
+ * props** (por diseño). Entonces una página que sea SOLO una imagen aplana a
+ * cadena vacía, `validarTexto` la rechaza por vacía y el 400 se perdía.
+ *
+ * El ítem «Image» aparecía en el «/» aunque no hubiera `uploadFile`, y el file
+ * panel dejaba pegar una URL: el camino estaba abierto y terminaba en una
+ * página que no se guarda nunca, sin aviso.
+ *
+ * Sacarlos del schema es **barato AHORA y caro después**: hoy no hay ni un
+ * documento viejo que los contenga (la tabla venía de cero filas). Cuando los
+ * haya, sacarlos del schema los rompe al abrir.
+ *
+ * Cuando existan los adjuntos de verdad (`uploadFile` + `resolveFileUrl` +
+ * almacenamiento), esto se revierte junto con el arreglo del aplanado — no
+ * antes, o vuelve el mismo agujero.
+ */
+
+// Los cuatro se descartan por desestructuración: el `_` es la convención del
+// linter para «lo saqué a propósito y no lo voy a usar».
+const {
+  image: _image,
+  video: _video,
+  audio: _audio,
+  file: _file,
+  ...BLOQUES_QUE_SE_PUEDEN_GUARDAR
+} = defaultBlockSpecs;
+
+/** Los cuatro que se sacaron, para que el test los pueda nombrar sin adivinar. */
+export const BLOQUES_RETIRADOS = ['image', 'video', 'audio', 'file'] as const;
+
+/**
+ * ══ Y EL DIBUJO NO ES UN BLOQUE, JUSTAMENTE POR ESTO ════════════════════════
+ *
+ * Las anotaciones a mano (`dibujo/`) podrían haber sido un bloque más, y sería
+ * el mismo agujero de arriba con otro nombre: contenido que vive en `props`, que
+ * el aplanador no ve, y una página que no se guarda sin decir por qué.
+ *
+ * No lo son. Viven en una COLUMNA APARTE (`notas.anotaciones`) y se pintan en
+ * una capa transparente sobre el documento, no adentro de él. El esquema del
+ * editor queda como estaba: solo bloques de texto.
+ */
+export const ESQUEMA_LIBRETA = BlockNoteSchema.create({
+  blockSpecs: BLOQUES_QUE_SE_PUEDEN_GUARDAR,
+  // `fuente` y `tamano` son NUESTROS: no vienen en el paquete. Lo que implican
+  // para el documento guardado está escrito en `estilosDeTexto.tsx`.
+  styleSpecs: { ...defaultStyleSpecs, fuente: Fuente, tamano: Tamano },
+});
+
+/**
+ * 🔴 UN BLOQUE QUE EL ESQUEMA NO CONOCE TUMBA LA APP ENTERA, NO LA NOTA.
+ *
+ * `useCreateBlockNote` construye el editor **durante el render** y su
+ * constructor mapea `initialContent` con `blockToNode`, que lanza
+ * `node type <x> not found in schema`. En `src/` no hay ningún ErrorBoundary
+ * (verificado: cero `componentDidCatch`), así que ese throw no deja «la nota no
+ * abre»: deja **la ventana en blanco**, y de nuevo cada vez que se toque esa
+ * página.
+ *
+ * Y el caso no es hipotético aunque la tabla haya arrancado en cero. N4
+ * despliega el front sin reiniciar nada, así que hay app abiertas con el bundle
+ * VIEJO —el que sí ofrece «Image» en el `/` y deja pegar una URL— escribiendo
+ * mientras tanto. Una página con texto + imagen aplana a texto no vacío, pasa
+ * `validarTexto`, y el bloque `image` queda guardado en el `jsonb`.
+ *
+ * Apoyar la seguridad en «hoy no hay documentos así» era apoyarla en una
+ * afirmación sobre datos de producción que este repo no puede verificar. Acá se
+ * verifica el dato, que es lo que sí se puede.
+ *
+ * Se DESCARTA el bloque en vez de convertirlo a texto: su URL vive en `props`,
+ * y el server nunca la indexó, así que no hay nada que rescatar sin inventar.
+ * Lo que había alrededor —que es lo que la vendedora escribió— se conserva.
+ */
+/**
+ * ⚠️ Sale del ESQUEMA, no de `BLOQUES_QUE_SE_PUEDEN_GUARDAR`. Con la lista de
+ * antes, `dibujo` no figuraba entre los conocidos y este filtro —que existe para
+ * proteger— **borraba todos los dibujos al abrir la página**: se guardaban bien,
+ * desaparecían al volver, y el autoguardado grababa la versión sin ellos 800 ms
+ * después. Leer del esquema hace que agregar un bloque no requiera acordarse de
+ * tocar esta línea.
+ */
+const TIPOS_CONOCIDOS = new Set(Object.keys(ESQUEMA_LIBRETA.blockSchema));
+
+export function soloBloquesConocidos(doc: unknown[]): unknown[] {
+  return doc.filter((b) => {
+    const tipo = (b as { type?: unknown } | null)?.type;
+    // Sin `type` BlockNote asume `paragraph`, que sí existe: se deja pasar.
+    return typeof tipo !== 'string' || TIPOS_CONOCIDOS.has(tipo);
+  });
+}
+
+/**
+ * 🔴 Y LO MISMO CON LOS ESTILOS — la mitad que faltaba.
+ *
+ * `soloBloquesConocidos` filtra BLOQUES. Cuando entraron `fuente` y `tamano`
+ * (`estilosDeTexto.tsx`) apareció la misma trampa un nivel más abajo: un estilo
+ * que el esquema no conoce también hace fallar la construcción del editor, y el
+ * saneador de bloques **no lo ve** porque no vive en `type` sino adentro de
+ * `styles`, en el contenido en línea.
+ *
+ * El caso concreto que esto tapa es el rollback: si algún día se sacan estos dos
+ * del esquema, todas las páginas que alguien haya escrito con una fuente elegida
+ * dejarían la Libreta en blanco. Con esto, se abren sin el formato — que es feo y
+ * es reversible, mientras que la ventana en blanco no lo es.
+ *
+ * ══ POR QUÉ CAMINA TODO EL ÁRBOL Y NO LAS RUTAS CONOCIDAS ═══════════════════
+ *
+ * Los estilos viven en `content[]`, pero también adentro de `children[]` (listas
+ * anidadas) y de `rows[].cells[]` (tablas). Enumerar esas rutas es una lista que
+ * hay que mantener cada vez que BlockNote agregue un contenedor — y olvidarse de
+ * una no da error: deja pasar el estilo desconocido justo en el caso raro.
+ *
+ * Se recorre cualquier objeto y se limpia **donde aparezca** una clave `styles`.
+ * Es la misma decisión que `aTextoPlano` toma del lado del server, y por el mismo
+ * motivo: lo que no se enumera no se puede olvidar.
+ */
+const ESTILOS_CONOCIDOS = new Set([
+  ...Object.keys(ESQUEMA_LIBRETA.styleSchema),
+  ...ESTILOS_PROPIOS,
+]);
+
+export function soloEstilosConocidos<T>(valor: T): T {
+  if (Array.isArray(valor)) return valor.map(soloEstilosConocidos) as T;
+  if (valor === null || typeof valor !== 'object') return valor;
+
+  const salida: Record<string, unknown> = {};
+  for (const [clave, v] of Object.entries(valor as Record<string, unknown>)) {
+    if (clave === 'styles' && v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      const limpios: Record<string, unknown> = {};
+      for (const [estilo, valorDelEstilo] of Object.entries(v as Record<string, unknown>)) {
+        if (ESTILOS_CONOCIDOS.has(estilo)) limpios[estilo] = valorDelEstilo;
+      }
+      salida[clave] = limpios;
+      continue;
+    }
+    salida[clave] = soloEstilosConocidos(v);
+  }
+  return salida as T;
+}
+
+/**
+ * EL DICCIONARIO — la locale `es` que trae el paquete, con el castellano
+ * peninsular pisado.
+ *
+ * La locale oficial dice «Escribe o teclea '/' para comandos» y Hermes escribe
+ * en tuteo en toda la app («Anota lo que quieras», «Elige una página»,
+ * «Escribir la primera»). Dejar el default metería una segunda voz adentro del
+ * único lugar donde la vendedora escribe.
+ *
+ * Se pisa lo que se VE seguido y en imperativo. No se traduce el paquete
+ * entero: lo que no está acá queda en la locale `es`, que es correcta aunque
+ * suene de España, y eso es mucho mejor que quedar en inglés.
+ */
+export const DICCIONARIO_LIBRETA = {
+  ...es,
+  placeholders: {
+    ...es.placeholders,
+    default: "Escribe, o pon '/' para los comandos",
+    heading: 'Título',
+    bulletListItem: 'Lista',
+    numberedListItem: 'Lista',
+    checkListItem: 'Tarea',
+  },
+  slash_menu: {
+    ...es.slash_menu,
+    heading: { ...es.slash_menu.heading, subtext: 'Título de sección' },
+    bullet_list: { ...es.slash_menu.bullet_list, subtext: 'Lista con viñetas' },
+    numbered_list: { ...es.slash_menu.numbered_list, subtext: 'Lista numerada' },
+    check_list: { ...es.slash_menu.check_list, subtext: 'Lista para ir tildando' },
+    paragraph: { ...es.slash_menu.paragraph, subtext: 'Texto común' },
+    table: { ...es.slash_menu.table, subtext: 'Una tabla' },
+  },
+} as const;
+
+/**
+ * TEXTO PLANO → BLOQUES, una línea = un párrafo. Es la misma conversión que
+ * `docParaEditor` (`notas.ts`) usa para abrir una nota vieja sin `doc`, acá
+ * reusada para PEGAR una plantilla (`ModalDePlantillas`) donde ya hay un editor
+ * corriendo: dos escrituras de la misma regla es #37, así que si esto cambia,
+ * `docParaEditor` también hay que mirarlo.
+ */
+/**
+ * ⚠️ `bloquesDeTexto` SE MUDÓ a `./bloques.ts` (21-ago-2026) y **no se re-exporta
+ * desde acá a propósito**: este archivo importa `@blocknote/core` en su primera
+ * línea, así que cualquier puente devolvería el motor del editor al chunk de
+ * arranque — que es justo el defecto que la mudanza arregló. El porqué completo,
+ * con el número medido, está en `bloques.ts`.
+ */

@@ -1,0 +1,493 @@
+import type { CableLienzo, ColumnaLienzo, NodoLienzo } from './reglasDelLienzo';
+import type { FotoDeRouting, OrigenFamilia } from './routing';
+
+/**
+ * DE LOS DATOS DEL SERVER AL LIENZO — puro, y por eso testeable sin montar nada.
+ *
+ * 🔴 **Los ids del lienzo llevan namespace** (`campana:`, `curso:`, `prod:`,
+ * `v:`) y no es decoración: al soltar un cable hay que saber a qué endpoint va
+ * (`/campanas/:id`, `/cursos`, `/productos`) y el nombre de un curso puede
+ * parecerse a cualquier cosa. Sin el prefijo, «Diploma…» y una familia no se
+ * distinguen y el guardado pega en la ruta equivocada.
+ */
+
+export const ID = {
+  producto: (familia: string) => `prod:${familia}`,
+  /**
+   * La división del catálogo de Cerberus. Namespace propio y no `prod:` porque
+   * al soltar un cable hay que saber a qué eje va (`familia` o `division`), y
+   * una familia y una división pueden llamarse parecido — `leerId` ya distingue
+   * por el prefijo.
+   */
+  division: (clave: string) => `div:${clave}`,
+  /**
+   * 🔴 **La familia como REGLA, y por eso NO reusa `prod:`.** Son dos cosas con
+   * el mismo nombre y distinto comportamiento: `prod:dipicot` es el producto que
+   * agrupa las piezas que trajeron leads, y su puerto **se abre en abanico** y
+   * escribe un cable en cada una; `fam:dipicot` es una fila de `producto_ruteo`,
+   * una sola regla que las familias heredan por la cascada.
+   *
+   * Con un solo prefijo, el mismo gesto haría dos cosas distintas según qué
+   * elegiste en la lista — que es exactamente el defecto que la Fase 1 del plan
+   * vino a corregir («dos tableros con dos modelos de interacción»), y esta vez
+   * ni siquiera se vería: escribiría en la tabla equivocada.
+   */
+  familia: (clave: string) => `fam:${clave}`,
+  campana: (id: string) => `campana:${id}`,
+  curso: (curso: string) => `curso:${curso}`,
+  vendedora: (v: string) => `v:${v}`,
+};
+
+/** Vuelve del id del lienzo al par (tipo, clave). El `slice` y no `split`: los cursos tienen `:` adentro. */
+export function leerId(id: string): { tipo: string; clave: string } {
+  const corte = id.indexOf(':');
+  return corte < 0 ? { tipo: id, clave: '' } : { tipo: id.slice(0, corte), clave: id.slice(corte + 1) };
+}
+
+/** Una pieza: una campaña de Meta o un curso de formulario. Es donde vive la regla. */
+export interface Pieza {
+  id: string;
+  titulo: string;
+  icono: 'campana' | 'formulario';
+  pie: string;
+  estado?: 'activa' | 'pausada' | 'desconocido';
+  familia: string | null;
+  /** De dónde salió `familia`. Lo explica la hoja de la derecha. */
+  origenFamilia?: OrigenFamilia;
+  /** Qué alias enganchó, cuando fue por texto. */
+  aliasFamilia?: string;
+  volumen: number;
+  vendedoras: string[];
+}
+
+/**
+ * QUÉ PIEZA ESTÁ ABIERTA Y QUÉ TIENE ADENTRO.
+ *
+ * 🔴 **TRES ESTADOS, NO DOS: `cargando` · `fallo` · «no hay».** Una campaña
+ * cuyos anuncios todavía no llegaron, una a la que no se le pudo preguntar, y
+ * una que de verdad no trajo a nadie, **se ven igual desde acá** si el tipo solo
+ * distingue lista-vacía de lista-llena. Decir «ningún anuncio suyo trajo gente»
+ * cuando el pedido falló es afirmar algo falso sobre la pauta — y sobre eso se
+ * decide si un adset se apaga. Es la misma regla que el resto de la casa:
+ * «no se pudo preguntar» no es «no hay».
+ */
+export interface Apertura {
+  id: string | null;
+  anuncios: readonly { adId: string; titular: string | null; personas: number }[];
+  cargando: boolean;
+  fallo?: boolean;
+}
+
+const CERRADO: Apertura = { id: null, anuncios: [], cargando: false };
+
+const ROTULO_ESTADO = { activa: 'Activa', pausada: 'Pausada', desconocido: 'No se sabe' } as const;
+
+/** Todas las piezas de la foto, en un solo vocabulario. */
+export function piezasDe(data: FotoDeRouting): Pieza[] {
+  return [
+    ...data.campanas.map((c) => ({
+      id: ID.campana(c.campanaId),
+      titulo: c.nombre,
+      icono: 'campana' as const,
+      pie: `${ROTULO_ESTADO[c.estado]} · ${c.personas} ${c.personas === 1 ? 'persona' : 'personas'}`,
+      estado: c.estado,
+      familia: c.familia,
+      origenFamilia: c.origenFamilia,
+      aliasFamilia: c.aliasFamilia,
+      volumen: c.personas,
+      vendedoras: c.vendedoras,
+    })),
+    ...(data.cursos ?? []).map((c) => ({
+      id: ID.curso(c.curso),
+      titulo: c.curso,
+      icono: 'formulario' as const,
+      pie: `${c.leads} ${c.leads === 1 ? 'formulario' : 'formularios'}`,
+      familia: c.familia,
+      origenFamilia: c.origenFamilia,
+      aliasFamilia: c.aliasFamilia,
+      volumen: c.leads,
+      vendedoras: c.vendedoras,
+    })),
+  ];
+}
+
+/** Un producto con lo que le entra. Vacío si ninguna de sus piezas llegó a esta línea. */
+export interface Producto {
+  familia: string;
+  nombre: string;
+  piezas: Pieza[];
+  volumen: number;
+}
+
+export function productosDe(data: FotoDeRouting, piezas: Pieza[]): Producto[] {
+  return (data.productos ?? [])
+    .map((p) => {
+      const suyas = piezas.filter((x) => x.familia === p.familia);
+      return { ...p, piezas: suyas, volumen: suyas.reduce((n, x) => n + x.volumen, 0) };
+    })
+    .filter((p) => p.piezas.length > 0)
+    // Primero lo que más gente trae. A igualdad, alfabético: dos aperturas de la
+    // pantalla no pueden mostrar dos órdenes distintos.
+    .sort((a, b) => b.volumen - a.volumen || a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+/**
+ * LOS CABLES DE REGLA QUE HAY HOY: cada pieza hacia sus vendedoras.
+ *
+ * 🔴 **EL DESTINO SE RESUELVE CONTRA LA LISTA DE LA COLUMNA, NORMALIZANDO.** En
+ * producción el mismo humano tiene dos grafías vivas (`Luz` es lo que empuja
+ * Cerberus, `luz` lo que se tipea al entrar; y hay `Usuario1`/`usuario1`). Si el
+ * cable guardado dice `Luz` y el nodo de la columna se llama `v:luz`, el cable
+ * apunta a un nodo que no existe: **no se dibuja, no se puede cortar, y la fila
+ * de la izquierda igual dice que esa campaña es de alguien**. Sin error, sin log.
+ *
+ * Se compara normalizado y se usa **la grafía de la columna** para el id, que es
+ * la que el lienzo conoce. Lo guardado no se toca: reescribirlo rompería el cruce
+ * con `gestiones` (la lección de `reparto/destino.ts`).
+ *
+ * ⚠️ Un cable hacia alguien que **no está en los destinos posibles** se descarta
+ * a propósito: dibujarlo obligaría a inventarle un nodo, y ese nodo sería una
+ * persona que la pantalla ofrece y el server rechaza con 409.
+ */
+export function cablesDe(piezas: readonly Pieza[], destinos: readonly string[]): CableLienzo[] {
+  const porNormal = new Map(destinos.map((d) => [d.trim().toLowerCase(), d]));
+  return piezas.flatMap((p) =>
+    p.vendedoras.flatMap((v) => {
+      const enLaColumna = porNormal.get(v.trim().toLowerCase());
+      return enLaColumna
+        ? [{ de: p.id, a: ID.vendedora(enLaColumna), tipo: 'regla' as const, color: p.icono }]
+        : [];
+    }),
+  );
+}
+
+/**
+ * A quién NO se le pudo dibujar el cable. Es lo que evita que la ausencia sea
+ * muda: si una pieza tiene una vendedora que no está entre los destinos, la
+ * pantalla lo dice en vez de mostrar la pieza como si no tuviera cables.
+ */
+export function cablesHuerfanos(piezas: readonly Pieza[], destinos: readonly string[]): string[] {
+  const porNormal = new Set(destinos.map((d) => d.trim().toLowerCase()));
+  return [
+    ...new Set(
+      piezas.flatMap((p) => p.vendedoras.filter((v) => !porNormal.has(v.trim().toLowerCase()))),
+    ),
+  ].sort((a, b) => a.localeCompare(b, 'es'));
+}
+
+const COL_VENDEDORAS = (
+  destinos: readonly string[],
+  /**
+   * Quiénes se fueron del equipo. Se MARCAN en la columna y siguen recibiendo
+   * cables dibujados: esconderlos ocultaría las reglas que ya apuntan a ellos.
+   */
+  deBaja: readonly string[] = [],
+): ColumnaLienzo => {
+  const fuera = new Set(deBaja.map((d) => d.trim().toLowerCase()));
+  return {
+    id: 'vendedoras',
+    titulo: 'Vendedoras',
+    ancho: 12,
+    nodos: destinos.map((d) => {
+      const seFue = fuera.has(d.trim().toLowerCase());
+      return {
+        id: ID.vendedora(d),
+        titulo: nombreCortoLocal(d),
+        icono: 'vendedora' as const,
+        /**
+         * 🔴 Lo DICE en vez de esconderlo. Cablearle 96 productos a alguien que
+         * ya no trabaja acá es el defecto que `curso_ruteo` tuvo con Tracy
+         * —~32 leads al mes— y lo que lo hacía invisible era justamente que
+         * nada en la pantalla la distinguía del resto.
+         */
+        ...(seFue ? { pie: 'dada de baja' } : {}),
+        // Lo único que recibe cables. No tiene salida: acá termina el flujo.
+        entrada: true,
+      };
+    }),
+  };
+};
+
+/**
+ * EL CABLE DEL PRODUCTO ENTERO — existe **solo si TODAS sus piezas lo tienen**.
+ *
+ * 🔴 **Se DERIVA, no se guarda**, y por eso no hace falta una tercera tabla que
+ * se pueda desincronizar: cablear el producto escribe en cada pieza (decisión
+ * del dueño en `server/src/routing/producto.ts`), así que «el producto va a
+ * Luz» es exactamente «todas sus piezas van a Luz». Es la misma familia de
+ * decisiones que la etapa efectiva (ADR 0044) y las señales (ADR 0016).
+ *
+ * ⚠️ Con una pieza que no lo tiene, el cable del producto **no se dibuja** — y
+ * eso es correcto: dibujarlo diría «todas», y sería falso. La mezcla se ve en
+ * los cables de cada pieza, que están a la vista al lado.
+ */
+export function cablesDeProducto(
+  producto: Producto,
+  cables: readonly CableLienzo[],
+): CableLienzo[] {
+  if (producto.piezas.length === 0) return [];
+  const suyas = producto.piezas.map((p) => p.id);
+  const hay = (de: string, a: string) =>
+    cables.some((c) => c.tipo === 'regla' && c.de === de && c.a === a);
+  const candidatas = [
+    ...new Set(cables.filter((c) => c.tipo === 'regla' && suyas.includes(c.de)).map((c) => c.a)),
+  ];
+  return candidatas
+    .filter((a) => suyas.every((id) => hay(id, a)))
+    .sort((x, y) => x.localeCompare(y, 'es'))
+    .map((a) => ({
+      de: ID.producto(producto.familia),
+      a,
+      tipo: 'regla' as const,
+      color: 'producto' as const,
+    }));
+}
+
+/** «1 campañas» se lee como un error de la pantalla, no como un dato. */
+function cuantas(n: number, uno: string, varios: string): string {
+  return `${n} ${n === 1 ? uno : varios}`;
+}
+
+/** El `nombreCorto` de la libreta vive en un módulo con react-query; acá alcanza esto. */
+function nombreCortoLocal(vendedoraId: string): string {
+  const sinDominio = vendedoraId.includes('@') ? vendedoraId.slice(0, vendedoraId.indexOf('@')) : vendedoraId;
+  return sinDominio.trim() || vendedoraId;
+}
+
+/**
+ * LAS COLUMNAS DE UN PRODUCTO: él, sus piezas, las vendedoras.
+ *
+ * ⚠️ El cable producto → pieza es de PERTENENCIA: lo decide el catálogo
+ * (`alias_curso`), no una persona. Va punteado y no se puede cortar — dibujarlo
+ * igual que una regla haría creer que el catálogo se edita tirando de un cable.
+ */
+export function columnasDeProducto(
+  producto: Producto,
+  destinos: readonly string[],
+  apertura: Apertura = CERRADO,
+  deBaja: readonly string[] = [],
+): { columnas: ColumnaLienzo[]; pertenencia: CableLienzo[] } {
+  const id = ID.producto(producto.familia);
+  const campanas = producto.piezas.filter((p) => p.icono === 'campana').length;
+  const formularios = producto.piezas.length - campanas;
+  return {
+    columnas: [
+      {
+        id: 'producto',
+        titulo: 'El producto',
+        ancho: 17,
+        nodos: [
+          {
+            id,
+            titulo: producto.nombre,
+            icono: 'producto',
+            pie: `${producto.volumen} leads · ${cuantas(campanas, 'campaña', 'campañas')} · ${cuantas(formularios, 'formulario', 'formularios')}`,
+            /**
+             * 🔴 **El puerto del producto va DERECHO a la vendedora, saltándose
+             * sus piezas** — pedido del dueño el 12-ago-2026: *«si quiero
+             * enlazar de frente el producto con la vendedora que se haga las
+             * conexiones automáticamente»*. Lo que se guarda sigue siendo un
+             * cable por pieza (no hay regla de producto, `producto.ts`), así
+             * que al soltar aparecen los N cables de abajo: el gesto es masivo
+             * y **el resultado es visible pieza por pieza**.
+             */
+            salida: true,
+          },
+        ],
+      },
+      {
+        id: 'piezas',
+        titulo: 'Lo que le entra',
+        ancho: 17,
+        // El ancla izquierda es donde aterriza el cable punteado del producto.
+        // Solo acá: una pieza suelta no cuelga de nada.
+        nodos: producto.piezas.map((p) => ({ ...aNodo(p, apertura), anclaIzq: true })),
+      },
+      COL_VENDEDORAS(destinos, deBaja),
+    ],
+    pertenencia: producto.piezas.map((p) => ({
+      de: id,
+      a: p.id,
+      tipo: 'pertenencia' as const,
+      color: p.icono,
+    })),
+  };
+}
+
+/**
+ * Las columnas de una pieza sola: ella y las vendedoras.
+ *
+ * ⚠️ Sin columna de producto **a propósito**: acá cae quien no resuelve ninguna
+ * familia (70 de 153 campañas). Inventarle un producto vacío para que las dos
+ * pantallas se vean iguales diría que pertenece a algo.
+ *
+ * 🔴 **PERO EL RÓTULO NO PUEDE DECIR «SIN PRODUCTO» SI LA PIEZA TIENE UNO.**
+ * Estaba clavado, y con razón mientras acá solo caían las sueltas; desde que la
+ * lista deja entrar por «Campañas» y «Formularios» —o sea, desde que se puede
+ * elegir una pieza CON producto— el lienzo afirmaba «Sin producto» sobre una
+ * campaña que pertenece a uno, **con la hoja de al lado diciendo cuál**. Dos
+ * pantallas contradiciéndose sobre el mismo hecho.
+ *
+ * ⚠️ **Lo encontró la captura de evidencia, no un test**: cada pieza renderizaba
+ * exactamente lo que su código decía; lo que estaba mal era la relación entre el
+ * rótulo de la columna y lo que mostraba la hoja. Es el mismo caso que los cuatro
+ * componentes que pintaban el identificador crudo de la etapa (ADR 0049).
+ */
+export function columnasDePieza(
+  pieza: Pieza,
+  destinos: readonly string[],
+  apertura: Apertura = CERRADO,
+  /** El nombre comercial de su producto, cuando tiene. Lo resuelve el llamador. */
+  nombreDelProducto?: string,
+  deBaja: readonly string[] = [],
+): ColumnaLienzo[] {
+  return [
+    {
+      id: 'pieza',
+      // Sin nombre pero con familia, el código es mejor que una mentira.
+      titulo: pieza.familia ? (nombreDelProducto ?? pieza.familia) : 'Sin producto',
+      ancho: 17,
+      nodos: [aNodo(pieza, apertura)],
+    },
+    COL_VENDEDORAS(destinos, deBaja),
+  ];
+}
+
+/**
+ * UNA PIEZA COMO NODO, con lo que tenga adentro si está abierta.
+ *
+ * 🔴 **Solo las campañas se abren, y los anuncios NO son un puerto.** No existe
+ * una regla por anuncio: el reparto resuelve `ad_id → campaña → vendedoras`, así
+ * que el anuncio es de dónde VIENE la persona, no algo que se cablee. Dibujarlo
+ * con puerto prometería un control que el server no tiene — por eso `adentro` es
+ * una lista de solo lectura dentro del nodo y no una columna con puertos.
+ *
+ * ⚠️ El pie dice **las vendedoras si las hay**, y el dato de volumen si no: el
+ * lienzo existe para contestar «¿a quién le cae esto?», y con el volumen siempre
+ * arriba había que seguir el cable con el ojo para saberlo.
+ */
+function aNodo(p: Pieza, apertura: Apertura = CERRADO): NodoLienzo {
+  const abrible = p.icono === 'campana';
+  const abierto = abrible && apertura.id === p.id;
+  return {
+    id: p.id,
+    titulo: p.titulo,
+    icono: p.icono,
+    pie: p.vendedoras.length ? p.vendedoras.map(nombreCortoLocal).join(', ') : p.pie,
+    estado: p.estado,
+    // Sale hacia las vendedoras. NO recibe: el cable del producto es de
+    // pertenencia y lo decide el catálogo, no un arrastre.
+    salida: true,
+    abrible,
+    abierto,
+    cargando: abierto && apertura.cargando,
+    fallo: abierto && Boolean(apertura.fallo),
+    adentro: abierto
+      ? apertura.anuncios.map((a) => ({
+          id: `anuncio:${a.adId}`,
+          titulo: a.titular ?? '(sin titular)',
+          pie: `${a.personas} ${a.personas === 1 ? 'persona' : 'personas'}`,
+        }))
+      : undefined,
+  };
+}
+
+
+/**
+ * LAS COLUMNAS DE UNA DIVISIÓN: ella, sus familias, y las vendedoras.
+ *
+ * ══ 🔴 EN QUÉ SE DIFERENCIA DE `columnasDeProducto`, Y POR QUÉ IMPORTA ══════
+ *
+ * El puerto del producto **saltea sus piezas y escribe un cable en cada una**,
+ * porque hasta ADR 0082 no existía una regla de producto: la acción era masiva y
+ * el resultado se veía pieza por pieza.
+ *
+ * Acá NO. Cablear una división escribe **UNA fila** en `producto_ruteo`
+ * (`eje = 'division'`), y las familias de abajo la HEREDAN por la cascada. Por
+ * eso sus cables son de `pertenencia` —punteados, no editables— y no de regla:
+ * dibujarlos como reglas haría creer que hay 58 cables que alguien puso y que se
+ * pueden cortar de a uno, cuando lo que hay es una regla y una herencia.
+ *
+ * Es exactamente lo que hace que esto rinda: medido contra el catálogo vivo el
+ * 24-ago-2026, **tres reglas de división cubren 244 de 244 productos**.
+ *
+ * ⚠️ **Sólo se listan las familias que la división ya tiene**, no las 185 del
+ * catálogo: una columna con 185 tarjetas no es un lienzo, es una lista — y el
+ * `Lienzo` mide un `getBoundingClientRect()` por nodo en cada redibujo.
+ */
+export function columnasDeDivision(
+  division: { division: string; nombre: string; familias: number; productos: number },
+  familias: readonly { familia: string; nombre: string; productos: number; vendedoras: string[] }[],
+  destinos: readonly string[],
+  deBaja: readonly string[] = [],
+): { columnas: ColumnaLienzo[]; pertenencia: CableLienzo[] } {
+  const id = ID.division(division.division);
+  const suyas = familias.filter((f) => f.familia !== '');
+  return {
+    columnas: [
+      {
+        id: 'division',
+        titulo: 'La división',
+        ancho: 17,
+        nodos: [
+          {
+            id,
+            titulo: division.nombre,
+            icono: 'producto',
+            pie: `${cuantas(division.familias, 'familia', 'familias')} · ${cuantas(division.productos, 'producto', 'productos')}`,
+            salida: true,
+          },
+        ],
+      },
+      {
+        id: 'familias',
+        titulo: 'Lo que le entra',
+        ancho: 19,
+        nodos: suyas.map((f) => ({
+          id: ID.familia(f.familia),
+          titulo: f.nombre,
+          icono: 'producto' as const,
+          pie: cuantas(f.productos, 'producto', 'productos'),
+          anclaIzq: true,
+          entrada: true,
+          salida: true,
+        })),
+      },
+      COL_VENDEDORAS(destinos, deBaja),
+    ],
+    // Punteados: la familia PERTENECE a la división, no está cableada a ella.
+    pertenencia: suyas.map((f) => ({
+      de: id,
+      a: ID.familia(f.familia),
+      tipo: 'pertenencia' as const,
+      color: 'producto' as const,
+    })),
+  };
+}
+
+/**
+ * LOS CABLES DE REGLA DE UNA DIVISIÓN Y DE SUS FAMILIAS.
+ *
+ * Mismo criterio que `cablesDe`: el destino se resuelve contra la columna
+ * NORMALIZANDO, y un cable hacia alguien que no está en los destinos se
+ * descarta en vez de inventarle un nodo (regla dura #4).
+ */
+export function cablesDeDivision(
+  division: { division: string; vendedoras: string[] },
+  familias: readonly { familia: string; vendedoras: string[] }[],
+  destinos: readonly string[],
+): CableLienzo[] {
+  const porNormal = new Map(destinos.map((d) => [d.trim().toLowerCase(), d]));
+  const haciaVendedoras = (de: string, vendedoras: readonly string[]) =>
+    vendedoras.flatMap((v) => {
+      const enLaColumna = porNormal.get(v.trim().toLowerCase());
+      return enLaColumna
+        ? [{ de, a: ID.vendedora(enLaColumna), tipo: 'regla' as const, color: 'producto' as const }]
+        : [];
+    });
+
+  return [
+    ...haciaVendedoras(ID.division(division.division), division.vendedoras),
+    ...familias.flatMap((f) => haciaVendedoras(ID.familia(f.familia), f.vendedoras)),
+  ];
+}

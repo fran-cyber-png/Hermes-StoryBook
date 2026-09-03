@@ -1,0 +1,527 @@
+import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Check, ChevronDown, Loader2, UserMinus, UserPlus, Users, X } from 'lucide-react';
+import {
+  nombreCorto,
+  useContarConDueno,
+  useHabilitar,
+  useHabilitarRecorte,
+  useQuitarDelReparto,
+  type CargaVendedora,
+  type FiltrosPadron,
+} from './padron';
+import { cuantos, necesitaConfirmar, type Seleccion } from './seleccion';
+import { DeshacerEnAcuse, TiraDeshacer, type Deshacer } from './Deshacer';
+
+/**
+ * REPARTIR EL LOTE — un control FIJO arriba (`TiraDeReparto`) y una franja
+ * abajo que solo habla de lo que NO es repartir (`BarraReparto`).
+ *
+ * ── Por qué se partió en dos (24-ago-2026, pedido del dueño) ──
+ * Antes todo esto era una sola barra que aparecía y desaparecía con la
+ * selección: tildar, elegir destino, repartir, la barra se iba, tildar de
+ * nuevo, volver a elegir destino. Viendo la pantalla en vivo, el dueño pidió
+ * mover el reparto arriba a la derecha —donde vivía «Más nuevos»— para que
+ * sea un control **estable**: el destino elegido siempre a la vista, el botón
+ * siempre en el mismo lugar, y lo único que cambia es el número.
+ *
+ * ⚠️ **El botón fijo con destino recordado es fácil de apretar por inercia**
+ * (el riesgo que el dueño mismo marcó). Dos frenos, ninguno nuevo — ya
+ * existían para el caso momentáneo, ahora hacen falta para el permanente:
+ * el rótulo siempre nombra a quién y cuántos («Repartir 4 a Luz», nunca un
+ * «Repartir» sin dueño ni cifra) y con 0 elegidos el botón queda
+ * VISIBLEMENTE apagado (gris, deshabilitado) en vez de listo. El paso de
+ * confirmación desde `CONFIRMAR_DESDE` (abajo) sigue intacto.
+ *
+ * `useReparto` es el estado y las mutaciones, UNA vez, en `PantallaPadron`:
+ * la tira de arriba y la franja de abajo leen el mismo objeto porque las dos
+ * hablan de la MISMA selección — separarlas en dos hooks hubiera significado
+ * dos mutaciones corriendo por separado para la misma acción.
+ */
+export function useReparto({
+  seleccion,
+  total,
+  filtros,
+  onListo,
+}: {
+  seleccion: Seleccion;
+  /** El total del recorte: en modo `recorte` es de donde sale «cuántos». */
+  total: number;
+  filtros: FiltrosPadron;
+  /** `huboRecorte`: si el reparto fue «todo el filtro», la página tiene que volver a 1. */
+  onListo: (huboRecorte: boolean) => void;
+}) {
+  const [destino, setDestino] = useState('');
+  const [confirmando, setConfirmando] = useState(false);
+  const [hecho, setHecho] = useState<{ cuantos: number; a: string } | null>(null);
+  const porLista = useHabilitar();
+  const porRecorte = useHabilitarRecorte();
+  const quitar = useQuitarDelReparto();
+
+  const n = cuantos(seleccion, total);
+
+  /**
+   * EL DESTINO SOBREVIVE AL REPARTO, y es a propósito (pedido del dueño,
+   * 24-ago-2026: repartir en tandas rápidas a la misma persona sin reabrir
+   * «Elegir a quién» en cada una — antes `setDestino('')` en cada éxito
+   * obligaba a reelegir).
+   *
+   * ⚠️ **Pero SÍ se resetea si cambia el FILTRO** (no la página, no un reparto
+   * exitoso): el reverso del pedido es no repartir a la persona equivocada por
+   * inercia. Cambiar de «Nadie todavía» a «Asignado a Tracy» para MIRAR su
+   * lote no debería dejar el botón listo para repartírselo a alguien más sin
+   * que el supervisor lo haya vuelto a elegir a propósito.
+   */
+  const { pagina: _pagina, porPagina: _porPagina, ...criterioDelFiltro } = filtros;
+  const claveDelFiltro = JSON.stringify(criterioDelFiltro);
+  useEffect(() => {
+    setDestino('');
+  }, [claveDelFiltro]);
+
+  // Antes de repartir, no en el acuse de después (regla dura #7). Solo en modo
+  // `recorte`: ver el docblock de `useContarConDueno` en `padron.ts`.
+  const conDueno = useContarConDueno(
+    seleccion.modo === 'recorte' && n > 0
+      ? { filtros, excluidos: seleccion.excluidos, vendedoraId: destino }
+      : null,
+  );
+
+  // El acuse sobrevive a que la selección se vacíe (que es lo que pasa al
+  // terminar): sin esto, repartir 17.014 contactos no deja NINGUNA señal de que
+  // algo pasó — la franja de abajo simplemente desaparece.
+  useEffect(() => {
+    if (!hecho) return;
+    const t = setTimeout(() => setHecho(null), 8000);
+    return () => clearTimeout(t);
+  }, [hecho]);
+
+  const trabajando = porLista.isPending || porRecorte.isPending || quitar.isPending;
+  const error = porLista.error ?? porRecorte.error ?? quitar.error;
+
+  function repartir() {
+    const huboRecorte = seleccion.modo === 'recorte';
+    const listo = (r: { habilitados: number; vendedoraId: string }) => {
+      // El número del ACUSE es el que devolvió el server, no el que teníamos en
+      // la mano: el recorte se resuelve de nuevo allá y pueden haber entrado
+      // contactos nuevos. Repetir la cifra vieja esconde la diferencia.
+      setHecho({ cuantos: r.habilitados, a: r.vendedoraId });
+      // ⚠️ `destino` NO se resetea acá — ver el docblock de más arriba. Sí se
+      // limpia la selección y, en modo `recorte`, la página (vía `onListo`):
+      // el recorte que se veía ya no existe como tal.
+      setConfirmando(false);
+      onListo(huboRecorte);
+    };
+
+    if (huboRecorte) {
+      porRecorte.mutate(
+        { filtros, excluidos: seleccion.excluidos, vendedoraId: destino },
+        { onSuccess: listo },
+      );
+      return;
+    }
+    porLista.mutate({ contactoIds: seleccion.ids, vendedoraId: destino }, { onSuccess: listo });
+  }
+
+  function intentarRepartir() {
+    if (necesitaConfirmar(n)) {
+      setConfirmando(true);
+      return;
+    }
+    repartir();
+  }
+
+  function quitarSeleccion() {
+    if (seleccion.modo !== 'lista') return;
+    quitar.mutate(seleccion.ids, {
+      onSuccess: (r) => {
+        setHecho({ cuantos: r.quitados, a: '' });
+        onListo(false);
+      },
+    });
+  }
+
+  return {
+    n,
+    /** Lectura EN VIVO, para el «Quedan N» del acuse — ver `BarraReparto` abajo. */
+    total,
+    seleccionEsRecorte: seleccion.modo === 'recorte',
+    destino,
+    setDestino,
+    confirmando,
+    setConfirmando,
+    hecho,
+    setHecho,
+    trabajando,
+    error,
+    conDueno,
+    repartir,
+    intentarRepartir,
+    quitarSeleccion,
+    quitarPendiente: quitar.isPending,
+    puedeQuitar: seleccion.modo === 'lista',
+    /**
+     * ⚠️ **Con el filtro «Sin repartir» puesto, NINGUNA fila visible tiene
+     * dueño** — no es un límite del modo (como el de `recorte`, que se saca
+     * cambiando a `lista`), es que la lista misma garantiza que no hay nada
+     * que devolver al pozo común. Por eso «Quitar» ni se OFRECE acá: un botón
+     * deshabilitado diría «esto existe pero no aplica ahora», y lo que hace
+     * falta decir es que esto no va con lo que se está mirando (hermes-4c,
+     * revisando `flujo-5-sigo-tildando.png`, 24-ago-2026).
+     */
+    mostrarQuitar: !filtros.sinHabilitar,
+  };
+}
+
+export type Reparto = ReturnType<typeof useReparto>;
+
+/**
+ * LA TIRA DE ARRIBA — reemplaza a «Más nuevos» en el header. Vive siempre,
+ * elegido o no: la regla del dueño es que NO puede desaparecer, porque
+ * desaparecer es exactamente el vaivén que esto vino a sacar.
+ *
+ * Con 0 elegidos se ve apagada a propósito (gris, botón deshabilitado) — la
+ * diferencia visual entre «apagada» y «armada» es la que avisa que ya hay
+ * algo por repartir, sin necesitar texto de más.
+ */
+export function TiraDeReparto({
+  reparto,
+  destinos,
+  carga,
+}: {
+  reparto: Reparto;
+  destinos: string[];
+  carga: CargaVendedora[];
+}) {
+  const { n, seleccionEsRecorte, destino, setDestino, trabajando, confirmando, intentarRepartir } = reparto;
+  const activo = n > 0;
+
+  return (
+    <div
+      className={`flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-1.5 transition-colors duration-200 ${
+        activo ? 'border-navy/25 bg-navy/5' : 'border-border bg-muted/40'
+      }`}
+    >
+      <span
+        className={`flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[11px] font-bold tabular-nums transition-colors duration-200 ${
+          activo ? 'bg-navy text-white' : 'bg-border text-muted-foreground'
+        }`}
+      >
+        {n.toLocaleString('es')}
+      </span>
+      {seleccionEsRecorte && (
+        <span className="rounded-full bg-navy/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-navy-ink">
+          todo
+        </span>
+      )}
+
+      <ElegirDestino destinos={destinos} carga={carga} elegido={destino} onElegir={setDestino} />
+
+      <button
+        type="button"
+        disabled={!destino || !activo || trabajando}
+        onClick={intentarRepartir}
+        title={!activo ? 'Elige contactos en la tabla para repartir' : undefined}
+        className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-navy px-3 py-1.5 text-xs font-bold text-white shadow-[0_4px_16px_-6px_rgba(14,42,82,0.6)] transition-[background-color,opacity] duration-200 ease-house hover:bg-navy/90 disabled:bg-border disabled:text-muted-foreground disabled:shadow-none"
+      >
+        {trabajando && !confirmando ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
+        {destino && activo ? `Repartir ${n.toLocaleString('es')} a ${nombreCorto(destino)}` : 'Repartir'}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * EL AVISO DE «YA TIENE DUEÑO», antes de repartir (regla dura #7). Vive
+ * pegado al header —donde está ahora el control de reparto— para que no haga
+ * falta bajar la vista hasta la franja de abajo para verlo.
+ */
+export function AvisoDeDueno({ reparto }: { reparto: Reparto }) {
+  const { seleccionEsRecorte, destino, conDueno, error } = reparto;
+  if (!seleccionEsRecorte && !error) return null;
+
+  return (
+    <>
+      {seleccionEsRecorte && !destino && !!conDueno.data?.conDueno && (
+        <p className="flex items-start gap-1.5 border-b border-border bg-warning/10 px-4 py-2 text-xs text-warning-foreground">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {conDueno.data.conDueno.toLocaleString('es')} de estos ya tienen a alguien asignado.
+        </p>
+      )}
+      {seleccionEsRecorte && destino && !!conDueno.data?.deOtra && (
+        <p className="flex items-start gap-1.5 border-b border-border bg-warning/10 px-4 py-2 text-xs text-warning-foreground">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {conDueno.data.deOtra.toLocaleString('es')} de estos ya son de otra persona.
+        </p>
+      )}
+      {error && (
+        <p className="flex items-start gap-1.5 border-b border-border bg-destructive/10 px-4 py-2 text-xs text-destructive">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {/* El 409 del server enumera a quién SÍ se puede, o dice cuántos son
+              y que hay que acotar. Se muestra tal cual: adivinar el motivo es
+              cómo un dedazo se vuelve invisible. */}
+          {error.message}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * LA FRANJA DE ABAJO — lo que NO es repartir: el acuse de éxito (con el
+ * «Quedan N»), «Quitar del reparto» y, más adelante, el deshacer. El botón de
+ * repartir NO vive acá — para no tenerlo dos veces, vive solo en la tira de
+ * arriba.
+ */
+export function BarraReparto({
+  reparto,
+  deshacer,
+  onLimpiar,
+}: {
+  reparto: Reparto;
+  deshacer: Deshacer;
+  onLimpiar: () => void;
+}) {
+  const { n, total, hecho, setHecho, quitarSeleccion, quitarPendiente, puedeQuitar, mostrarQuitar } = reparto;
+
+  // Sin selección ni acuse fresco: lo único que puede haber acá es la tira de
+  // deshacer (o nada, si no hay ninguna tanda pendiente) — ver su docblock.
+  if (n === 0 && !hecho) return <TiraDeshacer deshacer={deshacer} />;
+
+  if (hecho) {
+    return (
+      <div className="sticky bottom-0 z-20 flex items-center gap-2 border-t border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
+        <Check size={15} className="shrink-0" />
+        <span className="font-semibold">
+          {hecho.a
+            ? `Listos ${hecho.cuantos.toLocaleString('es')} para ${nombreCorto(hecho.a)}.`
+            : `${hecho.cuantos.toLocaleString('es')} volvieron al pozo común.`}
+        </span>
+        {hecho.a && <span className="text-success/80">Ya los ve en su lista de Contactos.</span>}
+        {/* «Quedan N» lee `total` EN VIVO, no un número congelado en `hecho`: la
+            invalidación de la consulta ya lo trae actualizado (regla dura del
+            dueño, 24-ago-2026 — la señal de que el trabajo se acorta). */}
+        <span className="text-success/80">Quedan {total.toLocaleString('es')} en esta lista.</span>
+        {/* Solo si ESTE acuse es de un reparto (`hecho.a`) — uno de quitar
+            (`hecho.a === ''`) no genera tanda, no hay nada que deshacer. */}
+        {hecho.a && <DeshacerEnAcuse deshacer={deshacer} />}
+        <button
+          type="button"
+          onClick={() => setHecho(null)}
+          aria-label="Cerrar aviso"
+          className="ml-auto rounded-lg p-1 transition-colors hover:bg-success/15"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sticky bottom-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border bg-card/95 px-4 py-2.5 shadow-[0_-8px_24px_-12px_rgba(14,42,82,0.25)] backdrop-blur">
+      <span className="text-xs font-semibold text-muted-foreground">
+        {n.toLocaleString('es')} {n === 1 ? 'elegido' : 'elegidos'}
+      </span>
+      <button
+        type="button"
+        onClick={onLimpiar}
+        className="text-xs font-semibold text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+      >
+        Limpiar
+      </button>
+
+      {/* Con «Sin repartir» puesto, NINGUNA fila visible tiene dueño — no se
+          OFRECE Quitar, ni deshabilitado: no es un límite del modo (ese es el
+          de abajo, que se saca cambiando a `lista`), es que no hay nada que
+          esta lista pueda devolver al pozo común. */}
+      {mostrarQuitar && (
+        <button
+          type="button"
+          disabled={quitarPendiente || !puedeQuitar}
+          title={
+            puedeQuitar
+              ? 'Devolver al pozo común: dejan de ser de nadie'
+              : 'Para devolver al pozo común, elige los contactos de a uno'
+          }
+          onClick={quitarSeleccion}
+          className="ml-auto flex items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-2 text-xs font-bold text-foreground transition-colors hover:bg-muted disabled:opacity-40"
+        >
+          {quitarPendiente ? <Loader2 size={13} className="animate-spin" /> : <UserMinus size={13} />}
+          Quitar {n.toLocaleString('es')} del reparto
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * EL PASO DE MÁS, a partir de 500.
+ *
+ * La regla dura #7 pide la lista de destinatarios a la vista, y a partir de cierto
+ * tamaño eso es imposible por definición: nadie revisa 500 filas. Entonces lo que
+ * se pone a la vista es **la cifra**, escrita, y la acción deja de ser un clic
+ * suelto. No pregunta «¿estás seguro?» —que nadie lee— sino que dice el número y
+ * a quién.
+ */
+export function Confirmacion({ reparto }: { reparto: Reparto }) {
+  const { confirmando, n, destino, trabajando, setConfirmando, repartir } = reparto;
+  if (!confirmando || !destino) return null;
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40 bg-navy/30 backdrop-blur-[2px]"
+        onClick={() => setConfirmando(false)}
+        aria-hidden="true"
+      />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirmar el reparto"
+          className="w-full max-w-md overflow-hidden rounded-2xl bg-card shadow-panel"
+        >
+          <div className="p-5">
+            <p className="font-heading text-lg font-bold text-foreground">
+              Vas a repartir{' '}
+              <span className="tabular-nums text-navy-ink">{n.toLocaleString('es')}</span> contactos a{' '}
+              {nombreCorto(destino)}.
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              Van a aparecer en su lista de Contactos y deja de verlos cualquier otra persona. Es un
+              lote más grande de lo que se puede revisar fila por fila.
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              No se manda ningún mensaje: repartir solo decide de quién es cada contacto.
+            </p>
+          </div>
+          <footer className="flex gap-2 border-t border-border p-3">
+            <button
+              type="button"
+              onClick={() => setConfirmando(false)}
+              disabled={trabajando}
+              className="rounded-xl border border-border px-4 py-2.5 text-sm font-bold text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+            >
+              Volver
+            </button>
+            <button
+              type="button"
+              onClick={repartir}
+              disabled={trabajando}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-navy py-2.5 text-sm font-bold text-white transition-[background-color,transform] duration-200 ease-house hover:bg-navy/90 active:scale-[0.98] disabled:opacity-50"
+            >
+              {trabajando ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}
+              Sí, repartir {n.toLocaleString('es')}
+            </button>
+          </footer>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** El desplegable de destino: cada persona con lo que ya tiene. */
+function ElegirDestino({
+  destinos,
+  carga,
+  elegido,
+  onElegir,
+}: {
+  destinos: string[];
+  carga: CargaVendedora[];
+  elegido: string;
+  onElegir: (v: string) => void;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const caja = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!abierto) return;
+    const afuera = (e: MouseEvent) => {
+      if (caja.current && !caja.current.contains(e.target as Node)) setAbierto(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setAbierto(false);
+      }
+    };
+    document.addEventListener('mousedown', afuera);
+    document.addEventListener('keydown', escape, true);
+    return () => {
+      document.removeEventListener('mousedown', afuera);
+      document.removeEventListener('keydown', escape, true);
+    };
+  }, [abierto]);
+
+  const cuanto = new Map(carga.map((c) => [c.vendedoraId.toLowerCase(), c.contactos]));
+  const masCargado = Math.max(1, ...carga.map((c) => c.contactos));
+
+  return (
+    <div ref={caja} className="relative">
+      <button
+        type="button"
+        onClick={() => setAbierto((v) => !v)}
+        aria-expanded={abierto}
+        className="flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      >
+        <Users size={13} className="text-muted-foreground" />
+        {elegido ? nombreCorto(elegido) : 'Elegir a quién'}
+        <ChevronDown size={12} className={abierto ? 'rotate-180 transition-transform' : 'transition-transform'} />
+      </button>
+
+      {abierto && (
+        <div className="absolute right-0 top-full z-30 mt-1.5 w-64 overflow-hidden rounded-xl border border-border bg-card shadow-panel">
+          <p className="border-b border-border px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+            A quién se lo doy
+          </p>
+          <div className="max-h-64 overflow-y-auto p-1">
+            {destinos.length === 0 ? (
+              <p className="p-3 text-center text-xs text-muted-foreground">
+                Todavía no hay nadie en el reparto de ninguna línea.
+              </p>
+            ) : (
+              destinos.map((d) => {
+                const tiene = cuanto.get(d.toLowerCase()) ?? 0;
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      onElegir(d);
+                      setAbierto(false);
+                    }}
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted ${
+                      d === elegido ? 'bg-muted' : ''
+                    }`}
+                  >
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-navy/10 text-[10px] font-bold uppercase text-navy-ink">
+                      {nombreCorto(d).slice(0, 2)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-semibold text-foreground">
+                        {nombreCorto(d)}
+                      </span>
+                      {/* La carga, en número y en barra: «336 y 12» se compara
+                          leyendo; dos barras se comparan de un vistazo. */}
+                      <span className="mt-0.5 flex items-center gap-1.5">
+                        <span className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+                          <span
+                            className="block h-full rounded-full bg-navy/50"
+                            style={{ width: `${Math.round((tiene / masCargado) * 100)}%` }}
+                          />
+                        </span>
+                        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                          {tiene.toLocaleString('es')}
+                        </span>
+                      </span>
+                    </span>
+                    {d === elegido && <Check size={13} className="shrink-0 text-navy-ink" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
