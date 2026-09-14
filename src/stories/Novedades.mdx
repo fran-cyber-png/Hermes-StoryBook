@@ -6,9 +6,10 @@ import { BotonSincronizar } from './BotonSincronizar';
 
 # Novedades
 
-Este Storybook se sincroniza con el frontend real de Hermes (`Goberna-Lab/hermes`,
-rama `main`). Cuando eso trae componentes nuevos o cambiados, queda un registro
-acá abajo — así que basta con abrir esta página al entrar para saber qué cambió.
+Este Storybook se puede sincronizar con el frontend real de Hermes (`Goberna-Lab/hermes`,
+rama `main`) — hoy es manual (con el botón de abajo, o pidiéndolo en una sesión de
+Claude Code). Cuando trae componentes nuevos o cambiados, queda un registro acá abajo —
+así que basta con abrir esta página al entrar para saber qué cambió.
 
 **"Sincronizar ahora" revisa `hermes/main` y trae lo nuevo a este repo** — corre
 en tu máquina, no toca nada del monorepo real (solo lee de ahí), y deja un commit
@@ -46,6 +47,22 @@ corriendo local.
             auto
           </span>
         )}
+        {n.tipo === 'sync-manual-boton' && (
+          <span
+            style={{
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.02em',
+              background: '#EDE9FE',
+              color: '#6D28D9',
+              borderRadius: '999px',
+              padding: '0.1rem 0.55rem',
+            }}
+          >
+            botón
+          </span>
+        )}
       </div>
       <p style={{ margin: '0.5rem 0 0', lineHeight: 1.5 }}>{n.resumen}</p>
       {n.detalle && (
@@ -66,5 +83,7 @@ corriendo local.
 
 ---
 
-_Qué significa "auto": lo escribió la rutina programada que revisa `hermes/main` todos los
-días — no una sesión manual. "sync-manual" es lo que se hizo a mano en una sesión de Claude Code._
+_Todo lo de acá arriba salió de una sincronización manual: "sync-manual" se hizo en una
+sesión de Claude Code, "sync-manual-boton" con el botón de arriba. Una etiqueta "auto"
+va a aparecer el día que se active una rutina programada — todavía no está armada (falta
+un permiso de GitHub sobre `Goberna-Lab/hermes` a nivel de organización)._
