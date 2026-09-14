@@ -1,15 +1,21 @@
 import { Meta } from '@storybook/addon-docs/blocks';
 import novedades from './fixtures/novedades.json';
+import { BotonSincronizar } from './BotonSincronizar';
 
 <Meta title="Novedades" />
 
 # Novedades
 
-Este Storybook se sincroniza automáticamente con el frontend real de Hermes
-(`Goberna-Lab/hermes`, rama `main`) una vez al día. Cuando esa sincronización
-trae componentes nuevos o cambiados, queda un registro acá — así que basta con
-abrir esta página al entrar para saber qué cambió, sin ir a buscar el commit a
-GitHub.
+Este Storybook se sincroniza con el frontend real de Hermes (`Goberna-Lab/hermes`,
+rama `main`). Cuando eso trae componentes nuevos o cambiados, queda un registro
+acá abajo — así que basta con abrir esta página al entrar para saber qué cambió.
+
+**"Sincronizar ahora" revisa `hermes/main` y trae lo nuevo a este repo** — corre
+en tu máquina, no toca nada del monorepo real (solo lee de ahí), y deja un commit
+local listo para pushear cuando quieras. Solo funciona con `npm run storybook`
+corriendo local.
+
+<BotonSincronizar />
 
 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1.5rem' }}>
   {novedades.map((n) => (
