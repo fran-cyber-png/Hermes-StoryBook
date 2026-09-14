@@ -26,8 +26,17 @@ function git(args: string[]): string {
   return execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf-8' });
 }
 
+/**
+ * 🔴 `/\r?\n/` y no `'\n'` a secas — lo encontró probar el parseo de `tsc` antes
+ * de confiar en él. La salida de `npx tsc -b` en Windows viene con `\r\n`;
+ * partiendo solo por `\n` cada línea quedaba con un `\r` colgando al final, y el
+ * `$` del regex de `correrTypecheck` no matchea con ese carácter de por medio —
+ * cero errores detectados, en silencio, con la salida real llena de errores.
+ * `git` no se ve afectado (sus líneas ya vienen sin `\r`), así que el arreglo
+ * acá adentro es seguro para los dos usos.
+ */
 function lineasNoVacias(texto: string): string[] {
-  return texto.split('\n').filter((l) => l.trim() !== '');
+  return texto.split(/\r?\n/).filter((l) => l.trim() !== '');
 }
 
 /** Carpeta de feature (primer segmento después de src/features/, o el archivo suelto). */
@@ -113,6 +122,18 @@ interface CambioDeArchivo {
   storyId?: string;
 }
 
+/** Un error de `tsc` después de sincronizar, con su lugar en Storybook si el archivo es una story. */
+interface ErrorDeTipo {
+  archivo: string;
+  linea: number;
+  columna: number;
+  codigo: string;
+  mensaje: string;
+  /** Sólo si `archivo` es una `.stories.tsx` — el título que declara para armar el link. */
+  story: string | null;
+  storyId?: string;
+}
+
 interface ResultadoSync {
   cambios: boolean;
   mensaje: string;
@@ -120,6 +141,7 @@ interface ResultadoSync {
   detalle?: string;
   archivos?: string[];
   cambiosDeArchivos?: CambioDeArchivo[];
+  erroresDeTipo?: ErrorDeTipo[];
   commit?: string;
   huerfanosSinBorrar?: string[];
   dependenciasQuitadasDelMonorepo?: string[];
@@ -170,6 +192,70 @@ function archivosQueCambiaron(): CambioDeArchivo[] {
       };
     })
     .filter((c): c is CambioDeArchivo => c !== null);
+}
+
+/** El `title` que declara una `.stories.tsx`, leído directo del archivo que tsc señaló. */
+function tituloDeArchivoDeStory(archivo: string): string | null {
+  if (!archivo.endsWith('.stories.tsx')) return null;
+  try {
+    return readFileSync(path.join(REPO_ROOT, archivo), 'utf-8').match(/title:\s*'([^']+)'/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * EL CANDADO QUE FALTABA: `tsc -b` después de sincronizar, ya con la
+ * sincronización commiteada.
+ *
+ * 🔴 Hasta esto, el ciclo dependía de que alguien se acordara de correr `tsc` a
+ * mano después de apretar el botón — funcionó dos veces porque una sesión de
+ * Claude Code estaba mirando. El botón está pensado para usarse SOLO, sin
+ * nadie mirando: si sincroniza algo que rompe una story y nadie corre el
+ * typecheck, el commit queda ahí, roto, hasta que alguien lo note por las
+ * malas (abriendo Storybook y viendo una pantalla en blanco).
+ *
+ * Corre DESPUÉS del commit y no antes, a propósito: si `tsc` tira, la
+ * sincronización ya quedó guardada — lo que se pierde si se corta acá es la
+ * posibilidad de avisar, no el trabajo. Un typecheck que fallara y abortara el
+ * commit dejaría el working tree a medio sincronizar, que es peor.
+ */
+function correrTypecheck(): ErrorDeTipo[] {
+  let salida = '';
+  try {
+    // Sale con código 0: no hay errores, y `salida` queda con lo que haya
+    // impreso `tsc` igual (normalmente nada).
+    salida = execFileSync('npx', ['tsc', '-b', '--pretty', 'false'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf-8',
+      // `npx` en Windows es `npx.cmd`; mismo motivo que `npm install` más abajo.
+      shell: true,
+      timeout: 4 * 60_000,
+    });
+  } catch (e) {
+    // `tsc -b` sale con código != 0 cuando hay errores de tipo — no es una
+    // falla del propio proceso, la salida real viene en stdout igual.
+    const err = e as { stdout?: string; stderr?: string };
+    salida = (err.stdout ?? '') + (err.stderr ?? '');
+  }
+
+  const errores: ErrorDeTipo[] = [];
+  for (const linea of lineasNoVacias(salida)) {
+    const m = linea.match(/^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/);
+    if (!m) continue;
+    const archivo = m[1].replace(/\\/g, '/');
+    const titulo = tituloDeArchivoDeStory(archivo);
+    errores.push({
+      archivo,
+      linea: Number(m[2]),
+      columna: Number(m[3]),
+      codigo: m[4],
+      mensaje: m[5],
+      story: titulo,
+      ...(titulo ? { storyId: idDeStory(titulo) } : {}),
+    });
+  }
+  return errores;
 }
 
 function sincronizar(): ResultadoSync {
@@ -296,10 +382,23 @@ function sincronizar(): ResultadoSync {
     .filter((f): f is string => Boolean(f) && ![...antes].some((a) => a.startsWith(`src/features/${f}/`)));
   const featuresNuevasUnicas = [...new Set(featuresNuevas)];
 
+  // El candado: corre con TODO lo de arriba ya en el working tree (checkout +
+  // npm install si hizo falta), así ve exactamente lo que va a quedar commiteado.
+  const erroresDeTipo = correrTypecheck();
+  const storiesRotas = [...new Set(erroresDeTipo.map((e) => e.story).filter((s): s is string => s !== null))];
+
   const resumen =
+    (erroresDeTipo.length > 0 ? `⚠️ tsc encontró ${erroresDeTipo.length} error(es) después de sincronizar. ` : '') +
     `Sincronizado a mano desde el botón de Novedades. ${nArchivos} archivo(s) tocados bajo src/.` +
     (featuresNuevasUnicas.length > 0 ? ` Carpeta(s) de feature nueva(s): ${featuresNuevasUnicas.join(', ')}.` : '');
   const detallePartes: string[] = [];
+  if (erroresDeTipo.length > 0) {
+    detallePartes.push(
+      storiesRotas.length > 0
+        ? `Revisar antes de pushear — stories rotas: ${storiesRotas.join(', ')}.`
+        : `Revisar antes de pushear — el error no cayó en ningún archivo de story (puede ser en un componente o en un .ts suelto).`,
+    );
+  }
   if (conStory.length > 0) {
     detallePartes.push(
       `${conStory.length} de estos componentes ya tienen story y conviene revisarlas: ${conStory
@@ -326,8 +425,10 @@ function sincronizar(): ResultadoSync {
     archivos: Object.keys(grupos).slice(0, 12),
     /** La ruta de cada archivo tocado y dónde vive en Storybook, para seguimiento. */
     cambios: cambiosDeArchivos,
+    /** Lo que encontró `tsc -b` DESPUÉS de sincronizar. Vacío = compiló limpio. */
+    erroresDeTipo,
     commit: '',
-    tipo: 'sync-manual-boton',
+    tipo: erroresDeTipo.length > 0 ? 'sync-manual-boton-con-errores' : 'sync-manual-boton',
   });
   writeFileSync(NOVEDADES_PATH, JSON.stringify(novedades.slice(0, 30), null, 2) + '\n');
 
@@ -352,11 +453,15 @@ function sincronizar(): ResultadoSync {
 
   return {
     cambios: true,
-    mensaje: `Listo — ${nArchivos} archivo(s) sincronizados y commiteados local (${hash}). Falta hacer "git push" cuando quieras.`,
+    mensaje:
+      erroresDeTipo.length > 0
+        ? `Sincronizado (${hash}), pero tsc encontró ${erroresDeTipo.length} error(es) de tipo — mirá el detalle antes de pushear.`
+        : `Listo — ${nArchivos} archivo(s) sincronizados y commiteados local (${hash}). Falta hacer "git push" cuando quieras.`,
     resumen,
     detalle: detallePartes.join(' '),
     archivos: Object.keys(grupos),
     cambiosDeArchivos,
+    erroresDeTipo,
     commit: hash,
     huerfanosSinBorrar,
     dependenciasQuitadasDelMonorepo,

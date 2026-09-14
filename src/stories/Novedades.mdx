@@ -12,9 +12,14 @@ Claude Code). Cuando trae componentes nuevos o cambiados, queda un registro acá
 así que basta con abrir esta página al entrar para saber qué cambió.
 
 **"Sincronizar ahora" revisa `hermes/main` y trae lo nuevo a este repo** — corre
-en tu máquina, no toca nada del monorepo real (solo lee de ahí), y deja un commit
-local listo para pushear cuando quieras. Solo funciona con `npm run storybook`
-corriendo local.
+en tu máquina, no toca nada del monorepo real (solo lee de ahí), corre `tsc`
+para confirmar que nada se rompió, y deja un commit local listo para pushear
+cuando quieras. Solo funciona con `npm run storybook` corriendo local.
+
+Si `tsc` encuentra algo, **el commit se hace igual** — es preferible avisar de
+una sincronización con un error de tipo que dejarla sin hacer y perder el aviso
+de qué cambió en el monorepo real. El aviso queda arriba de todo, en rojo, con
+la story exacta que hay que abrir.
 
 Cada sincronización lista los archivos que tocó, con la ruta completa y qué le
 pasó a cada uno — <strong>A</strong> nuevo, <strong>M</strong> modificado,
@@ -69,8 +74,62 @@ todavía nadie cubrió: esa columna es la lista de trabajo pendiente.
             botón
           </span>
         )}
+        {n.tipo === 'sync-manual-boton-con-errores' && (
+          <span
+            style={{
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.02em',
+              background: '#FEF3C7',
+              color: '#92400E',
+              borderRadius: '999px',
+              padding: '0.1rem 0.55rem',
+            }}
+          >
+            ⚠ con errores de tipo
+          </span>
+        )}
       </div>
       <p style={{ margin: '0.5rem 0 0', lineHeight: 1.5 }}>{n.resumen}</p>
+
+      {/* El candado: lo que `tsc -b` encontró DESPUÉS de que esta sincronización
+          se commiteó. Va ANTES de la tabla de cambios a propósito — es lo primero
+          que hay que resolver, no un detalle al pie. */}
+      {n.erroresDeTipo?.length > 0 && (
+        <div
+          style={{
+            marginTop: '0.75rem',
+            border: '1px solid #FCA5A5',
+            background: '#FEF2F2',
+            borderRadius: '10px',
+            padding: '0.75rem 1rem',
+          }}
+        >
+          <p style={{ margin: 0, fontWeight: 700, fontSize: '0.85rem', color: '#991B1B' }}>
+            tsc encontró {n.erroresDeTipo.length} error{n.erroresDeTipo.length === 1 ? '' : 'es'} después de sincronizar
+          </p>
+          <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', fontSize: '0.8rem' }}>
+            {n.erroresDeTipo.map((e, i) => (
+              <li key={i} style={{ marginTop: i === 0 ? 0 : '0.4rem' }}>
+                <code style={{ fontSize: '0.76rem' }}>
+                  {e.archivo}:{e.linea}
+                </code>{' '}
+                <span style={{ opacity: 0.6 }}>{e.codigo}</span>
+                {e.story && (
+                  <>
+                    {' — '}
+                    <a href={`/?path=/story/${e.storyId}`} target="_top" style={{ fontWeight: 600 }}>
+                      {e.story} →
+                    </a>
+                  </>
+                )}
+                <div style={{ opacity: 0.85, marginTop: '0.15rem' }}>{e.mensaje}</div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {n.detalle && (
         <p style={{ margin: '0.5rem 0 0', lineHeight: 1.5, opacity: 0.8, fontSize: '0.9rem' }}>{n.detalle}</p>
       )}
@@ -145,6 +204,7 @@ todavía nadie cubrió: esa columna es la lista de trabajo pendiente.
 ---
 
 _Todo lo de acá arriba salió de una sincronización manual: "sync-manual" se hizo en una
-sesión de Claude Code, "sync-manual-boton" con el botón de arriba. Una etiqueta "auto"
-va a aparecer el día que se active una rutina programada — todavía no está armada (falta
+sesión de Claude Code, "sync-manual-boton" con el botón de arriba, y "⚠ con errores de
+tipo" es lo mismo pero con algo que revisar antes de pushear. Una etiqueta "auto" va a
+aparecer el día que se active una rutina programada — todavía no está armada (falta
 un permiso de GitHub sobre `Goberna-Lab/hermes` a nivel de organización)._

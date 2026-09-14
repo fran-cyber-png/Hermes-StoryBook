@@ -10,6 +10,8 @@ export function BotonSincronizar() {
   const [estado, setEstado] = useState<'quieto' | 'corriendo' | 'hecho' | 'error'>('quieto');
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [huboCambios, setHuboCambios] = useState(false);
+  /** Si `tsc -b` encontró algo DESPUÉS de sincronizar: éxito a medias, no un verde limpio. */
+  const [huboErroresDeTipo, setHuboErroresDeTipo] = useState(false);
   /**
    * `estado === 'corriendo'` sólo bloquea el botón DESPUÉS de que React vuelva a
    * pintar — un doble clic (o un reintento de automatización) que entra antes de
@@ -29,6 +31,7 @@ export function BotonSincronizar() {
       if (!res.ok) throw new Error(datos.error ?? `Error ${res.status}`);
       setMensaje(datos.mensaje as string);
       setHuboCambios(Boolean(datos.cambios));
+      setHuboErroresDeTipo(Boolean(datos.erroresDeTipo?.length));
       setEstado('hecho');
     } catch (e) {
       setMensaje(e instanceof Error ? e.message : String(e));
@@ -60,7 +63,7 @@ export function BotonSincronizar() {
 
       {estado === 'corriendo' && (
         <p style={{ marginTop: '0.6rem', fontSize: '0.85rem', opacity: 0.7 }}>
-          Revisando hermes/main, esto puede tardar si hay que instalar dependencias nuevas…
+          Revisando hermes/main, trayendo lo nuevo y corriendo tsc para confirmar que nada se rompió — puede tardar un rato…
         </p>
       )}
 
@@ -70,8 +73,8 @@ export function BotonSincronizar() {
             marginTop: '0.75rem',
             padding: '0.75rem 1rem',
             borderRadius: '8px',
-            background: huboCambios ? '#DCFCE7' : '#F1F5F9',
-            color: huboCambios ? '#166534' : '#475569',
+            background: huboErroresDeTipo ? '#FEF3C7' : huboCambios ? '#DCFCE7' : '#F1F5F9',
+            color: huboErroresDeTipo ? '#92400E' : huboCambios ? '#166534' : '#475569',
             fontSize: '0.85rem',
           }}
         >
@@ -85,7 +88,7 @@ export function BotonSincronizar() {
                 style={{
                   border: 'none',
                   background: 'none',
-                  color: '#166534',
+                  color: huboErroresDeTipo ? '#92400E' : '#166534',
                   fontWeight: 700,
                   textDecoration: 'underline',
                   cursor: 'pointer',
@@ -94,7 +97,7 @@ export function BotonSincronizar() {
               >
                 Recargar esta página
               </button>{' '}
-              para verlo en la lista de abajo.
+              para ver el detalle en la lista de abajo.
             </>
           )}
         </div>
