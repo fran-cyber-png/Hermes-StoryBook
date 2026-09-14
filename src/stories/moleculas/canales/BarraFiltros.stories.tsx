@@ -23,7 +23,7 @@ export const SinFiltros: Story = {
     onFiltro: () => {},
     categoriaActiva: null,
     onCategoria: () => {},
-    onListas: () => {},
+    onAdministrarCategorias: () => {},
   },
 };
 
@@ -40,7 +40,7 @@ export const ConChipsYListas: Story = {
     ],
     categoriaActiva: 'Interesados',
     onCategoria: () => {},
-    onListas: () => {},
+    onAdministrarCategorias: () => {},
   },
 };
 
@@ -57,7 +57,7 @@ export const ConLineas: Story = {
     onFiltro: () => {},
     categoriaActiva: null,
     onCategoria: () => {},
-    onListas: () => {},
+    onAdministrarCategorias: () => {},
     opciones: [
       { numero: '', etiqueta: 'Todas', titulo: 'Ver todas las líneas juntas' },
       {
