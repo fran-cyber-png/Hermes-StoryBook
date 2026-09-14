@@ -222,20 +222,30 @@ function sincronizar(): ResultadoSync {
   const despues = new Set(lineasNoVacias(git(['ls-tree', '-r', '--name-only', 'hermes/main', '--', 'src'])));
 
   // Huérfanos: estaban antes, no están en hermes/main. Sólo se borran si NINGUNA
-  // story los referencia — si no se puede confirmar eso acá adentro (grep sobre
-  // src/stories), se deja el archivo y se avisa, en vez de arriesgar borrar algo
-  // que una historia todavía usa.
+  // story los referencia — si no, se deja el archivo y se avisa, en vez de
+  // arriesgar borrar algo que una historia todavía usa.
   const huerfanos = [...antes].filter((f) => !despues.has(f));
   const huerfanosSinBorrar: string[] = [];
+  /**
+   * 🔴 Esto se leía con `execFileSync('grep', …)` y era un borrado esperando
+   * pasar: si `grep` no está en el PATH del proceso de Node —muy posible en
+   * Windows, donde este código corre adentro del dev server de Vite— tira ENOENT,
+   * el `catch` lo tomaba como «nadie lo referencia» y **el archivo se borraba
+   * igual**. O sea que la comprobación que existe para no borrar algo en uso
+   * fallaba justo hacia el lado peligroso, y en silencio. Leyéndolo con `fs` no
+   * depende de ningún binario y no puede confundir «no hay match» con «no pude
+   * buscar».
+   */
+  const fuentesDeStories = lineasNoVacias(git(['ls-files', 'src/stories'])).map((rel) => {
+    try {
+      return readFileSync(path.join(REPO_ROOT, rel), 'utf-8');
+    } catch {
+      return '';
+    }
+  });
   for (const f of huerfanos) {
     const nombre = path.basename(f).replace(/\.(tsx?|jsx?)$/, '');
-    let referenciado = false;
-    try {
-      execFileSync('grep', ['-rl', nombre, path.join(REPO_ROOT, 'src/stories')], { encoding: 'utf-8' });
-      referenciado = true;
-    } catch {
-      referenciado = false; // grep sin matches sale con status 1
-    }
+    const referenciado = fuentesDeStories.some((fuente) => fuente.includes(nombre));
     if (referenciado) {
       huerfanosSinBorrar.push(f);
     } else {
@@ -260,7 +270,19 @@ function sincronizar(): ResultadoSync {
   const depsCambiaron = JSON.stringify(local.dependencies) !== JSON.stringify(depsAntes);
   if (depsCambiaron) {
     writeFileSync(PACKAGE_JSON_PATH, JSON.stringify(local, null, 2) + '\n');
-    execFileSync('npm', ['install'], { cwd: REPO_ROOT, encoding: 'utf-8', timeout: 5 * 60_000 });
+    /**
+     * 🔴 `shell: true` NO es opcional en Windows: ahí `npm` es `npm.cmd`, y
+     * `execFileSync` no resuelve un `.cmd` — tira `spawnSync npm ENOENT` y deja
+     * la sincronización a medias, con los archivos ya traídos y sin commitear.
+     * El bug estuvo latente hasta la primera sincronización que cambió una
+     * dependencia, que es la única que llega hasta esta línea.
+     */
+    execFileSync('npm', ['install'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf-8',
+      timeout: 5 * 60_000,
+      shell: true,
+    });
   }
 
   // Cada línea de `git diff --stat` con "|" es un archivo tocado; la última línea
