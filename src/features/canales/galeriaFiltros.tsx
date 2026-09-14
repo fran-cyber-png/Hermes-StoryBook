@@ -333,7 +333,7 @@ function Galeria() {
             onLinea={() => {}}
             categoriaActiva={null}
             onCategoria={() => {}}
-            onListas={() => {}}
+            onAdministrarCategorias={() => {}}
           />
         </section>
 
@@ -361,7 +361,7 @@ function Galeria() {
               onLinea={() => {}}
               categoriaActiva={null}
               onCategoria={() => {}}
-              onListas={() => {}}
+              onAdministrarCategorias={() => {}}
             />
           </div>
           <p className="mb-1 px-1 text-xs font-semibold text-muted-foreground">
@@ -378,7 +378,7 @@ function Galeria() {
               onLinea={() => {}}
               categoriaActiva={null}
               onCategoria={() => {}}
-              onListas={() => {}}
+              onAdministrarCategorias={() => {}}
             />
           </div>
         </section>

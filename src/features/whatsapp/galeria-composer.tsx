@@ -18,6 +18,8 @@ import '../../index.css';
  * `?revision=1` abre el modo revisión, donde pegar un adjunto se rechaza.
  * `?voz=sintetica` graba una nota de voz con un tono en vez del micrófono.
  * `?descargas=registrar` anota las descargas en `window.__descargas` en vez de guardarlas.
+ * `?emojis=abierto` abre el selector de emojis al cargar; `?emojis=falla` hace que sus datos no
+ * lleguen, para ver el «Reintentar». Los datos de verdad salen de `public/emojis/` (ADR 0126).
  * `?varita=muda` hace que el bot no tenga nada que sugerir — el caso FEO, que es
  * el que muestra si el aviso se entiende o si parece que la app se colgó. Con
  * `&motivo=sin_cliente` se calla por la línea de campaña sin cliente (#951).
@@ -378,11 +380,17 @@ const IMAGENES_DEL_HILO: Record<string, () => Promise<Blob>> = {
 };
 
 /** Todo endpoint contesta lo mínimo; el envío responde OK pero no persiste nada. */
+// Los datos del selector de emojis son archivos del build, no del server: van al `fetch` de verdad.
+const fetchDelNavegador = window.fetch.bind(window);
+const emojisDeLaGaleria = new URLSearchParams(location.search).get('emojis');
+
 window.fetch = (async (entrada: RequestInfo | URL, init?: RequestInit) => {
   if (String(entrada).includes('/reaccionar')) console.info('[galeria] reaccionar →', String(init?.body ?? ''));
   const url = String(typeof entrada === 'string' ? entrada : entrada instanceof URL ? entrada.href : entrada.url);
   const json = (cuerpo: unknown, status = 200) =>
     new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+
+  if (url.includes('/emojis/')) return emojisDeLaGaleria === 'falla' ? json({}, 503) : fetchDelNavegador(entrada, init);
 
   // ── LA VARITA (#918) ──
   // El caso bonito Y el mudo, por la misma razón que las tres citas de acá
@@ -649,3 +657,17 @@ createRoot(document.getElementById('galeria')!).render(
     </QueryClientProvider>
   </StrictMode>,
 );
+
+if (emojisDeLaGaleria) {
+  // Un clic de verdad en el botón, y no una prop para la galería: así se ve el mismo camino que usa ella.
+  // Se insiste hasta verlo abierto (con un tope): un clic que llega antes de que el composer termine de
+  // montarse con la sesión se pierde, y así pasó la primera vez que se probó.
+  let intentos = 0;
+  const abrirEmojis = () => {
+    const boton = document.querySelector<HTMLButtonElement>('button[aria-label="Emojis"]');
+    if (boton?.getAttribute('aria-expanded') === 'true' || intentos++ > 40) return;
+    if (boton && !boton.disabled) boton.click();
+    setTimeout(abrirEmojis, 500);
+  };
+  setTimeout(abrirEmojis, 300);
+}

@@ -1,12 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, Lock, Send } from 'lucide-react';
+import { ExternalLink, Lock, Send, Smile } from 'lucide-react';
 import { api, ErrorApi } from '../../lib/datos/cliente';
 import { agruparPorDia, MediaEnBurbuja, SeparadorDia, SkeletonHilo, tintaSeparador } from '../whatsapp/HiloWhatsapp';
 import { BotonDescargarAdjunto } from '../whatsapp/BotonDescargarAdjunto';
 import type { MediaHilo } from '../whatsapp/conversacionWa';
 import { CabeceraDeChat } from './CabeceraDeChat';
 import type { Conversacion } from '../../dominio/conversaciones';
+import { insertarEnCursor } from '../../lib/insertarEnCursor';
+import { perezoso } from '../../lib/perezoso';
+import { usePopover } from '../../lib/teclado/usePopover';
+import { useEsMovil } from '../../lib/useEsMovil';
+
+/** Perezoso, como en WhatsApp (ADR 0126): al arranque le toca el botón, no `frimousse`. */
+const SelectorDeEmojis = perezoso(() => import('../../components/SelectorDeEmojis').then((m) => m.SelectorDeEmojis));
 
 /**
  * EL HILO DE MESSENGER — leer la conversación completa, con las dos mitades.
@@ -249,6 +256,10 @@ function RedactorMessenger({
 }) {
   const [texto, setTexto] = useState('');
   const clienteDeConsultas = useQueryClient();
+  const cajaRef = useRef<HTMLTextAreaElement>(null);
+  const [emojisAbiertos, setEmojisAbiertos] = useState(false);
+  const popoverEmojis = usePopover(emojisAbiertos, () => setEmojisAbiertos(false), { z: 'z-20' });
+  const esMovil = useEsMovil();
 
   const enviar = useMutation({
     mutationFn: (cuerpo: string) =>
@@ -292,24 +303,68 @@ function RedactorMessenger({
 
   const puedeMandar = Boolean(texto.trim()) && !enviar.isPending;
 
+  function mandar() {
+    setEmojisAbiertos(false);
+    enviar.mutate(texto.trim());
+  }
+
+  /** El emoji entra donde está el cursor —o reemplaza lo seleccionado— y el panel queda abierto (ADR 0126). */
+  function ponerEmoji(emoji: string) {
+    const caja = cajaRef.current;
+    const r = insertarEnCursor(texto, caja?.selectionStart ?? texto.length, caja?.selectionEnd ?? texto.length, emoji);
+    setTexto(r.texto);
+    caja?.focus();
+    // En el frame siguiente, como en WhatsApp: React todavía no pintó el valor nuevo.
+    requestAnimationFrame(() => caja?.setSelectionRange(r.cursor, r.cursor));
+  }
+
   return (
     <footer className="shrink-0 border-t border-border bg-card px-3 py-2.5 max-md:pb-[calc(0.625rem+env(safe-area-inset-bottom))]">
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (puedeMandar) enviar.mutate(texto.trim());
+          if (puedeMandar) mandar();
         }}
-        className="flex items-end gap-2"
+        className="relative flex items-end gap-2"
       >
+        {emojisAbiertos && (
+          <>
+            <div {...popoverEmojis.propsOverlay} />
+            <Suspense fallback={null}>
+              <SelectorDeEmojis onElegir={ponerEmoji} onCerrar={() => setEmojisAbiertos(false)} />
+            </Suspense>
+          </>
+        )}
+        {/* A la izquierda de la caja, el mismo lugar que en WhatsApp; sin botón en el celular. */}
+        {!esMovil && (
+          <button
+            type="button"
+            onClick={() => setEmojisAbiertos((v) => !v)}
+            disabled={enviar.isPending}
+            title="Emojis"
+            aria-label="Emojis"
+            aria-expanded={emojisAbiertos}
+            className="flex size-[38px] shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-40"
+          >
+            <Smile size={16} />
+          </button>
+        )}
         <textarea
+          ref={cajaRef}
           value={texto}
           onChange={(e) => setTexto(e.target.value)}
           onKeyDown={(e) => {
+            if (e.key === 'Escape' && emojisAbiertos) {
+              e.preventDefault();
+              e.stopPropagation();
+              setEmojisAbiertos(false);
+              return;
+            }
             // Enter manda, Shift+Enter hace salto de línea — lo mismo que
             // Messenger y que WhatsApp, así que no hay nada que aprender.
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
-              if (puedeMandar) enviar.mutate(texto.trim());
+              if (puedeMandar) mandar();
             }
           }}
           rows={1}

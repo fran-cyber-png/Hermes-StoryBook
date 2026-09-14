@@ -84,7 +84,18 @@ window.fetch = (async (entrada: RequestInfo | URL) => {
         { id: 'remarketing', nombre: 'Remarketing' },
         { id: 'postventa', nombre: 'PostVenta' },
       ],
-      origenes: [],
+      // Los ocho de `server/src/cerberus/venta.ts`. Esto también decía `[]`, y con
+      // eso el Origen, que se elige desde el 14-sep-2026, se veía con una sola opción.
+      origenes: [
+        { id: 'facebook', nombre: 'Facebook' },
+        { id: 'instagram', nombre: 'Instagram' },
+        { id: 'whatsapp', nombre: 'WhatsApp' },
+        { id: 'tiktok', nombre: 'Tiktok' },
+        { id: 'google', nombre: 'Google' },
+        { id: 'linkedin', nombre: 'Linkedin' },
+        { id: 'llamada', nombre: 'Llamada' },
+        { id: 'correo', nombre: 'Correo' },
+      ],
     });
   // `locales: null` es «no se pudo preguntar», no «no hay»: la pantalla degrada
   // a la lista completa del formulario en vez de dejar la venta imposible.

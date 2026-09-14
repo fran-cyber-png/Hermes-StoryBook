@@ -123,26 +123,3 @@ describe('armarItemsMenu', () => {
   });
 });
 
-/**
- * El tercer eslabón del cable, y el único que ningún test de componente ve:
- * `MenuHerramientas` puede filtrar perfecto y `BarraGestion` montarlo sin
- * pasarle `esDeCampana` — el menú vuelve a ofrecerlo, en silencio.
- *
- * ⚠️ `import.meta.glob` y **no `node:fs`**: el segundo pasa en vitest y falla
- * en `tsc -p tsconfig.app.json`, que no lleva los tipos de node (la cicatriz de
- * `lib/etapas.test.ts`, misma nota que en `vistas/acceso.test.ts`).
- */
-const BARRA: string = Object.values(
-  import.meta.glob('./BarraGestion.tsx', { eager: true, query: '?raw', import: 'default' }) as Record<
-    string,
-    string
-  >,
-)[0];
-
-describe('el cable desde BarraGestion', () => {
-  it('le pasa `esDeCampana` a MenuHerramientas', () => {
-    const renglon = BARRA.split('\n').find((l) => l.includes('<MenuHerramientas'));
-    expect(renglon, 'no encontré el montaje de MenuHerramientas en BarraGestion.tsx').toBeDefined();
-    expect(renglon).toContain('esDeCampana={esDeCampana}');
-  });
-});

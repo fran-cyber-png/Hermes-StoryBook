@@ -1,13 +1,14 @@
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bot, Check, CheckCheck, Copy, CornerDownRight, CornerUpLeft, CornerUpRight, FileText, SmilePlus, Loader2, Maximize2, Megaphone, Mic, Paperclip, Pencil, Phone, Play, QrCode, Send, Link2, Trash2, Wand2, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Bot, Check, CheckCheck, Copy, CornerDownRight, CornerUpLeft, CornerUpRight, FileText, Smile, SmilePlus, Loader2, Maximize2, Megaphone, Mic, Paperclip, Pencil, Phone, Play, QrCode, Send, Link2, Trash2, Wand2, WifiOff, X } from 'lucide-react';
 import { ErrorApi } from '../../lib/datos/cliente';
 import { deDondeVino } from '../../dominio/origen';
 import { esDeCampana } from './campanaAjena';
 import { useBlobAutenticado } from '../../lib/datos/blobAutenticado';
 import { tokenGuardado } from '../../lib/datos/token';
 import { formatoTelefono, horasDesde, tempClass } from '../../lib/formato';
+import { recortarNombre } from '../../lib/texto';
 import { usePopover } from '../../lib/teclado/usePopover';
-import { CONSULTA_CELULAR } from '../../lib/useEsMovil';
+import { CONSULTA_CELULAR, useEsMovil } from '../../lib/useEsMovil';
 import { ejecutarEnvioComposer, guardarBorrador, leerBorrador } from './borradorComposer';
 import { ponerEnComposer } from './puenteComposer';
 import {
@@ -22,6 +23,7 @@ import { BotonDescargarAdjunto } from './BotonDescargarAdjunto';
 import { esPdf, nombreDeDescarga } from './descargarAdjunto';
 import { guardarBlob } from '../../lib/datos/descargarArchivo';
 import { perezoso } from '../../lib/perezoso';
+import { insertarEnCursor } from '../../lib/insertarEnCursor';
 import { puedeGrabarVoz, relojDeVoz } from './notaDeVoz';
 
 /**
@@ -34,6 +36,8 @@ import { puedeGrabarVoz, relojDeVoz } from './notaDeVoz';
 const GrabadorDeVoz = perezoso(() => import('./GrabadorDeVoz').then((m) => m.GrabadorDeVoz));
 /** Perezoso por lo mismo: se abre con un clic, y el arranque tiene el techo justo. */
 const VisorDeAdjunto = perezoso(() => import('../../components/VisorDeAdjunto').then((m) => m.VisorDeAdjunto));
+/** Perezoso por lo mismo (ADR 0126): al arranque le toca el botón, no `frimousse`. */
+const SelectorDeEmojis = perezoso(() => import('../../components/SelectorDeEmojis').then((m) => m.SelectorDeEmojis));
 import { alPonerEnComposer } from './puenteComposer';
 import { anotarPieza, piezaDelTexto } from './procedenciaComposer';
 import { aplicarRespuesta, comandoEnCurso, filtrarRespuestas } from './comandoBarra';
@@ -1089,13 +1093,10 @@ export function HiloWhatsapp({
   miVendedora?: string | null;
   /**
    * ══ LA BARRA DE GESTIÓN VIVE EN ESTA CABECERA (07-sep-2026, pedido del
-   * dueño) ══ — ver el docblock de `BarraGestion.embebida`. Estos tres props
-   * son EXACTAMENTE los que `ConversacionActiva` le pasaba antes a
-   * `<BarraGestion>` como fila separada; ahora viajan un nivel más adentro,
-   * hasta acá, porque es acá donde `<BarraGestion embebida>` se monta para
-   * WhatsApp. Messenger y los comentarios de FB/IG NO pasan por este
-   * componente, así que su `<BarraGestion>` de fila separada sigue exactamente
-   * igual en `ConversacionActiva.tsx`.
+   * dueño) ══ — ver el docblock de `BarraGestion.embebida`. Estos props bajan
+   * hasta `<CabeceraDeChat>`, que es donde `<BarraGestion embebida>` se monta
+   * para los cuatro canales por igual (Messenger y los comentarios de FB/IG
+   * pasan por `HiloMessenger`/`ResponderPanel`, no por acá).
    *
    * ⚠️ **`esDeCampana` llega como `modoCampana`** (renombrado en la
    * desestructuración): el archivo ya importa una FUNCIÓN llamada
@@ -1382,7 +1383,7 @@ export function HiloWhatsapp({
             className="size-8 rounded-[11px] bg-secondary font-heading text-xs font-bold text-navy-ink"
           />
         }
-        nombre={nombreDelHilo ?? formatoTelefono(telefono)}
+        nombre={recortarNombre(nombreDelHilo ?? formatoTelefono(telefono))}
         subtitulo={
           <>
             <Phone size={10} /> <span className="font-mono tabular-nums">{formatoTelefono(telefono)}</span>
@@ -2219,6 +2220,13 @@ function ComposerWa({
     requestAnimationFrame(() => caja?.setSelectionRange(posicion, hasta));
   }
 
+  /** El emoji entra donde está el cursor —o reemplaza lo seleccionado— y el panel queda abierto (ADR 0126). */
+  function ponerEmoji(emoji: string) {
+    const caja = textareaRef.current;
+    const r = insertarEnCursor(texto, caja?.selectionStart ?? texto.length, caja?.selectionEnd ?? texto.length, emoji);
+    reemplazarEnLaCaja(r.texto, r.cursor);
+  }
+
   function elegirRapida(h: HechoDelCatalogo) {
     if (!comando) return;
     const r = aplicarRespuesta(texto, comando, h.texto);
@@ -2266,6 +2274,9 @@ function ComposerWa({
   // foco adentro lo maneja el propio selector: `usePopover` lo ignora a propósito
   // cuando el foco está en un campo (`escapeDePopover.ts`).
   const popoverPlantillas = usePopover(plantillasAbiertas, () => setPlantillasAbiertas(false), { z: 'z-20' });
+  const [emojisAbiertos, setEmojisAbiertos] = useState(false);
+  const popoverEmojis = usePopover(emojisAbiertos, () => setEmojisAbiertos(false), { z: 'z-20' });
+  const esMovil = useEsMovil();
   // La marca vuelve arriba al cambiar lo buscado: dejarla donde estaba haría que
   // Enter eligiera algo que ya no es lo que se está viendo.
   useEffect(() => setIndicePlantilla(0), [consultaPlantilla]);
@@ -2616,6 +2627,7 @@ function ComposerWa({
   }
 
   async function onEnviar() {
+    setEmojisAbiertos(false);
     try {
       await ejecutarEnvioComposer({
         telefonoDelEnvio: telefono,
@@ -2887,6 +2899,14 @@ function ComposerWa({
             son dos listbox del mismo ancho y en el mismo lugar, y apilados no se
             entiende cuál se lleva el Enter. El `/` gana porque lo abrió la mano
             que está escribiendo. */}
+        {emojisAbiertos && !comando && !sugerencia && conectado && !tomadoPor && (
+          <>
+            <div {...popoverEmojis.propsOverlay} />
+            <Suspense fallback={null}>
+              <SelectorDeEmojis onElegir={ponerEmoji} onCerrar={() => setEmojisAbiertos(false)} />
+            </Suspense>
+          </>
+        )}
         {plantillasAbiertas && !comando && (
           <>
             <div {...popoverPlantillas.propsOverlay} />
@@ -2970,6 +2990,21 @@ function ComposerWa({
             disabled={!conectado || Boolean(tomadoPor)}
           />
         )}
+        {/* EMOJIS, junto al clip y las plantillas: también es «traer algo a la caja». Sin botón en el
+            celular, donde el teclado del teléfono ya los tiene (ADR 0126). */}
+        {!sugerencia && !esMovil && (
+          <button
+            type="button"
+            onClick={() => setEmojisAbiertos((v) => !v)}
+            disabled={!conectado || Boolean(tomadoPor)}
+            title="Emojis"
+            aria-label="Emojis"
+            aria-expanded={emojisAbiertos}
+            className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 disabled:opacity-40"
+          >
+            <Smile size={16} />
+          </button>
+        )}
         <textarea
           ref={textareaRef}
           value={texto}
@@ -3010,6 +3045,13 @@ function ComposerWa({
                 elegirRapida(rapidas[Math.min(indiceRapida, rapidas.length - 1)]);
                 return;
               }
+            }
+            // El panel de emojis es lo más de adentro: Escape lo cierra antes que el `/` y que la cita.
+            if (e.key === 'Escape' && emojisAbiertos) {
+              e.preventDefault();
+              e.stopPropagation();
+              setEmojisAbiertos(false);
+              return;
             }
             if (e.key === 'Escape' && comando) {
               // Cerrar sin elegir descarta el `/loquesea`: dejarlo obliga a

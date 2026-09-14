@@ -291,7 +291,7 @@ function Galeria() {
               onLinea={() => {}}
               categoriaActiva={null}
               onCategoria={() => {}}
-              onListas={() => {}}
+              onAdministrarCategorias={() => {}}
             />
           </div>
           <div className="rounded-xl border border-border bg-card p-3">
@@ -308,7 +308,7 @@ function Galeria() {
               onLinea={() => {}}
               categoriaActiva={null}
               onCategoria={() => {}}
-              onListas={() => {}}
+              onAdministrarCategorias={() => {}}
             />
           </div>
         </section>

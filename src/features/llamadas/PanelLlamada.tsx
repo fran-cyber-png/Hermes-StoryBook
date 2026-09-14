@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Phone, PhoneCall, RefreshCw } from 'lucide-react';
 import type { Conversacion } from '../../dominio/conversaciones';
-import { api, ErrorApi } from '../../lib/datos/cliente';
+import { ErrorApi } from '../../lib/datos/cliente';
 import { llamar, useLlamadaActual } from './llamadaActual';
+import { usePedirPermisoDeLlamada, usePermisoDeLlamada, type Permiso } from './permisoDeLlamada';
+import { useLlamable } from './useLlamable';
 
 /**
  * LLAMAR POR WHATSAPP DESDE LA FICHA — solo donde se puede (ADR 0123).
@@ -13,20 +14,12 @@ import { llamar, useLlamadaActual } from './llamadaActual';
  *
  * La llamada en sí (timbre, en curso, colgar) vive en `BarraDeLlamada`, fuera del panel: cambiar de
  * conversación no puede cortar una llamada.
+ *
+ * 🔴 `llamable` y el permiso salen de `useLlamable`/`usePermisoDeLlamada` (`./useLlamable`,
+ * `./permisoDeLlamada`) — el botón «Llamar» de la cabecera del hilo (`gestion/BotonLlamar.tsx`)
+ * usa exactamente la misma regla y la misma consulta, con la misma `queryKey`, para que las dos
+ * superficies nunca digan cosas distintas sobre la misma conversación.
  */
-
-interface Activas {
-  ok: true;
-  activa: boolean;
-  linea: string | null;
-}
-
-interface Permiso {
-  estado: 'sin_permiso' | 'temporal' | 'permanente' | 'desconocido';
-  venceEn: string | null;
-  puedePedir: boolean | null;
-  puedeLlamar: boolean;
-}
 
 function rotuloDelPermiso(p: Permiso): string {
   if (p.estado === 'permanente') return 'Permiso permanente';
@@ -44,44 +37,10 @@ const BOTON =
   'inline-flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-[background-color,transform] duration-200 ease-house active:scale-[0.98] disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring';
 
 export function PanelLlamada({ conversacion }: { conversacion: Conversacion }) {
-  const qc = useQueryClient();
   const { estado } = useLlamadaActual();
-  const activas = useQuery({
-    queryKey: ['llamadas', 'activas'],
-    queryFn: () => api<Activas>('/api/llamadas/activas'),
-    staleTime: 5 * 60_000,
-  });
-
-  const telefono = conversacion.persona_id ?? '';
-  const linea = activas.data?.linea ?? null;
-  const llamable =
-    activas.data?.activa === true &&
-    linea !== null &&
-    conversacion.canal === 'whatsapp' &&
-    conversacion.tipo !== 'lead' &&
-    telefono !== '' &&
-    conversacion.numero_propio === linea;
-
-  const claveDelPermiso = ['llamadas', 'permiso', conversacion.clave];
-  const permiso = useQuery({
-    queryKey: claveDelPermiso,
-    queryFn: () =>
-      api<{ ok: true; permiso: Permiso }>(`/api/llamadas/permiso?clave=${encodeURIComponent(conversacion.clave)}`).then(
-        (r) => r.permiso,
-      ),
-    enabled: llamable,
-    staleTime: 30_000,
-    retry: false,
-  });
-
-  const pedir = useMutation({
-    mutationFn: () =>
-      api<{ ok: true; mensaje: string }>('/api/llamadas/pedir-permiso', {
-        method: 'POST',
-        body: JSON.stringify({ clave: conversacion.clave }),
-      }),
-    onSettled: () => void qc.invalidateQueries({ queryKey: claveDelPermiso }),
-  });
+  const { llamable, telefono } = useLlamable(conversacion);
+  const permiso = usePermisoDeLlamada(conversacion.clave, { habilitado: llamable });
+  const pedir = usePedirPermisoDeLlamada(conversacion.clave);
 
   if (!llamable) return null;
 

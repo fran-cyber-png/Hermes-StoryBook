@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Pencil,
   Plus,
   Star,
   Tag,
@@ -121,7 +122,7 @@ function FilaCategoria({
 
   if (!puedeAdministrar) {
     return (
-      <li className="rounded-xl border border-border bg-card">
+      <li className="rounded-lg transition-[background-color,box-shadow] hover:bg-card hover:shadow-sm">
         <div className="flex items-center gap-2 px-2.5 py-2">
           {pildora}
           {categoria.conteo > 0 && (
@@ -138,7 +139,12 @@ function FilaCategoria({
   }
 
   return (
-    <li className="rounded-xl border border-border bg-card">
+    /* `group`: los íconos de acción (lápiz, subir/bajar, borrar) se quedan
+       apagados hasta que se pasa el mouse O el foco entra por teclado —
+       `group-focus-within` es lo que evita que Tab los deje inalcanzables.
+       La favorita NO entra en ese grupo a propósito: es un ESTADO que hay que
+       poder leer de un vistazo, no una acción que solo importa al tocarla. */
+    <li className="group rounded-lg transition-[background-color,box-shadow] hover:bg-card hover:shadow-sm">
       <div className="flex items-center gap-2 px-2.5 py-2">
         {/* La píldora con BORDE de color (nunca sombra, nunca oro). */}
         <button
@@ -157,7 +163,7 @@ function FilaCategoria({
           {editando ? '' : categoria.nombre}
         </button>
 
-        {editando ? (
+        {editando && (
           <input
             value={nombre}
             autoFocus
@@ -174,17 +180,6 @@ function FilaCategoria({
             onBlur={guardarNombre}
             className="w-32 rounded-md border border-primary bg-card px-1.5 py-0.5 text-[12px] outline-none"
           />
-        ) : (
-          <button
-            type="button"
-            onClick={() => {
-              setNombre(categoria.nombre);
-              setEditando(true);
-            }}
-            className="text-[12px] text-muted-foreground hover:text-foreground"
-          >
-            Renombrar
-          </button>
         )}
 
         <span className="ml-auto flex items-center gap-0.5">
@@ -197,6 +192,9 @@ function FilaCategoria({
               {categoria.conteo}
             </span>
           )}
+          {/* Siempre a la vista: es lo que decide el orden (favoritas primero),
+              y esconderla detrás de un hover sería esconder por qué el catálogo
+              está ordenado como está. */}
           <button
             type="button"
             aria-label={categoria.esFavorito ? 'Quitar de favoritas' : 'Marcar favorita'}
@@ -211,38 +209,56 @@ function FilaCategoria({
           >
             <Star size={14} fill={categoria.esFavorito ? 'currentColor' : 'none'} />
           </button>
-          <button
-            type="button"
-            aria-label="Subir"
-            disabled={primera}
-            onClick={() => onReordenar(true)}
-            className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:text-foreground disabled:opacity-30"
-          >
-            <ChevronUp size={14} />
-          </button>
-          <button
-            type="button"
-            aria-label="Bajar"
-            disabled={ultima}
-            onClick={() => onReordenar(false)}
-            className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:text-foreground disabled:opacity-30"
-          >
-            <ChevronDown size={14} />
-          </button>
-          <button
-            type="button"
-            aria-label={`Borrar ${categoria.nombre}`}
-            title="Borrar del catálogo (las asignaciones quedan)"
-            onClick={() => borrar.mutate(categoria.id)}
-            className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:text-destructive"
-          >
-            {borrar.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-          </button>
+
+          {/* El resto SÍ se apaga sin hover/foco: son acciones, no estados. */}
+          <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            {!editando && (
+              <button
+                type="button"
+                aria-label={`Renombrar ${categoria.nombre}`}
+                title="Renombrar"
+                onClick={() => {
+                  setNombre(categoria.nombre);
+                  setEditando(true);
+                }}
+                className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:text-foreground"
+              >
+                <Pencil size={14} />
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="Subir"
+              disabled={primera}
+              onClick={() => onReordenar(true)}
+              className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:text-foreground disabled:opacity-30"
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              type="button"
+              aria-label="Bajar"
+              disabled={ultima}
+              onClick={() => onReordenar(false)}
+              className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:text-foreground disabled:opacity-30"
+            >
+              <ChevronDown size={14} />
+            </button>
+            <button
+              type="button"
+              aria-label={`Borrar ${categoria.nombre}`}
+              title="Borrar del catálogo (las asignaciones quedan)"
+              onClick={() => borrar.mutate(categoria.id)}
+              className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:text-destructive"
+            >
+              {borrar.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            </button>
+          </span>
         </span>
       </div>
 
       {recolor && (
-        <div className="border-t border-border px-2.5 py-2">
+        <div className="px-2.5 pb-2">
           <SelectorColor
             valor={color}
             onElegir={(c) => {
@@ -337,7 +353,10 @@ export function GestorCategorias({ onCerrar }: { onCerrar: () => void }) {
               {puedeAdministrar ? 'Todavía no hay categorías. Crea la primera abajo.' : 'Todavía no hay categorías.'}
             </p>
           ) : (
-            <ul className="space-y-2">
+            // El lienzo (mismo `bg-muted` que la lista de los selectores): las
+            // filas ya no llevan su propio borde, así que sin este fondo se
+            // verían sueltas, cada una flotando en el blanco de la tarjeta.
+            <ul className="space-y-0.5 rounded-lg bg-muted/70 p-1">
               {categorias.map((c, i) => (
                 <FilaCategoria
                   key={c.id}
@@ -359,17 +378,22 @@ export function GestorCategorias({ onCerrar }: { onCerrar: () => void }) {
           <div className="border-t border-border p-4">
           <div className={sectionLabel}>Nueva categoría</div>
           <div className="mt-2 flex items-center gap-2">
-            <input
-              ref={inputRef}
-              value={nombre}
-              maxLength={30}
-              onChange={(e) => setNombre(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') crearNueva();
-              }}
-              placeholder="nombre…"
-              className="min-w-0 flex-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px] outline-none focus:border-primary"
-            />
+            {/* Misma píldora con ícono que el buscador de los selectores de
+                línea/categorías — una sola familia visual entre elegir y administrar. */}
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 focus-within:border-primary">
+              <Tag size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+              <input
+                ref={inputRef}
+                value={nombre}
+                maxLength={30}
+                onChange={(e) => setNombre(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') crearNueva();
+                }}
+                placeholder="nombre de la nueva categoría…"
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </div>
             <button
               type="button"
               onClick={crearNueva}

@@ -63,8 +63,12 @@ const json = (cuerpo: unknown, status = 200) =>
   new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
 
 // El server, de mentira: el GET trae el hilo de cada caso; todo POST lo rechaza Meta.
+// Los datos del selector de emojis son archivos del build: van al `fetch` de verdad (ADR 0126).
+const fetchDelNavegador = globalThis.fetch.bind(globalThis);
+
 globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const ruta = String(url);
+  if (ruta.includes('/emojis/')) return fetchDelNavegador(url, init);
   if ((init?.method ?? 'GET') === 'POST') return json(RECHAZO, 502);
   const persona = Object.keys(HILOS).find((p) => ruta.endsWith(`/conv/facebook/${p}`));
   return persona ? json(HILOS[persona]) : json({ historial: [], nombre: null, total: 0 }, 404);

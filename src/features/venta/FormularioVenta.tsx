@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, CalendarPlus, Check, Copy, FileText, Loader2, Megaphone, Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarPlus, Check, Copy, FileText, Loader2, Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react';
 import { api, ErrorApi } from '../../lib/datos/cliente';
 import { sectionLabel } from '../../lib/styles';
 import { useEscape } from '../../lib/teclado/useEscape';
@@ -23,7 +23,7 @@ import { LineaProducto } from './LineaProducto';
 import { VentaSinCerberus } from '../auth/AvisoCerberus';
 import { medioDeVenta, type MedioVenta } from '../../dominio/medioVenta';
 
-/** Cerberus llama "Origen" al canal por donde llegó el lead. Se infiere, no se elige. */
+/** Cerberus llama "Origen" al canal por donde llegó el lead. Arranca en el canal de la conversación y se puede cambiar. */
 const ORIGEN_POR_CANAL: Record<string, { id: string; nombre: string }> = {
   whatsapp: { id: 'whatsapp', nombre: 'WhatsApp' },
   facebook: { id: 'facebook', nombre: 'Facebook' },
@@ -58,7 +58,8 @@ function hoyLocal(): string {
  * EL FORMULARIO DE VENTA, DENTRO DE HERMES.
  *
  * La vendedora llena esto y Hermes lo manda a Cerberus con su sesión — ella nunca
- * abre Cerberus. **El Origen se llena solo** (vino por WhatsApp) y **el Medio se
+ * abre Cerberus. **El Origen arranca en el canal** (vino por WhatsApp) y desde el
+ * 14-sep-2026 se elige entre los ocho de Cerberus (pedido de ventas). **El Medio se
  * elige, arrancando en lo inferido**: la precedencia es `dominio/medioVenta.ts`
  * — **postventa gana**: si la persona ya le compró a Goberna antes, la venta es
  * una recompra aunque ESTA conversación haya venido de un anuncio (decisión del
@@ -170,12 +171,17 @@ export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, cla
     staleTime: 60_000,
   });
 
-  //  · Origen = el canal (WhatsApp / Facebook / Instagram). Se infiere.
+  //  · Origen = SE ELIGE, y arranca en el canal (WhatsApp / Facebook / Instagram).
+  //    Hasta el 14-sep-2026 era un rótulo fijo, y la venta viajaba con el canal
+  //    aunque el lead hubiera llegado por otro lado (pedido de ventas).
   //  · Medio  = SE ELIGE, y arranca en la precedencia de `dominio/medioVenta.ts`
   //    (postventa gana). Hasta el 11-sep-2026 era un rótulo que no se podía
   //    cambiar, y la venta a quien ya había comprado salía «Orgánico» cada vez
   //    que Hermes no lo sabía (pedido del dueño).
   const origenInfo = ORIGEN_POR_CANAL[canal] ?? ORIGEN_POR_CANAL.whatsapp;
+  /** `null` = no tocó el select y viaja el canal, igual que el Medio. */
+  const [origenElegido, setOrigenElegido] = useState<string | null>(null);
+  const origen = origenElegido ?? origenInfo.id;
   const medioInferido = medioDeVenta({ vinoDeAnuncio: conv?.origen?.fuente === 'anuncio', yaCompro });
   /**
    * `null` = la vendedora no tocó el select, y manda lo inferido. Es un `null` y
@@ -339,7 +345,7 @@ export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, cla
         localId,
         preventa,
         medio,
-        origen: origenInfo.id,
+        origen,
         montoTotal: monto,
         productos: lineas.map((l) => ({
           productoId: l.producto.id,
@@ -607,9 +613,10 @@ export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, cla
                 Preventa (cursos sin stock: no reserva stock)
               </label>
 
-              {/* EL MEDIO SE ELIGE; el Origen sigue inferido del canal. Las
-                  opciones son las que publica el server (`cerberus/venta.ts`),
-                  las mismas cinco que Cerberus guarda. Arranca en lo inferido
+              {/* EL MEDIO Y EL ORIGEN SE ELIGEN. Las opciones son las que publica
+                  el server (`cerberus/venta.ts`): los cinco medios y los ocho
+                  orígenes que Cerberus guarda. El Origen arranca en el canal de
+                  la conversación; el Medio arranca en lo inferido
                   —postventa le gana al anuncio, `dominio/medioVenta.ts`— y abajo
                   dice por qué, para que corregirlo sea una decisión y no un
                   descuido. */}
@@ -627,11 +634,12 @@ export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, cla
                   </span>
                 </Campo>
                 <Campo label="Origen">
-                  <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground">
-                    <Megaphone size={13} className="shrink-0 text-muted-foreground" />
-                    {origenInfo.nombre}
-                  </div>
-                  <span className="text-[11px] text-muted-foreground">por dónde llegó la conversación</span>
+                  <Select value={origen} onChange={setOrigenElegido} opciones={opcionesDeOrigen(form.origenes, origenInfo)} />
+                  <span className="text-[11px] text-muted-foreground">
+                    {origenElegido !== null && origenElegido !== origenInfo.id
+                      ? `elegido a mano — la conversación llegó por ${origenInfo.nombre}`
+                      : 'por dónde llegó la conversación — cámbialo si no es así'}
+                  </span>
                 </Campo>
               </div>
 
@@ -801,6 +809,16 @@ function Campo({ label, children }: { label: string; children: React.ReactNode }
 function opcionesDeMedio(medios: Opcion[], medio: string): Opcion[] {
   if (medios.some((m) => m.id === medio)) return medios;
   return [{ id: medio, nombre: MEDIO_NOMBRE[medio as MedioVenta] ?? medio }, ...medios];
+}
+
+/**
+ * Las opciones del Origen, con la misma guarda que el Medio: si el server no
+ * trae el canal de la conversación, ese va primero, para que el select nunca
+ * muestre uno y mande otro.
+ */
+function opcionesDeOrigen(origenes: Opcion[], delCanal: Opcion): Opcion[] {
+  if (origenes.some((o) => o.id === delCanal.id)) return origenes;
+  return [delCanal, ...origenes];
 }
 
 function Select({ value, onChange, placeholder, opciones, autoFocus = false }: { value: string; onChange: (v: string) => void; placeholder?: string; opciones: { id: string; nombre: string }[]; autoFocus?: boolean }) {

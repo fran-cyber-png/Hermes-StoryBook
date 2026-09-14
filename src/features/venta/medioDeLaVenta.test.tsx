@@ -33,6 +33,18 @@ const MEDIOS = [
   { id: 'postventa', nombre: 'PostVenta' },
 ];
 
+/** Los ocho orígenes que publica el server (`cerberus/venta.ts`), los mismos ids que Cerberus guarda. */
+const ORIGENES = [
+  { id: 'facebook', nombre: 'Facebook' },
+  { id: 'instagram', nombre: 'Instagram' },
+  { id: 'whatsapp', nombre: 'WhatsApp' },
+  { id: 'tiktok', nombre: 'Tiktok' },
+  { id: 'google', nombre: 'Google' },
+  { id: 'linkedin', nombre: 'Linkedin' },
+  { id: 'llamada', nombre: 'Llamada' },
+  { id: 'correo', nombre: 'Correo' },
+];
+
 const CURSO = {
   id: '77',
   nombre: 'Diploma en Gestión Pública',
@@ -64,7 +76,7 @@ function conServidor({ origen = null as unknown, origenTarde = null as Promise<u
           paises: [{ id: '10', nombre: 'Perú' }],
           locales: [{ id: '5', nombre: 'Lima — Miraflores' }],
           medios: MEDIOS,
-          origenes: [{ id: 'whatsapp', nombre: 'WhatsApp' }],
+          origenes: ORIGENES,
         });
       if (url.includes('/api/venta/locales')) return json({ locales: [{ id: '5', nombre: 'Lima — Miraflores' }] });
       if (url.includes('/api/whatsapp/conversacion/')) {
@@ -89,13 +101,13 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function formulario(yaCompro?: boolean) {
+function formulario(yaCompro?: boolean, canal = 'whatsapp') {
   return (
     <FormularioVenta
       clienteId={4410}
       clienteNombre="Javier Quispe"
       telefono={TELEFONO}
-      canal="whatsapp"
+      canal={canal}
       paisNombre="Perú"
       monedaInicial="1"
       lineasIniciales={[{ producto: CURSO, cantidad: 1, precio: '450' }]}
@@ -179,6 +191,43 @@ describe('arranca en lo que Hermes infiere', () => {
     conServidor({ origen: { fuente: 'anuncio' } });
     montado = montar(formulario(false));
     await esperarA(() => medio()?.value === 'pagado', 'Pagado precargado');
+  });
+});
+
+/**
+ * EL ORIGEN TAMBIÉN SE ELIGE (pedido de ventas, 14-sep-2026: «que se desglose las
+ * otras opciones también»). Era un rótulo con el canal de la conversación, y la
+ * venta viajaba siempre con ese canal aunque el lead hubiera llegado por otro
+ * lado. Arranca en el canal, como el Medio arranca en lo inferido, y lo que se
+ * fija es lo que viaja a Cerberus.
+ */
+describe('el Origen de la venta se elige', () => {
+  const origen = () => campo('Origen');
+
+  test('🔴 ofrece los ocho orígenes de Cerberus y arranca en el canal de la conversación', async () => {
+    conServidor();
+    montado = montar(formulario());
+    await esperarA(() => Boolean(origen()), 'el select del Origen');
+    expect([...origen()!.options].map((o) => o.value)).toEqual(ORIGENES.map((o) => o.id));
+    expect(origen()!.value).toBe('whatsapp');
+  });
+
+  test('una conversación de Instagram arranca en Instagram', async () => {
+    conServidor();
+    montado = montar(formulario(false, 'instagram'));
+    await esperarA(() => origen()?.value === 'instagram', 'Instagram precargado');
+  });
+
+  test('🔴 elegir Llamada hace que la venta viaje a Cerberus con origen llamada', async () => {
+    conServidor();
+    montado = montar(formulario());
+    await listoParaRegistrar();
+    await esperarA(() => Boolean(origen()), 'el select del Origen');
+
+    elegir(origen()!, 'llamada');
+    tocar(botonRegistrar());
+    await esperarA(() => ventasCreadas.length === 1, 'el POST de la venta');
+    expect(ventasCreadas[0].origen).toBe('llamada');
   });
 });
 

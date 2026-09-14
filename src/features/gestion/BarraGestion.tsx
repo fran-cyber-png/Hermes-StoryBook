@@ -1,53 +1,49 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, Loader2, Plus, Tag, UserPlus, X } from 'lucide-react';
+import { Check, ChevronDown, Loader2, Plus, Search, Star, Tag, UserPlus, X } from 'lucide-react';
 import { api, ErrorApi } from '../../lib/datos/cliente';
 import { usePopover } from '../../lib/teclado/usePopover';
+import { CLASE_RELLENO_HOVER, claseIconoNeon } from '../../lib/estiloNeon';
 import { ETAPA_CHIP, etapasDeclarablesDe, rotuloEtapa } from '../../lib/etapas';
 import type { Conversacion } from '../../dominio/conversaciones';
+import { categoriasOrdenadas } from '../../dominio/cola';
 import { AgendarRapido } from '../agenda/AgendarRapido';
 import { FichaRapida } from '../panel/FichaRapida';
 import { useFichaLocal } from '../panel/fichaLocal';
 import { PasarConversacion } from '../reparto/PasarConversacion';
 import { BotonLlamar } from './BotonLlamar';
 import { Intereses } from './Intereses';
-import { MenuHerramientas } from './MenuHerramientas';
 import { ConfirmarPerdida, type PerdidaDeclarada } from './ConfirmarPerdida';
 import { esMotivoDePerdida, type MotivoDePerdida } from '../../lib/motivosDePerdida';
 import { useCategorias, useEtiquetasDe, useMutacionesCategorias, usePuedeAdministrarCategorias } from './categorias';
 import {
   CLASE_FONDO,
+  CLASE_FONDO_SUAVE,
   CLASE_TEXTO,
   COLORES,
   NOMBRE_COLOR,
   claseBorde,
+  esColorCategoria,
   normalizarNombre,
   resolverColor,
   type ColorCategoria,
 } from '../../dominio/paletaCategorias';
 
+/** Sin acentos y en minúsculas — para buscar, nunca para mostrar. Misma copia chica que ya
+ *  viven en `BarraFiltros.tsx` y `lib/producto.ts`: es de 2 líneas, y centralizarla costaría
+ *  más en el import que en mantener las tres iguales. */
+function sinAcentos(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
 /**
  * LA BARRA DE GESTIÓN — el embudo entero manejable DESDE el chat.
  *
- * Vive arriba de toda conversación abierta (WhatsApp, comentario, Messenger):
- * la ETAPA se cambia con un clic (las compuertas del server frenan y explican
- * acá mismo — y la barra señala DÓNDE destrabarla), las ETIQUETAS y los CURSOS
- * DE INTERÉS se agregan inline, y AGENDAR es un popover de dos toques. Perdido
- * vive aparte del segmented y pide confirmación: no es una etapa más, es tirar
- * la toalla.
+ * La ETAPA (`SelectorEtapa`, con «Dijo que no» pidiendo motivo — ADR 0107) y
+ * el INTERÉS (`Intereses`, el buscador de curso) viven acá. `Asignar`
+ * (`PasarConversacion`) es la excepción: vive en `HojaContacto.tsx`, no en
+ * esta barra.
  */
-
-/**
- * Los cuatro peldaños que una persona puede DECLARAR, en singular: acá se habla
- * de UNA conversación. `perdido` sigue afuera a propósito — vive fuera del
- * segmented porque pide confirmación (ver abajo).
- *
- * Los rótulos salen de `lib/etapas` y no de acá: eran una de las cinco copias
- * que se unificaron, y con dos listas el Pipeline decía «Saben el precio»
- * mientras esta barra decía «Cotizado» sobre la misma conversación.
- */
-const etapasBarraDe = (modulo: 'ventas' | 'campana') =>
-  etapasDeclarablesDe(modulo).map((id) => ({ id, label: rotuloEtapa(id) }));
 
 /**
  * Etiquetas inline: las CATEGORÍAS (con color) asignadas a esta conversación.
@@ -58,6 +54,20 @@ const etapasBarraDe = (modulo: 'ventas' | 'campana') =>
  * (`/api/categorias`) — una etiqueta que matchea una categoría toma su color;
  * la que no, se pinta neutra.
  *
+ * 🔴 **El ÍCONO es el que se clickea, y el popover es la misma «grilla de
+ * color» del selector de categorías de la cola** (`SelectorCategorias` en
+ * `BarraFiltros.tsx`) — rediseño del 11-sep-2026, pedido del dueño, con dos
+ * artifacts de por medio («Categoría en un toque» y «Selector de categoría»).
+ * Antes eran DOS elementos (un tag gris inerte + un botón punteado «+») para
+ * una sola acción; ahora es un solo ícono con una insignia «+» que aparece en
+ * hover, mismo lenguaje que Llamar/Agendar/Contacto.
+ *
+ * ⚠️ **La grilla muestra TODO el catálogo, no sólo lo no-asignado.** El check
+ * sobre una ya asignada la QUITA (mismo `quitar.mutate` que la «x» de la
+ * píldora de afuera) — antes sólo se podía quitar cerrando el popover y
+ * tocando esa «x»; ahora las dos puertas hacen lo mismo. Por eso ya no hay
+ * `disponibles` filtrando el catálogo: hay `categorias` entero.
+ *
  * 🔴 **El «+» elige de las categorías EXISTENTES para cualquiera; «crear una
  * nueva categoría» es SOLO del supervisor** (22-ago-2026, pedido del dueño:
  * «los vendedores pueden solo etiquetar»). El server ya rechazaba el POST de
@@ -67,7 +77,15 @@ const etapasBarraDe = (modulo: 'ventas' | 'campana') =>
  * error IGUAL que en éxito: una vendedora habría terminado etiquetando con un
  * nombre que el servidor nunca llegó a dar de alta). `usePuedeAdministrarCategorias()`
  * es la ÚNICA fuente de esa bandera — nunca un rol calculado en el front,
- * mismo patrón que `GestorCategorias.tsx`.
+ * mismo patrón que `GestorCategorias.tsx`. Se ofrece SIEMPRE que puede —nada
+ * de un interruptor manual: eso vivió sólo en el artifact, para simular las
+ * dos vistas sin sesión real.
+ *
+ * 🔴 **El color de la categoría nueva sigue siendo SÓLO uno de los 8 de
+ * marca** (`COLORES`) — el círculo multicolor que lo elige es arcoíris fijo,
+ * nunca RGB libre: abre una paleta con esos 8 y nada más, la misma decisión
+ * que ya regía acá (antes una fila de 8 puntos siempre visible), sólo que
+ * ahora entra en un popover propio en vez de ocupar espacio todo el tiempo.
  *
  * Regla dura: la píldora usa BORDE de color, nunca sombra, nunca oro.
  */
@@ -80,8 +98,10 @@ function EtiquetasInline({ clave, senalAbrir = 0 }: { clave: string; senalAbrir?
   const { data: puedeAdministrar = false } = usePuedeAdministrarCategorias();
   const { crear } = useMutacionesCategorias();
   const [abierto, setAbierto] = useState(false);
+  const [busqueda, setBusqueda] = useState('');
   const [nuevo, setNuevo] = useState('');
   const [colorNuevo, setColorNuevo] = useState<ColorCategoria>('azul');
+  const [paletaAbierta, setPaletaAbierta] = useState(false);
   /** El atajo `T`: la señal se consume en el render, sin un frame de retraso. */
   const [visto, setVisto] = useState(senalAbrir);
   if (senalAbrir !== visto) {
@@ -94,6 +114,11 @@ function EtiquetasInline({ clave, senalAbrir = 0 }: { clave: string; senalAbrir?
   // y dejaba el panel flotando sobre otra cosa. El Escape de ADENTRO del input
   // lo sigue manejando el input, que es de quien es.
   const { propsOverlay } = usePopover(abierto, () => setAbierto(false), { z: 'z-20' });
+  // La paleta de color es un popover ADENTRO del popover — mismo hook, mismo
+  // cuidado de Escape/clic afuera, un nivel más de `z`.
+  const { propsOverlay: propsOverlayPaleta } = usePopover(paletaAbierta, () => setPaletaAbierta(false), {
+    z: 'z-40',
+  });
 
   const invalidar = () => {
     void qc.invalidateQueries({ queryKey: ['etiquetas', clave] });
@@ -112,7 +137,9 @@ function EtiquetasInline({ clave, senalAbrir = 0 }: { clave: string; senalAbrir?
   });
 
   const asignadas = new Set(lista);
-  const disponibles = categorias.filter((c) => !asignadas.has(c.nombre));
+  const q = sinAcentos(busqueda.trim());
+  const catalogo = categoriasOrdenadas(categorias);
+  const filtradas = q ? catalogo.filter((c) => sinAcentos(c.nombre).includes(q)) : catalogo;
 
   function crearYAsignar() {
     if (!puedeAdministrar) return; // el botón ya está oculto/disabled; red de más.
@@ -136,7 +163,6 @@ function EtiquetasInline({ clave, senalAbrir = 0 }: { clave: string; senalAbrir?
 
   return (
     <span className="relative flex items-center gap-1">
-      <Tag size={11} className="shrink-0 text-muted-foreground" />
       {lista.map((etq) => {
         const color = resolverColor(etq, categorias);
         return (
@@ -167,100 +193,176 @@ function EtiquetasInline({ clave, senalAbrir = 0 }: { clave: string; senalAbrir?
         onClick={() => setAbierto((v) => !v)}
         title="Asignar categoría"
         aria-label="Asignar categoría"
+        aria-expanded={abierto}
         className={
-          'rounded-full border border-dashed px-1.5 py-0.5 text-[11px] transition-colors ' +
-          (abierto
-            ? 'border-primary text-foreground'
-            : 'border-border text-muted-foreground hover:border-primary hover:text-foreground')
+          'group relative inline-flex size-7 shrink-0 items-center justify-center rounded-[11px] text-primary transition-colors duration-200 ' +
+          (abierto ? 'bg-secondary' : 'hover:bg-secondary')
         }
       >
-        +
+        <Tag
+          size={15}
+          className={
+            'transition-transform duration-300 ease-house ' +
+            (abierto ? 'rotate-0 scale-110' : '-rotate-[8deg] group-hover:rotate-0 group-hover:scale-110')
+          }
+        />
+        <span
+          aria-hidden="true"
+          className={
+            'absolute bottom-0.5 right-0.5 flex size-3 items-center justify-center rounded-full border-2 border-card bg-primary text-white transition-transform duration-300 ease-house ' +
+            (abierto ? 'scale-100' : 'scale-0 group-hover:scale-100')
+          }
+        >
+          <Plus size={8} />
+        </span>
       </button>
 
       {abierto && (
         <>
           <span {...propsOverlay} />
-          <div className="absolute left-4 top-6 z-30 w-56 rounded-xl bg-card p-2 shadow-panel">
-            {disponibles.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-1">
-                {disponibles.map((c) => {
-                  const color = resolverColor(c.nombre, categorias);
+          <div
+            role="menu"
+            aria-label="Categorías"
+            className="absolute left-0 top-8 z-30 w-72 rounded-xl border border-muted-foreground/20 bg-card p-1.5 shadow-panel-flotante"
+          >
+            {catalogo.length > 6 && (
+              <div className="mb-1.5 flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2 py-1">
+                <Search size={11} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+                <input
+                  autoFocus
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.stopPropagation();
+                      setAbierto(false);
+                    }
+                  }}
+                  placeholder="Buscar categoría…"
+                  aria-label="Buscar categoría"
+                  className="min-w-0 flex-1 bg-transparent text-[11.5px] text-foreground outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+            )}
+
+            {catalogo.length === 0 && !puedeAdministrar && (
+              <p className="px-1.5 py-3 text-[11px] text-muted-foreground">
+                Todavía no hay categorías para asignar. Pídele al supervisor que arme el catálogo.
+              </p>
+            )}
+
+            {catalogo.length > 0 && (
+              <div className="grid grid-cols-2 gap-0.5 rounded-lg bg-muted/70 p-1">
+                {filtradas.map((c) => {
+                  const color = esColorCategoria(c.color) ? c.color : 'pizarra';
+                  const activa = asignadas.has(c.nombre);
                   return (
                     <button
-                      key={c.id}
+                      key={c.nombre}
                       type="button"
-                      onClick={() => {
-                        asignar.mutate(c.nombre);
-                        setAbierto(false);
-                      }}
+                      aria-pressed={activa}
+                      title={activa ? `Quitar «${c.nombre}»` : `Asignar «${c.nombre}»`}
+                      onClick={() => (activa ? quitar.mutate(c.nombre) : asignar.mutate(c.nombre))}
                       className={
-                        'inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[11px] font-semibold transition-transform hover:scale-105 ' +
-                        claseBorde(color) +
-                        (color ? ' ' + CLASE_TEXTO[color] : ' text-muted-foreground')
+                        'flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] font-semibold capitalize transition-[background-color,box-shadow] ' +
+                        (activa
+                          ? CLASE_FONDO_SUAVE[color] + ' ' + CLASE_TEXTO[color]
+                          : 'text-foreground hover:bg-card hover:shadow-sm')
                       }
                     >
-                      {color && <span className={'h-1.5 w-1.5 rounded-full ' + CLASE_FONDO[color]} />}
-                      {c.nombre}
+                      <span className={'size-2 shrink-0 rounded-full ' + CLASE_FONDO[color]} aria-hidden="true" />
+                      <span className="min-w-0 flex-1 truncate">{c.nombre}</span>
+                      {c.esFavorito && (
+                        <Star size={10} fill="currentColor" className="shrink-0 text-navy-ink" aria-hidden="true" />
+                      )}
+                      {activa && <Check size={11} className="shrink-0 text-success" aria-hidden="true" />}
                     </button>
                   );
                 })}
+                {filtradas.length === 0 && (
+                  <p className="col-span-2 px-2 py-3 text-center text-[11px] text-muted-foreground">Sin resultados.</p>
+                )}
               </div>
             )}
 
             {/* Crear una categoría nueva es SOLO del supervisor — cualquiera
-                sigue pudiendo elegir de las de arriba (`disponibles`). */}
-            {puedeAdministrar ? (
-              <div className="rounded-lg border border-border p-1.5">
-                <div className="flex items-center gap-1">
-                  <input
-                    value={nuevo}
-                    maxLength={30}
-                    onChange={(e) => setNuevo(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') crearYAsignar();
-                      if (e.key === 'Escape') {
-                        e.stopPropagation();
-                        setAbierto(false);
-                      }
-                    }}
-                    autoFocus
-                    placeholder="nueva categoría…"
-                    className="min-w-0 flex-1 rounded-md border border-border bg-card px-1.5 py-0.5 text-[11px] outline-none focus:border-primary"
-                  />
+                sigue pudiendo elegir de la grilla de arriba. */}
+            {puedeAdministrar && (
+              <div className="mt-1.5 flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2 py-1.5">
+                <input
+                  value={nuevo}
+                  maxLength={30}
+                  onChange={(e) => setNuevo(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') crearYAsignar();
+                    if (e.key === 'Escape') {
+                      e.stopPropagation();
+                      setAbierto(false);
+                    }
+                  }}
+                  placeholder="nueva categoría…"
+                  className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
+                />
+
+                <span className="relative shrink-0">
                   <button
                     type="button"
-                    aria-label="Crear y asignar"
-                    onClick={crearYAsignar}
-                    disabled={!normalizarNombre(nuevo) || crear.isPending}
-                    className="flex items-center rounded-md bg-primary p-1 text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
-                  >
-                    {crear.isPending ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
-                  </button>
-                </div>
-                <div className="mt-1.5 flex flex-wrap gap-1" role="group" aria-label="Elegir color">
-                  {COLORES.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      aria-label={NOMBRE_COLOR[c]}
-                      aria-pressed={colorNuevo === c}
-                      title={NOMBRE_COLOR[c]}
-                      onClick={() => setColorNuevo(c)}
-                      className={
-                        'h-4 w-4 rounded-full transition-transform ' +
-                        CLASE_FONDO[c] +
-                        (colorNuevo === c ? ' scale-110 ring-2 ring-navy ring-offset-1 ring-offset-card' : ' hover:scale-110')
-                      }
-                    />
-                  ))}
-                </div>
+                    onClick={() => setPaletaAbierta((v) => !v)}
+                    aria-label="Elegir color"
+                    aria-haspopup="menu"
+                    aria-expanded={paletaAbierta}
+                    title="Elegir color"
+                    className="block size-[18px] rounded-full shadow-[0_0_0_2px_var(--muted),0_0_0_3px_var(--border)] transition-transform duration-150 ease-house hover:scale-110"
+                    style={{
+                      background:
+                        'conic-gradient(var(--cat-rojo), var(--cat-naranja), var(--cat-verde), var(--cat-cian), var(--cat-azul), var(--cat-morado), var(--cat-rosa), var(--cat-rojo))',
+                    }}
+                  />
+                  {paletaAbierta && (
+                    <>
+                      <span {...propsOverlayPaleta} />
+                      <div className="absolute bottom-full left-1/2 z-40 mb-2 w-max -translate-x-1/2 rounded-xl border border-border bg-card p-2.5 shadow-panel-flotante">
+                        <div className="grid grid-cols-4 gap-2">
+                          {COLORES.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              aria-label={NOMBRE_COLOR[c]}
+                              aria-pressed={colorNuevo === c}
+                              title={NOMBRE_COLOR[c]}
+                              onClick={() => {
+                                setColorNuevo(c);
+                                setPaletaAbierta(false);
+                              }}
+                              className={
+                                'flex size-6 items-center justify-center rounded-full text-white transition-transform hover:scale-110 ' +
+                                CLASE_FONDO[c] +
+                                (colorNuevo === c ? ' ring-2 ring-navy ring-offset-1 ring-offset-card' : '')
+                              }
+                            >
+                              {colorNuevo === c && <Check size={11} />}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="mt-2 flex items-center justify-center gap-1 border-t border-border pt-2 text-[11px] font-semibold text-foreground">
+                          <span className={'size-1.5 rounded-full ' + CLASE_FONDO[colorNuevo]} aria-hidden="true" />
+                          {NOMBRE_COLOR[colorNuevo]}
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </span>
+
+                <button
+                  type="button"
+                  aria-label="Crear y asignar"
+                  onClick={crearYAsignar}
+                  disabled={!normalizarNombre(nuevo) || crear.isPending}
+                  className="flex shrink-0 items-center rounded-md bg-primary p-1 text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
+                >
+                  {crear.isPending ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+                </button>
               </div>
-            ) : (
-              disponibles.length === 0 && (
-                <p className="px-1 text-[11px] text-muted-foreground">
-                  Todavía no hay categorías para asignar. Pídele al supervisor que arme el catálogo.
-                </p>
-              )
             )}
           </div>
         </>
@@ -272,6 +374,18 @@ function EtiquetasInline({ clave, senalAbrir = 0 }: { clave: string; senalAbrir?
     </span>
   );
 }
+
+/**
+ * Los cuatro peldaños que una persona puede DECLARAR, en singular: acá se habla
+ * de UNA conversación. `perdido` sigue afuera a propósito — vive fuera del
+ * segmented porque pide confirmación (ver abajo).
+ *
+ * Los rótulos salen de `lib/etapas` y no de acá: eran una de las cinco copias
+ * que se unificaron, y con dos listas el Pipeline decía «Saben el precio»
+ * mientras esta barra decía «Cotizado» sobre la misma conversación.
+ */
+const etapasBarraDe = (modulo: 'ventas' | 'campana') =>
+  etapasDeclarablesDe(modulo).map((id) => ({ id, label: rotuloEtapa(id) }));
 
 /**
  * EN QUÉ ETAPA ESTÁ ESTA CONVERSACIÓN — y cómo cambiarla sin salir del chat.
@@ -467,16 +581,11 @@ function ContactoRegistrado({
       <button
         type="button"
         onClick={() => setAbierto(true)}
+        aria-label={ficha ? nombre || 'Contacto registrado' : 'Registrar contacto'}
         title={ficha ? 'Ver la ficha del contacto (R)' : 'Registrar el contacto (R)'}
-        className={
-          'flex max-w-[13rem] items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-all duration-200 ' +
-          (ficha
-            ? 'bg-success/10 text-success hover:bg-success/15'
-            : 'bg-primary text-primary-foreground hover:shadow-[0_0_12px_rgba(37,99,235,0.6)] hover:brightness-110')
-        }
+        className={claseIconoNeon(ficha ? 'success' : 'gold')}
       >
-        {ficha ? <Check size={11} className="shrink-0" /> : <UserPlus size={11} className="shrink-0" />}
-        <span className="truncate">{ficha ? nombre || 'Registrado' : 'Contacto'}</span>
+        {ficha ? <Check size={15} className={CLASE_RELLENO_HOVER} /> : <UserPlus size={15} className={CLASE_RELLENO_HOVER} />}
       </button>
       {abierto && (
         <FichaRapida
@@ -509,20 +618,16 @@ export function BarraGestion({
   /**
    * LAS SEÑALES DE LOS ATAJOS. Son contadores, no booleanos: con un booleano,
    * cerrar el popover y volver a apretar la tecla no cambia el valor y no
-   * abriría nada. Es el mismo patrón que ya usaba `Intereses.senalAbrir`.
+   * abriría nada.
    */
   senalRegistrar?: number;
+  /** Abre el selector de etapa (`SelectorEtapa`). La usa el atajo `E`. */
   senalEstado?: number;
   senalEtiqueta?: number;
   senalAgendar?: number;
   /**
-   * ¿De qué módulo de CRM es quien mira? (ADR 0063). Decide DOS cosas:
-   *
-   * · **Qué peldaños se ofrecen**: con los de ventas clavados, un operador de
-   *   campaña podía declarar «Sabe el precio» y su tablero lo devolvía a
-   *   «Contestaron», mudo.
-   * · **Qué herramientas trae el `···`** (24-ago-2026): «Datos recomendados» es
-   *   el playbook de la Escuela y su ruta ya contesta 403 para campaña.
+   * ¿De qué módulo de CRM es quien mira? (ADR 0063). Decide si CONTACTO se
+   * ofrece (ver `ContactoRegistrado` más abajo).
    */
   esDeCampana?: boolean;
   /**
@@ -645,7 +750,11 @@ export function BarraGestion({
               tiene reparto configurado (`PasarConversacion`). */}
           <PasarConversacion conversacion={conversacion} miVendedora={miVendedora} />
           {conversacion.canal === 'whatsapp' && conversacion.persona_id && (
-            <BotonLlamar telefono={conversacion.persona_id} />
+            // `compacto` es el ícono sin texto de #1077 (BarraGestion sin texto en sus
+            // botones); `conversacion` es lo que le permite a ESE ícono saber si hay llamada
+            // por WhatsApp (ADR 0123, `useLlamable`) y llamar directo en vez de abrir el
+            // marcador — ver el docblock de `BotonLlamar.tsx`.
+            <BotonLlamar telefono={conversacion.persona_id} conversacion={conversacion} compacto />
           )}
           {/* AGENDAR es una PROMESA a futuro («la llamo mañana 9:00», cae en la
               Agenda); CONTACTO registra a la persona. Ninguno de los dos envía
@@ -660,7 +769,7 @@ export function BarraGestion({
               siguen abriéndolo — el shell despliega el panel si está contraído
               (`App.tsx`), que es lo único que hacía falta para que sacarlo de
               acá no se llevara el atajo puesto. */}
-          <AgendarRapido conversacion={conversacion} senalAbrir={senalAgendar} />
+          <AgendarRapido conversacion={conversacion} senalAbrir={senalAgendar} compacto />
           {/* 🔴 **En campaña, CONTACTO se retira por la misma razón que ya se
               fueron «Notas» acá arriba**: era la MISMA acción en dos puertas.
               «Anotar quién es»/«Editar la ficha», al pie del timeline del panel
@@ -676,7 +785,6 @@ export function BarraGestion({
               esDeCampana={esDeCampana}
             />
           )}
-          <MenuHerramientas conversacion={conversacion} esDeCampana={esDeCampana} />
         </span>
       </div>
 

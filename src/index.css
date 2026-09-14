@@ -74,6 +74,25 @@
   --gold: #FFC800;
   --gold-ink: #CAA106;
 
+  /* LA CHAPA DE LOS BOTONES NEÓN (Llamar/Agendar/Contacto sin texto, `estiloNeon.ts`).
+     En claro es un celeste sutil —iguala a `--secondary`, que ya es la
+     superficie de hover genérica de la marca—; en oscuro es `--navy` (ver esa
+     redefinición). Separado de `--secondary` y no un alias directo porque el
+     botón necesita SU PROPIO tono si mañana `--secondary` cambia por otra razón. */
+  --tile-neon: var(--secondary);
+
+  /* LOS TRES TONOS NEÓN, aparte de `--success`/`--primary`/`--gold`.
+     🔴 **La chapa quedó clara en tema claro (arriba) y ahí un ícono con el
+     verde/azul institucional de siempre se ve apagado, no «neón» — ese efecto
+     necesita un tono más eléctrico, no un fondo oscuro (pedido del dueño,
+     11-sep-2026: "los botones tenían un color neón brillante… colores más
+     saturados").** Un escalón MÁS CLARO/VIVO que el token semántico, fijo en
+     los dos temas (a diferencia de `--success`/`--primary`, que sí cambian):
+     el brillo es del BOTÓN, no del tema. `--gold` ya era vívido y no
+     necesitaba un tono aparte. */
+  --neon-success: #22C55E;
+  --neon-primary: #3B82F6;
+
   /* CATEGORÍAS — la paleta fija de las etiquetas con color elegible (#48).
      Armoniosa y SIN ORO a propósito: el oro es señal de tiempo que se acaba, no
      decoración. Se excluye toda la familia ámbar/amarillo. Genérica de nombre:
@@ -241,6 +260,10 @@
   --input: #3D444D;
 
   --navy-muted: #212830;
+
+  /* La chapa de los botones neón (ver la definición en claro): acá se vuelve
+     `--navy`, la misma superficie oscura de siempre — no una tercera opción. */
+  --tile-neon: var(--navy);
 
   /* 🔴 `--navy` NO SE INVIERTE, y es a propósito: sus más de 200 usos son
      superficie (`bg-navy text-white`, los velos de los modales, bordes y
@@ -580,6 +603,9 @@
   --color-navy: var(--navy);
   --color-navy-ink: var(--navy-ink);
   --color-navy-muted: var(--navy-muted);
+  --color-tile-neon: var(--tile-neon);
+  --color-neon-success: var(--neon-success);
+  --color-neon-primary: var(--neon-primary);
   --color-gold: var(--gold);
   --color-gold-ink: var(--gold-ink);
   --color-cat-pizarra: var(--cat-pizarra);
@@ -726,6 +752,18 @@
     box-shadow:
       0 1px 2px rgba(14, 42, 82, 0.04),
       0 14px 34px -18px rgba(14, 42, 82, 0.12);
+  }
+
+  /* Un escalón más que `.shadow-panel` (10-sep-2026): para un panel que FLOTA
+     sobre una lista de la misma tarjeta blanca — el selector de línea y el de
+     categorías — la sombra ambiental sola no alcanza para separarse de lo que
+     tiene detrás. Ésta suma una capa cercana y nítida a la difusa de siempre.
+     Sigue siendo sombra de panel, no la caja dura de shadow-sm — solo con más
+     presencia. */
+  .shadow-panel-flotante {
+    box-shadow:
+      0 2px 6px rgba(14, 42, 82, 0.1),
+      0 20px 44px -14px rgba(14, 42, 82, 0.28);
   }
 
   /* El halo de la foto grande del popover de cuenta (`PanelUsuario`): la

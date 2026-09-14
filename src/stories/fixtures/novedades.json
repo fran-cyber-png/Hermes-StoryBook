@@ -1,6 +1,185 @@
 [
   {
     "fecha": "2026-09-14",
+    "resumen": "Sincronizado a mano desde el botón de Novedades. 42 archivo(s) tocados bajo src/.",
+    "detalle": "1 de estos componentes ya tienen story y conviene revisarlas: Moléculas/canales/BarraFiltros.",
+    "archivos": [
+      "src/components",
+      "src/dominio",
+      "src/features/agenda",
+      "src/features/canales",
+      "src/features/gestion",
+      "src/features/llamadas",
+      "src/features/panel",
+      "src/features/reparto",
+      "src/features/venta",
+      "src/features/whatsapp",
+      "src",
+      "src/lib"
+    ],
+    "cambios": [
+      {
+        "archivo": "src/components/SelectorDeEmojis.tsx",
+        "estado": "A",
+        "story": null
+      },
+      {
+        "archivo": "src/dominio/cola.ts",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/agenda/AgendarRapido.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/canales/BarraFiltros.tsx",
+        "estado": "M",
+        "story": "Moléculas/canales/BarraFiltros",
+        "storyId": "moléculas-canales-barrafiltros"
+      },
+      {
+        "archivo": "src/features/canales/ColaUnificada.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/canales/HiloMessenger.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/canales/ListaCategorias.tsx",
+        "estado": "D",
+        "story": null
+      },
+      {
+        "archivo": "src/features/canales/alcance.ts",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/canales/galeriaFiltros.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/canales/galeriaHiloMessenger.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/canales/galeriaVentana.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/gestion/BarraGestion.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/gestion/BotonLlamar.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/gestion/GestorCategorias.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/gestion/galeria.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/llamadas/PanelLlamada.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/llamadas/permisoDeLlamada.ts",
+        "estado": "A",
+        "story": null
+      },
+      {
+        "archivo": "src/features/llamadas/useLlamable.ts",
+        "estado": "A",
+        "story": null
+      },
+      {
+        "archivo": "src/features/llamadas/useLlamadas.ts",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/panel/EncabezadoTimeline.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/panel/timeline.ts",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/reparto/galeria.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/venta/FormularioVenta.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/venta/galeria.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/whatsapp/HiloWhatsapp.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/whatsapp/galeria-composer.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/index.css",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/lib/emojisRecientes.ts",
+        "estado": "A",
+        "story": null
+      },
+      {
+        "archivo": "src/lib/estiloNeon.ts",
+        "estado": "A",
+        "story": null
+      },
+      {
+        "archivo": "src/lib/insertarEnCursor.ts",
+        "estado": "A",
+        "story": null
+      },
+      {
+        "archivo": "src/lib/texto.ts",
+        "estado": "A",
+        "story": null
+      }
+    ],
+    "commit": "",
+    "tipo": "sync-manual-boton"
+  },
+  {
+    "fecha": "2026-09-14",
     "resumen": "Sincronizado a mano desde el botón de Novedades. 12 archivo(s) tocados bajo src/, todos en features/vistas.",
     "detalle": "1 de estos componentes ya tiene story y conviene revisarla: Moléculas/TarjetaEmbudo. La lista de abajo se rellenó a mano con el diff real de este commit: es la primera sincronización anterior a que el botón empezara a guardar las rutas.",
     "cambios": [
@@ -10,18 +189,42 @@
         "desde": "src/features/vistas/CabeceraColumnaCampana.tsx",
         "story": null
       },
-      { "archivo": "src/features/vistas/CabeceraPipeline.tsx", "estado": "M", "story": null },
+      {
+        "archivo": "src/features/vistas/CabeceraPipeline.tsx",
+        "estado": "M",
+        "story": null
+      },
       {
         "archivo": "src/features/vistas/TarjetaEmbudo.tsx",
         "estado": "M",
         "story": "Moléculas/TarjetaEmbudo",
         "storyId": "moléculas-tarjetaembudo"
       },
-      { "archivo": "src/features/vistas/VistaEmbudo.tsx", "estado": "M", "story": null },
-      { "archivo": "src/features/vistas/canalDeMesa.ts", "estado": "M", "story": null },
-      { "archivo": "src/features/vistas/galeria.tsx", "estado": "M", "story": null },
-      { "archivo": "src/features/vistas/galeriaDatosProdPorCanal.ts", "estado": "A", "story": null },
-      { "archivo": "src/features/vistas/iconoDeEtapa.ts", "estado": "M", "story": null }
+      {
+        "archivo": "src/features/vistas/VistaEmbudo.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/vistas/canalDeMesa.ts",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/vistas/galeria.tsx",
+        "estado": "M",
+        "story": null
+      },
+      {
+        "archivo": "src/features/vistas/galeriaDatosProdPorCanal.ts",
+        "estado": "A",
+        "story": null
+      },
+      {
+        "archivo": "src/features/vistas/iconoDeEtapa.ts",
+        "estado": "M",
+        "story": null
+      }
     ],
     "commit": "c0457c4c",
     "tipo": "sync-manual-boton"

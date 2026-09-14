@@ -172,10 +172,14 @@ interface DatosTimeline {
     estado: string;
     tipo?: string | null;
   }[];
-  /** Llamadas de WhatsApp que el webhook registró (events meta_wa_call). */
+  /**
+   * Llamadas de WhatsApp que el webhook registró (events meta_wa_call).
+   *
+   * `direccion` es el tipo cerrado, ya normalizado por el server — ver el 🔴 de más abajo.
+   */
   llamadas?: readonly {
     id: string;
-    direccion: string;
+    direccion: 'entrante' | 'saliente';
     estado: string;
     duracion?: number;
     occurredAt: string;
@@ -444,9 +448,15 @@ export function ensamblarTimeline(
    * Cada llamada registrada por el webhook (`meta_wa_call`) se muestra como un
    * evento en el timeline. El rótulo dice si fue entrante o saliente, y la
    * duración si la hubo.
+   *
+   * 🔴 **`l.direccion` YA viene normalizada del server** (`server/src/llamadas/senal.ts::direccionDe`,
+   * que traduce el `USER_INITIATED`/`BUSINESS_INITIATED` crudo de Meta) — acá NO se vuelve a
+   * interpretar. Hasta el 14-sep-2026 esto comparaba contra `'inbound'`, un valor que Meta nunca
+   * manda, así que TODA llamada del timeline salía «Llamada saliente» (medido en la ficha del
+   * dueño sobre una entrante real). Ver el 🔴 del `for` en `server/src/llamadas/repositorio.ts`.
    */
   for (const l of datos.llamadas ?? []) {
-    const dir = l.direccion === 'inbound' ? 'entrante' : 'saliente';
+    const dir = l.direccion;
     const duracion = l.duracion != null && l.duracion > 0 ? ` · ${Math.round(l.duracion / 60)}m${l.duracion % 60}s` : '';
     eventos.push({
       id: `llamada:${l.id}`,

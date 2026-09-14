@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CalendarPlus, Check, Loader2 } from 'lucide-react';
 import { avisar } from '../../lib/avisos';
 import { usePopover } from '../../lib/teclado/usePopover';
+import { CLASE_RELLENO_HOVER, claseIconoNeon } from '../../lib/estiloNeon';
 import type { Conversacion } from '../../dominio/conversaciones';
 import { HORAS_RAPIDAS, opcionesRapidas, useAgenda } from './agenda';
 import { agruparPorDia } from './fechas';
@@ -27,10 +28,13 @@ import { TIPOS_ELEGIBLES, type TipoNota } from './tipoDeNota';
 export function AgendarRapido({
   conversacion,
   senalAbrir = 0,
+  compacto = false,
 }: {
   conversacion: Conversacion;
   /** Señal externa (contador): al cambiar, abre el popover. La usa el atajo `A`. */
   senalAbrir?: number;
+  /** Solo el ícono, sin el rótulo — la descripción queda en `title`/`aria-label`. */
+  compacto?: boolean;
 }) {
   const { crear, agenda } = useAgenda();
   // Lo ya agendado, para que el calendario lo pinte. Se deriva de la MISMA query
@@ -95,16 +99,23 @@ export function AgendarRapido({
           setListo(null);
           setAbierto((v) => !v);
         }}
+        aria-label="Agendar seguimiento"
         title="Agendar seguimiento (A)"
         className={
-          'flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-all duration-200 ' +
-          (listo
-            ? 'bg-success/10 text-success'
-            : 'bg-primary text-primary-foreground hover:shadow-[0_0_12px_rgba(37,99,235,0.6)] hover:brightness-110')
+          compacto
+            ? claseIconoNeon(listo ? 'success' : 'primary')
+            : 'flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-all duration-200 ' +
+              (listo
+                ? 'bg-success/10 text-success'
+                : 'bg-primary text-primary-foreground hover:shadow-[0_0_12px_rgba(37,99,235,0.6)] hover:brightness-110')
         }
       >
-        {listo ? <Check size={11} /> : <CalendarPlus size={11} />}
-        {listo ? `Agendado · ${listo}` : 'Agendar'}
+        {listo ? (
+          <Check size={compacto ? 15 : 11} className={compacto ? CLASE_RELLENO_HOVER : undefined} />
+        ) : (
+          <CalendarPlus size={compacto ? 15 : 11} className={compacto ? CLASE_RELLENO_HOVER : undefined} />
+        )}
+        {!compacto && (listo ? `Agendado · ${listo}` : 'Agendar')}
       </button>
 
       {abierto && (

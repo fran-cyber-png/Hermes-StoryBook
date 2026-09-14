@@ -437,13 +437,19 @@ export function EncabezadoTimeline({
 
   return (
     <div className="shrink-0 px-4 py-3">
-      <div className="flex items-start gap-3">
+      <div className="flex items-center gap-3">
         <span className="relative shrink-0">
           {/*
-            52 px y no 72. Dos letras derivadas del nombre que está escrito a su
-            derecha no aportan un dato, orientan. A 72 px se comía un tercio del
-            ancho de una columna de 360 y empujaba fuera de la primera pantalla
-            todo lo que sí es dato.
+            60 px y no 72 — sigue sin ser 72 por la misma razón de siempre (ver
+            abajo), pero pasó de 52 a 60 (11-sep-2026, pedido del dueño: «la
+            foto de perfil se agrandará un poco») para que, al lado, el bloque
+            de nombre + teléfono + Cliente/Etapa entre en dos renglones sin
+            leerse apretado contra un avatar chico.
+
+            La razón original sigue de pie: a 72 px dos letras derivadas del
+            nombre que está escrito a su derecha no aportan un dato, orientan,
+            y esa talla se comía un tercio del ancho de una columna de 360 —
+            60 crece el orientador sin llegar a pagar ese precio.
 
             🔴 **Y ahora es el `Avatar` compartido, con la FOTO de perfil.** Este
             encabezado pintaba sus propias iniciales a mano, así que era el único
@@ -461,7 +467,7 @@ export function EncabezadoTimeline({
             telefono={telefonoCrudo}
             numeroPropio={numeroPropio}
             conFoto={quiereFoto(canal)}
-            className="size-[52px] rounded-full bg-navy font-heading text-base font-bold text-white"
+            className="size-[60px] rounded-full bg-navy font-heading text-lg font-bold text-white"
           />
           {/* Puramente decorativo — no representa ningún dato (pedido explícito
               del dueño, 20-ago-2026: nada de lógica nueva en este restyle). */}

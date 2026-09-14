@@ -74,6 +74,25 @@ export interface OpcionDeLinea {
    * lo que le toca a la otra. Un hueco es la respuesta correcta.
    */
   transporte?: LineaWhatsapp['transporte'];
+  /**
+   * ¿`numero_vendedora` te asigna ESTA línea? Viaja tal cual desde
+   * `LineaWhatsapp.mias` (10-sep-2026) para que el selector pueda mostrar
+   * primero LAS TUYAS entre las 20-30 líneas de quien ve todo, sin que
+   * `BarraFiltros` tenga que volver a mirar la lista cruda — misma razón que
+   * `transporte`: la pregunta ya está contestada acá, no se recalcula del otro
+   * lado. Ausente en «Todas» y «Las mías» por el mismo motivo que `transporte`:
+   * agrupan líneas que pueden ser o no tuyas.
+   */
+  mias?: boolean;
+  /**
+   * ¿La atienden VARIAS personas? Viaja tal cual desde `LineaWhatsapp.compartida`
+   * (10-sep-2026) para que, entre tus propias líneas, el selector pueda separar
+   * la que trajiste vos (exclusiva) de la que compartís con el equipo —
+   * «Ventas Meta» la comparten siete personas, y no es «tu línea» de la misma
+   * manera que la que nadie más atiende. Ausente en «Todas» y «Las mías» por
+   * el mismo motivo que `mias`/`transporte`.
+   */
+  compartida?: boolean;
 }
 
 /**
@@ -117,6 +136,8 @@ export function opcionesDeLinea(
     etiqueta: l.etiqueta,
     titulo: `Ver solo lo que entró por ${l.etiqueta} (${l.numero})${rotuloDeTransporte(l.transporte)}`,
     transporte: l.transporte,
+    mias: l.mias === true,
+    compartida: l.compartida === true,
   });
 
   const todas: OpcionDeLinea = {

@@ -37,7 +37,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Filter, MessageSquarePlus, Phone, Search, Smartphone, X } from 'lucide-react';
+import { ChevronRight, Filter, MessageSquarePlus, Phone, Search, Smartphone, X } from 'lucide-react';
 import { useLocalStorage } from '../../lib/useLocalStorage';
 import { api, ErrorApi } from '../../lib/datos/cliente';
 import { esFresca, hace, horasDesdeIngesta, useFrescura } from '../../lib/datos/frescura';
@@ -74,7 +74,6 @@ import { FilaConversacion } from './FilaConversacion';
 import { AvisoFilaQueBajo } from './AvisoFilaQueBajo';
 import { avisoDeFilaQueSeFue } from './filaQueSeFue';
 import { MenuFila } from './MenuFila';
-import { ListaCategorias } from './ListaCategorias';
 import { nombreCanal } from '../../components/BadgeCanal';
 import { opcionDeCanal } from './canalesDelRiel';
 import { useEfectoAlCambiar } from '../../lib/useEfectoAlCambiar';
@@ -218,9 +217,8 @@ export function ColaUnificada({
    */
   const opcionesLinea = opcionesDeLinea(lineas, hayMias, veTodo);
   const linea = lineaEfectiva(lineaGuardada, opcionesLinea);
-  // Filtros secundarios y modo Listas: efímeros (la sesión arranca en limpio).
+  // Filtros secundarios: efímeros (la sesión arranca en limpio).
   const [filtroSec, setFiltroSec] = useState<FiltroSec>('');
-  const [modoListas, setModoListas] = useState(false);
   const [categoriaActiva, setCategoriaActiva] = useState<{ nombre: string; color: string } | null>(null);
   const [gestorAbierto, setGestorAbierto] = useState(false);
   // La opción se resuelve desde el id que baja del riel. `esDeCampana` decide
@@ -642,30 +640,8 @@ export function ColaUnificada({
     setTab('todo');
     setFiltroSec('');
     setCategoriaActiva(null);
-    setModoListas(false);
     setCanal('');
   }
-
-  /**
-   * Entrar a una lista arranca LIMPIO. Si no, los tabs y los filtros secundarios
-   * quedan aplicados pero fuera de la vista (la cabecera del drill-down no los
-   * muestra): «Precio (12)» abría con 2 filas y la vendedora no tenía cómo saber
-   * que su tab «No leídos» de hace un rato seguía angostando.
-   */
-  function entrarACategoria(cat: { nombre: string; color: string }) {
-    setTab('todo');
-    setFiltroSec('');
-    setBusqueda('');
-    setCategoriaActiva(cat);
-  }
-
-  // ── MODO LISTAS: la lista de la izquierda se vuelve la lista de categorías ──
-  // Ya no es un `return` aparte (07-sep-2026): con la cabecera de pestañas de
-  // arriba, el contenedor tiene que dibujarse SIEMPRE — esta rama devolvía su
-  // PROPIO `rounded-2xl bg-card shadow-panel`, que hubiera duplicado la
-  // cabecera si se quedaba como estaba. `enListas` es sólo la pregunta; la
-  // respuesta se usa una vez, adentro del cuerpo de la pestaña «Chats».
-  const enListas = modoListas && !categoriaActiva;
 
   return (
     /* ══ EN EL CELULAR LA COLA ES LA PANTALLA (11-sep-2026) ══
@@ -986,21 +962,6 @@ export function ColaUnificada({
           <Phone size={28} className="mb-1 text-muted-foreground/50" aria-hidden="true" />
           <p className="font-heading text-2xl font-bold text-navy-ink">Próximamente</p>
         </div>
-      ) : enListas ? (
-        <>
-          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-            <button
-              type="button"
-              onClick={() => setModoListas(false)}
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-primary transition-colors hover:bg-primary/10"
-            >
-              <ChevronLeft size={14} /> Cola
-            </button>
-          </div>
-          <div className="min-h-0 flex-1">
-            <ListaCategorias onElegir={entrarACategoria} onGestionar={() => setGestorAbierto(true)} />
-          </div>
-        </>
       ) : (
         <>
       {/* Header: tabs + filtros — la búsqueda y el chat nuevo se fueron arriba,
@@ -1093,7 +1054,7 @@ export function ColaUnificada({
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             {/* Tabs: el eje de la cola. No se encogen: son el control principal. */}
             <div className="flex shrink-0 gap-0.5 rounded-lg bg-muted/60 p-0.5" role="tablist" aria-label="Filtrar la cola">
@@ -1114,24 +1075,6 @@ export function ColaUnificada({
               ))}
             </div>
           </div>
-          {deAntes ? (
-            <SelloDeAntes texto={deAntes} actualizando={actualizando} />
-          ) : (
-            !cargando &&
-            total > 0 &&
-            !hayFiltroActivo && (
-              /* «PARA VOS» Y NO «EN COLA» CUANDO LA COLA YA ES LA SUYA.
-                 Al sacar la píldora «Vos» —que en una cola propia sería la misma
-                 marca en todas las filas— quedó una pantalla sin UN SOLO indicio
-                 de que lo que se ve es lo asignado a quien mira. 18 filas sin
-                 dueño visible se leen exactamente igual que la cola de todos, y
-                 así se leyeron: «sigo viendo todos».
-                 ⚠️ Lo decidía `enElReparto` («¿está en una rueda?»); ahora lo
-                 decide `colaRecortada`, que es el HECHO de que el server haya
-                 aplicado la frontera. El porqué de cada palabra, en el componente. */
-              <RotuloDeLaCola total={total} recortada={colaRecortada} lineaPropia={conLineaPropia} />
-            )
-          )}
         </div>
 
         {/* La barra que se corre: los filtros que sirven + las listas de la vendedora. */}
@@ -1145,22 +1088,33 @@ export function ColaUnificada({
             onLinea={setLinea}
             catalogo={catalogo}
             categoriaActiva={categoriaActiva?.nombre ?? null}
-            /* Desde la BARRA la categoría afina lo que ya se está mirando (el tab
-               sigue puesto, y se ve). Desde el modo LISTAS se entra limpio: ahí
-               la cabecera del drill-down no mostraba el tab, y «Precio (12)»
-               abría con 2 filas sin decir por qué.
-               `setModoListas(false)`: sin eso, apagar la categoría con la ✕
-               mientras se venía del modo Listas rebotaba a la pantalla de
-               listas en vez de devolver la cola entera, que es lo que la ✕
-               promete. */
-            onCategoria={(c) => {
-              setCategoriaActiva(c);
-              setModoListas(false);
-            }}
-            onListas={() => {
-              setCategoriaActiva(null);
-              setModoListas(true);
-            }}
+            /* La categoría afina lo que ya se está mirando: el tab y los demás
+               filtros siguen puestos, tal como se ven en la barra. */
+            onCategoria={setCategoriaActiva}
+            onAdministrarCategorias={() => setGestorAbierto(true)}
+            extraDerecha={
+              deAntes ? (
+                <SelloDeAntes texto={deAntes} actualizando={actualizando} />
+              ) : (
+                !cargando &&
+                total > 0 &&
+                !hayFiltroActivo && (
+                  /* «PARA VOS» Y NO «EN COLA» CUANDO LA COLA YA ES LA SUYA.
+                     Al sacar la píldora «Vos» —que en una cola propia sería la misma
+                     marca en todas las filas— quedó una pantalla sin UN SOLO indicio
+                     de que lo que se ve es lo asignado a quien mira. 18 filas sin
+                     dueño visible se leen exactamente igual que la cola de todos, y
+                     así se leyeron: «sigo viendo todos».
+                     ⚠️ Lo decidía `enElReparto` («¿está en una rueda?»); ahora lo
+                     decide `colaRecortada`, que es el HECHO de que el server haya
+                     aplicado la frontera. El porqué de cada palabra, en el componente.
+                     Bajó de la fila de los tabs a ésta (pedido del dueño, quedar a
+                     la altura de «Todas»/«Categorías»), sin cambiar ni el cálculo
+                     ni la alineación a la derecha. */
+                  <RotuloDeLaCola total={total} recortada={colaRecortada} lineaPropia={conLineaPropia} />
+                )
+              )
+            }
           />
         </div>
 

@@ -3,7 +3,8 @@ import { api } from '../../lib/datos/cliente';
 
 export interface LlamadaEnTimeline {
   id: string;
-  direccion: string;
+  /** Ya normalizada por el server (`server/src/llamadas/senal.ts::direccionDe`): nunca el crudo de Meta. */
+  direccion: 'entrante' | 'saliente';
   estado: string;
   duracion?: number;
   occurredAt: string;

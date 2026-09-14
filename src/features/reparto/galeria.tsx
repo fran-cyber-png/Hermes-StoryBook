@@ -245,7 +245,7 @@ function Galeria() {
               conteos={CONTEOS}
               categoriaActiva={null}
               onCategoria={() => {}}
-              onListas={() => {}}
+              onAdministrarCategorias={() => {}}
               opciones={opcionesDeLinea(
                 LINEAS.map((l) => ({ ...l, mias: l.numero === '51984429504' })),
                 true,
@@ -264,7 +264,7 @@ function Galeria() {
               conteos={CONTEOS}
               categoriaActiva={null}
               onCategoria={() => {}}
-              onListas={() => {}}
+              onAdministrarCategorias={() => {}}
               opciones={opcionesDeLinea(
                 LINEAS.map((l) => ({
                   ...l,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  categoriasDeLaBarra,
+  categoriasOrdenadas,
   filtrosActivos,
   KEY_FILTRO_VIEJO,
   LINEA_MIAS,
@@ -193,7 +193,7 @@ describe('filtrosActivos — qué está recortando la cola AHORA MISMO', () => {
   });
 });
 
-describe('categoriasDeLaBarra — el orden de los chips de categoría', () => {
+describe('categoriasOrdenadas — el orden del selector de categorías', () => {
   const cat = (nombre: string, orden: number, esFavorito = false, conteo = 0) => ({
     nombre,
     color: 'azul',
@@ -203,29 +203,24 @@ describe('categoriasDeLaBarra — el orden de los chips de categoría', () => {
   });
 
   it('las favoritas van primero, y dentro de cada grupo manda el orden manual', () => {
-    const barra = categoriasDeLaBarra([
+    const lista = categoriasOrdenadas([
       cat('reclamo', 2),
       cat('precio', 5, true),
       cat('interesada', 1),
       cat('urgente', 0, true),
     ]);
-    expect(barra.map((c) => c.nombre)).toEqual(['urgente', 'precio', 'interesada', 'reclamo']);
+    expect(lista.map((c) => c.nombre)).toEqual(['urgente', 'precio', 'interesada', 'reclamo']);
   });
 
-  it('la categoría ACTIVA entra siempre, aunque quede fuera del tope', () => {
-    const muchas = Array.from({ length: 20 }, (_, i) => cat(`c${i}`, i));
-    const barra = categoriasDeLaBarra(muchas, 'c19');
-    expect(barra.map((c) => c.nombre)).toContain('c19');
-  });
-
-  it('no muestra una lista infinita: corta en el tope', () => {
+  /** Sin tope, a propósito: el selector es un panel con buscador, no una fila. */
+  it('no corta aunque haya muchas — el panel scrollea, no se navega con el ancho', () => {
     const muchas = Array.from({ length: 30 }, (_, i) => cat(`c${i}`, i));
-    expect(categoriasDeLaBarra(muchas).length).toBeLessThanOrEqual(12);
+    expect(categoriasOrdenadas(muchas)).toHaveLength(30);
   });
 
-  it('sin catálogo no hay chips (y no revienta)', () => {
-    expect(categoriasDeLaBarra([])).toEqual([]);
-    expect(categoriasDeLaBarra(undefined)).toEqual([]);
+  it('sin catálogo no hay categorías (y no revienta)', () => {
+    expect(categoriasOrdenadas([])).toEqual([]);
+    expect(categoriasOrdenadas(undefined)).toEqual([]);
   });
 });
 

@@ -27,7 +27,7 @@
  * de la fila, que dice los días que quedan.
  */
 
-export type Tab = 'todo' | 'no-leidos' | 'favoritos';
+export type Tab = 'todo' | 'no-respondidos' | 'no-leidos' | 'favoritos';
 
 /** Los filtros secundarios: angostan dentro del tab (#49). */
 export type FiltroSec =
@@ -45,6 +45,16 @@ export type FiltroSec =
 export const TABS: { valor: Tab; label: string; vacio: string }[] = [
   { valor: 'todo', label: 'Todo', vacio: 'No entró nada por ningún canal.' },
   { valor: 'no-leidos', label: 'No leídos', vacio: 'Nada sin leer.' },
+  /**
+   * «NO RESPONDIDOS» — la Deuda (glosario: `CONTEXT.md`), como tab (no como
+   * filtro secundario). NO es el «Sin responder» que ADR 0052 retiró de la
+   * barra de filtros secundarios (505 filas, 93 % de +7 días, la mesa entera
+   * con otro nombre): éste es un EJE de la cola, como «No leídos», y a
+   * propósito no tiene el corte de `DIAS_DEUDA_VIVA` que sí tiene «Te
+   * escribieron» — acá la deuda vieja se puede seguir viendo, en vez de
+   * escondida en el orden de «Todo». Pedido del dueño, 10-sep-2026.
+   */
+  { valor: 'no-respondidos', label: 'No respondidos', vacio: 'No hay deuda: todo tiene respuesta.' },
   { valor: 'favoritos', label: 'Favoritos', vacio: 'No marcaste favoritos.' },
 ];
 
@@ -341,35 +351,27 @@ export interface CategoriaEnBarra {
   conteo: number;
 }
 
-/** Cuántos chips de categoría entran antes de que la barra deje de ser una barra. */
-export const TOPE_CATEGORIAS_BARRA = 12;
-
 /**
- * QUÉ CATEGORÍAS VAN EN LA BARRA, Y EN QUÉ ORDEN.
+ * TODO EL CATÁLOGO, ORDENADO — para el selector de categorías (10-sep-2026).
  *
  * Las FAVORITAS primero: para eso existe `es_favorito` en #48 —marcar cuáles
  * merecen estar a un clic—. Dentro de cada grupo manda el orden manual de la
- * vendedora. Se corta en un tope: una barra de 30 chips deja de ser navegable y
- * para eso está el modo Listas, que las muestra todas.
+ * vendedora.
  *
- * La categoría ACTIVA entra siempre, aunque el tope la dejara afuera: si se está
- * filtrando por ella, tiene que verse y tiene que poder apagarse desde la barra.
+ * ⚠️ **Sin tope, a propósito.** Hasta el 10-sep-2026 esto vivía en una fila
+ * horizontal (`categoriasDeLaBarra`) que se cortaba a los 12 chips —una fila no
+ * puede crecer sin dejar de ser navegable— y lo que quedaba afuera solo se veía
+ * entrando al modo Listas. El selector nuevo es un panel con buscador, no una
+ * fila: no hay ancho que se termine, así que no hay nada que cortar. Con eso el
+ * viejo caso especial de «la categoría ACTIVA entra igual aunque el tope la
+ * dejara afuera» deja de hacer falta — activa o no, ninguna se cae de la lista.
  */
-export function categoriasDeLaBarra(
-  catalogo: readonly CategoriaEnBarra[] | undefined,
-  activa?: string | null,
-): CategoriaEnBarra[] {
+export function categoriasOrdenadas(catalogo: readonly CategoriaEnBarra[] | undefined): CategoriaEnBarra[] {
   if (!catalogo || catalogo.length === 0) return [];
-  const ordenadas = [...catalogo].sort((a, b) => {
+  return [...catalogo].sort((a, b) => {
     if (a.esFavorito !== b.esFavorito) return a.esFavorito ? -1 : 1;
     return a.orden - b.orden || a.nombre.localeCompare(b.nombre, 'es');
   });
-  const visibles = ordenadas.slice(0, TOPE_CATEGORIAS_BARRA);
-  if (activa && !visibles.some((c) => c.nombre === activa)) {
-    const suelta = ordenadas.find((c) => c.nombre === activa);
-    if (suelta) return [suelta, ...visibles.slice(0, TOPE_CATEGORIAS_BARRA - 1)];
-  }
-  return visibles;
 }
 
 export interface EstadoCola {

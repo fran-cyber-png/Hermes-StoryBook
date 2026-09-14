@@ -491,6 +491,60 @@ describe('H7 — los correos en el timeline', () => {
   });
 });
 
+describe('llamadas de WhatsApp en el timeline', () => {
+  const lineas = (llamadas: unknown[]) =>
+    ensamblarTimeline({ llamadas: llamadas as never, yo: 'luz' }).grupos.flatMap((g) => g.eventos);
+
+  /**
+   * 🔴 EL DEFECTO MEDIDO EL 14-SEP-2026, en la ficha del dueño: una llamada entrante real de
+   * Ventas Meta aparecía como «Llamada saliente». Esto comparaba `l.direccion` contra `'inbound'`
+   * — un valor que Meta nunca manda (manda `USER_INITIATED`/`BUSINESS_INITIATED`, traducido por
+   * `server/src/llamadas/senal.ts::direccionDe` a `'entrante'`/`'saliente'` ANTES de llegar acá).
+   * `l.direccion` ya viene normalizada: este archivo no la vuelve a interpretar.
+   */
+  it('🔴 una llamada que el server ya normalizó como "entrante" se lee "Llamada entrante"', () => {
+    const [linea] = lineas([
+      { id: 'wacid.1', direccion: 'entrante', estado: 'connect', occurredAt: '2026-09-14T10:00:00.000Z' },
+    ]);
+    expect(linea.rotulo).toBe('Llamada entrante');
+  });
+
+  it('una saliente se lee "Llamada saliente"', () => {
+    const [linea] = lineas([
+      { id: 'wacid.2', direccion: 'saliente', estado: 'connect', occurredAt: '2026-09-14T10:00:00.000Z' },
+    ]);
+    expect(linea.rotulo).toBe('Llamada saliente');
+  });
+
+  it('una conectada trae la duración y sale confirmada, sin un `valor` que repita el estado', () => {
+    const [linea] = lineas([
+      {
+        id: 'wacid.3',
+        direccion: 'entrante',
+        estado: 'completed',
+        duracion: 145,
+        occurredAt: '2026-09-14T10:00:00.000Z',
+      },
+    ]);
+    expect(linea.estado).toBe('confirmado');
+    expect(linea.comentario).toContain('2m25s');
+    expect(linea.valor).toBeUndefined();
+  });
+
+  it('una perdida sale fallida y con el estado crudo como `valor`', () => {
+    const [linea] = lineas([
+      { id: 'wacid.4', direccion: 'entrante', estado: 'no-answer', occurredAt: '2026-09-14T10:00:00.000Z' },
+    ]);
+    expect(linea.estado).toBe('fallido');
+    expect(linea.valor).toBe('no-answer');
+  });
+
+  it('⚠️ sin llamadas (server viejo o caché de ayer) el timeline se arma igual', () => {
+    expect(() => ensamblarTimeline({ yo: 'luz' })).not.toThrow();
+    expect(lineas([]).filter((e) => e.tipo === 'llamada')).toHaveLength(0);
+  });
+});
+
 describe('la ficha y los seguimientos en el timeline', () => {
   it('la ficha registrada entra como hecho MANUAL, con su autora', () => {
     const { grupos } = ensamblarTimeline({
