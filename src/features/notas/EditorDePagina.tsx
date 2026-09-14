@@ -9,6 +9,7 @@ import {
   ESQUEMA_LIBRETA,
   soloBloquesConocidos,
   soloEstilosConocidos,
+  type EditorLibreta,
 } from './editor';
 import { bloquesDeTexto } from './bloques';
 import { BarraFlotante } from './BarraFlotante';
@@ -31,6 +32,7 @@ export function EditorDePagina({
   onAbrirPlantillas,
   onAbrirRespuestasRapidas,
   registrarPegado,
+  registrarEditor,
 }: {
   contenidoInicial: unknown[] | undefined;
   soloLectura: boolean;
@@ -49,6 +51,14 @@ export function EditorDePagina({
   onAbrirRespuestasRapidas?: () => void;
   /** Le presta al padre CÓMO pegar en ESTA instancia del editor (o `null` al desmontarse). */
   registrarPegado?: (fn: ((texto: string) => void) | null) => void;
+  /**
+   * Le presta al padre la INSTANCIA VIVA del editor (o `null` al desmontarse) —
+   * lo necesita la capa de dibujo (`CapaDeAnotaciones`) para anclar una figura al
+   * bloque de texto que tenía más cerca y reubicarla cuando ese bloque se mueve
+   * (ver `dibujo/anclaje.ts`). Mismo patrón que `registrarPegado`: un préstamo,
+   * no un estado propio de acá.
+   */
+  registrarEditor?: (editor: EditorLibreta | null) => void;
 }) {
   const editor = useCreateBlockNote({
     // El cast es el borde con la librería: `docParaEditor` produce la forma de
@@ -169,6 +179,12 @@ export function EditorDePagina({
     registrarPegado(pegarPlantilla);
     return () => registrarPegado(null);
   }, [registrarPegado, pegarPlantilla]);
+
+  useEffect(() => {
+    if (!registrarEditor) return;
+    registrarEditor(editor);
+    return () => registrarEditor(null);
+  }, [registrarEditor, editor]);
 
   // Cualquiera de los dos alcanza para necesitar el menú propio: sin esto,
   // pasar SOLO `onAbrirRespuestasRapidas` dejaría prendido el `slashMenu` del

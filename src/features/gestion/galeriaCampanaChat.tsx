@@ -73,6 +73,8 @@ const roto = params.has('roto');
 
 /** Lo que sigue siendo de `ventas` después del 23-ago-2026. */
 const DE_VENTAS = [
+  // #1033 — la consulta única del perfil también es de `ventas`.
+  '/api/contactos/perfil',
   '/api/contactos/ficha',
   '/api/contactos/lead',
   '/api/contactos/registrar-venta',

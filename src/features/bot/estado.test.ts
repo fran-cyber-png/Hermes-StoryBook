@@ -161,6 +161,12 @@ describe('por qué no se guardó — se lee del status, y nunca dice «ya está 
     expect(porQueNoSeGuardo(503)).toMatch(/bot_estado/);
   });
 
+  it('🔴 el 503 de «no pudimos leer tus líneas» NO nombra la migración: detrás del guard es otra falla (ADR 0108)', () => {
+    const texto = porQueNoSeGuardo(503, 'lineas_no_leidas');
+    expect(texto).not.toMatch(/bot_estado|migración/);
+    expect(texto).toMatch(/^NO se guardó: no pudimos leer tus líneas/);
+  });
+
   it('todas empiezan por NO se guardó: un cambio que falló no puede parecer aplicado', () => {
     for (const status of [400, 401, 403, 500, 503, null]) {
       expect(porQueNoSeGuardo(status)).toMatch(/^NO se guardó/);
@@ -213,5 +219,46 @@ describe('a dónde se puede ir (ADR 0077)', () => {
     expect(v.aviso).toBe('retirado');
     expect(v.elegibles).toEqual(['apagado', 'sombra']);
     expect(v.puedeCambiar).toBe(true);
+  });
+});
+
+/**
+ * EL BOT ES DE VENTAS, Y EN CAMPAÑA ESO NO ES UNA FALLA.
+ *
+ * `/api/bot` se monta con el candado `deVentas` desde ADR 0077 —una identidad de
+ * campaña lo apagó el 21-ago—, así que para campaña la ruta contesta **403 con
+ * `codigo: 'otro_modulo_del_crm'`**. Hasta acá el front no distinguía ese 403 de
+ * «el server no contestó» y pintaba **«bot: sin señal»**: la lectura de eso es
+ * «se rompió algo», sobre una máquina que en campaña ni existe. Una alarma
+ * permanente que nadie puede apagar es peor que no decir nada — es la misma
+ * lección de `sinLineasPropias` al revés.
+ *
+ * ⚠️ La distinción se hace por el **`codigo` del cuerpo**, no por el 403 pelado:
+ * el status por sí solo también lo emitiría cualquier otro candado futuro, y
+ * `ErrorApi` conserva `codigo` justamente para esto (#175).
+ */
+describe('el bot es de ventas: en campaña no aplica, no falla', () => {
+  it('lo dice «no aplica», y NUNCA «sin señal»', () => {
+    const v = verBot(undefined, { deOtroModulo: true });
+    expect(v.clase).toBe('no-aplica');
+    expect(v.etiqueta).toBe('bot: no aplica');
+    expect(v.etiqueta).not.toMatch(/sin señal/i);
+  });
+
+  it('no ofrece cambiar nada: no hay interruptor que tocar desde este lado', () => {
+    const v = verBot(undefined, { deOtroModulo: true });
+    expect(v.modo).toBeNull();
+    expect(v.puedeCambiar).toBe(false);
+  });
+
+  it('el detalle nombra el módulo dueño, para que no se lea como un permiso que falta', () => {
+    const v = verBot(undefined, { deOtroModulo: true });
+    expect(v.detalle).toMatch(/ventas/i);
+    expect(v.detalle).not.toMatch(/no contestó/i);
+  });
+
+  it('le gana a «sin ruta» y a «sin línea»: la respuesta del server manda sobre la ausencia', () => {
+    const v = verBot(undefined, { deOtroModulo: true, sinRuta: true, sinLinea: true });
+    expect(v.clase).toBe('no-aplica');
   });
 });

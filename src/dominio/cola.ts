@@ -378,6 +378,16 @@ export interface EstadoCola {
   /** El nombre (minúsculas) de la categoría en el modo Listas; null = sin filtro. */
   categoria: string | null;
   canal?: string;
+  /**
+   * Recorta `canal` a comentario o mensaje (Facebook vs. Messenger comparten
+   * `canal: 'facebook'`, ver `canalesDelRiel.ts`). Antes este recorte se
+   * aplicaba solo en el front, sobre cada página de 30 filas YA MEZCLADAS —
+   * con una Página que recibe muchos más DM que comentarios, eso dejaba
+   * sobrevivir 0 o 1 fila por página y obligaba a decenas de clics en «Ver
+   * más» para juntar un puñado de comentarios. Ahora viaja al server, que
+   * arma la página ya separada (`consultarCola.ts`, `conTodo`).
+   */
+  tipo?: string;
   /** Filtra por etapa efectiva en el server: la carga POR COLUMNA del Pipeline
    *  (#89/#90). Solo entra a la queryKey/URL cuando se pide, así las queries de
    *  siempre (Mensajes) conservan su clave y su caché persistido. */
@@ -436,6 +446,7 @@ export function parametrosDeCola(e: EstadoCola): Record<string, string> {
   if (e.filtroSec) p.intencion = e.filtroSec;
   if (e.categoria) p.categoria = e.categoria;
   if (e.canal) p.canal = e.canal;
+  if (e.tipo) p.tipo = e.tipo;
   if (e.etapa) p.etapa = e.etapa;
   if (e.precio) p.precio = '1';
   if (e.ventana) p.ventana = '1';

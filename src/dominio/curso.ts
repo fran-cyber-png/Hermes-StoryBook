@@ -77,7 +77,16 @@ function util(v: string | null | undefined): string | null {
   return s.length > 0 ? s : null;
 }
 
-export function cursoDeFila(c: EntradaCurso): CursoDeFila | null {
+/**
+ * 🔴 **EN CAMPAÑA NO HAY CHIP DE CURSO** (regla del dueño, 11-sep-2026: en
+ * campaña no sale nada de la Escuela). El server ya no le manda a una fila de
+ * campaña `lead_curso` ni el padrón (`server/src/cola/cursoSql.ts`); esto cierra
+ * la fuente que queda del lado del front, el título del anuncio: el anuncio de
+ * un candidato no es un curso, y el chip lo pintaría con la forma de uno. La
+ * decisión es de QUIEN MIRA, no de la fila, y por eso viaja como contexto.
+ */
+export function cursoDeFila(c: EntradaCurso, contexto: { esDeCampana?: boolean } = {}): CursoDeFila | null {
+  if (contexto.esDeCampana) return null;
   const origen = c.origen_anuncio?.fuente === 'anuncio' ? c.origen_anuncio : c.ultima_origen;
   const anuncio = origen?.fuente === 'anuncio' ? util(origen.titulo) : null;
   const candidatos: [FuenteCurso, string | null][] = [

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ErrorApi } from '../../lib/datos/cliente';
+import type { ParteDeReparto } from './repartoDeAnuncio';
 
 /**
  * ROUTING, DEL LADO DE LA APP — qué campaña de Meta cae en qué vendedora.
@@ -39,6 +40,12 @@ export interface CampanaEnRouting {
   aliasFamilia?: string;
   /** LOS CABLES: a quiénes les puede caer. Vacío = a la rueda del reparto. */
   vendedoras: string[];
+  /**
+   * Cuántos de sus anuncios reparten aparte, con su propio reparto (#1002). Con
+   * uno o más, los cables de arriba no deciden los leads de esos anuncios.
+   * ⚠️ Opcional: un server anterior o el caché de IndexedDB no lo traen = 0.
+   */
+  anunciosConReparto?: number;
 }
 
 /**
@@ -242,12 +249,43 @@ export function useRefrescarDesdeMeta() {
  * interrogarla sobre el valor que todavía no existe: un estado nuevo de Meta
  * cae en «no se sabe» y lo dice, nunca en «pausada» ni en un throw.
  */
-/** Un anuncio de una campaña. **Solo lectura**: no existe una regla por anuncio. */
+/** Un anuncio de una campaña, con lo que trajo y su reparto propio si lo tiene (#1002). */
 export interface AnuncioDeCampana {
   adId: string;
   titular: string | null;
   personas: number;
   ultima: string | null;
+  /**
+   * Su regla en porcentajes (suman 100). `[]` = no tiene: sus leads los decide
+   * la regla de la campaña.
+   *
+   * ⚠️ Opcional porque un server anterior a #1002 no lo manda: ausente se lee
+   * como `[]`, que es exactamente lo que ese server hace con el anuncio.
+   */
+  reparto?: ParteDeReparto[];
+}
+
+/**
+ * REPARTIR UN ANUNCIO EN PORCENTAJES (#1002). Viaja el conjunto COMPLETO.
+ *
+ * Misma forma que `PUT /campanas/:id`: con altas y bajas sueltas, dos
+ * supervisores editando el mismo anuncio se pisan. `reparto: []` le quita la
+ * regla y sus leads vuelven a la de la campaña.
+ */
+export function usePonerRepartoDeAnuncio() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { adId: string; reparto: ParteDeReparto[] }) =>
+      api<{ ok: true; adId: string; reparto: ParteDeReparto[]; cambio: boolean }>(
+        `/api/routing/anuncios/${encodeURIComponent(v.adId)}`,
+        { method: 'PUT', body: JSON.stringify({ reparto: v.reparto }) },
+      ),
+    // ⚠️ `['routing']` entero: la lista de anuncios trae el reparto, y el
+    // monitoreo empieza a contar «por el anuncio» desde el próximo lead.
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['routing'] });
+    },
+  });
 }
 
 /**
@@ -510,6 +548,8 @@ export function usePonerRegla() {
  */
 export function explicarMotivo(motivo: string | null | undefined): string {
   switch ((motivo ?? '').trim()) {
+    case 'anuncio':
+      return 'por el anuncio';
     case 'campana':
       return 'por la campaña';
     case 'producto':

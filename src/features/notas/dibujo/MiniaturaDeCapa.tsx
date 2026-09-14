@@ -19,11 +19,13 @@ import { pintar } from './pintar';
  *
  * ══ CUÁNDO SE RE-PINTA ══════════════════════════════════════════════════════
  *
- * El `useEffect` depende de las figuras de la capa y de sus tres perillas, así
- * que se rehace cuando cambia lo que se ve y no cuando se mueve el mouse: la
- * capa transparente solo publica figuras nuevas al CERRAR un gesto
- * (`confirmar`), y arrastrar usa `vistaPrevia`, que no llega hasta acá porque
- * el panel se monta con `figuras` ya confirmadas.
+ * El `useEffect` depende de las figuras de la capa (`propias`, un array nuevo
+ * en cada render) y de la capa misma, así que se rehace en cada render de este
+ * componente. Y eso incluye el ARRASTRE: el panel y la capa transparente leen
+ * el mismo `anotaciones.figuras` (`useAnotaciones` es un solo hook, compartido
+ * desde `ZonaDeTrabajo`), así que `vistaPrevia` — que sí llega hasta acá — hace
+ * que la miniatura siga la imagen en vivo mientras se la mueve, no solo al
+ * soltarla.
  */
 
 /** Las medidas del recuadro, en píxeles de CSS. */
@@ -80,31 +82,36 @@ export function MiniaturaDeCapa({ capa, figuras }: { capa: Capa; figuras: Figura
      * El `min(…, 1)` es lo que impide AGRANDAR: un solo punto de lápiz escalado
      * hasta llenar el recuadro se vería como una mancha enorme y mentiría sobre
      * lo que hay en la capa. Lo chico se ve chico.
+     *
+     * 🔴 SE LE PASA A `pintar`, NO SE APLICA ACÁ CON `ctx.translate`/`ctx.scale`
+     * (hasta el 09-sep-2026 era así, y era el defecto: `pintar` arranca con su
+     * propio `ctx.setTransform`, que REEMPLAZA la matriz en vez de componerla,
+     * así que pisaba este encuadre entero. El síntoma era exacto: la miniatura
+     * dibujaba la imagen en sus coordenadas CRUDAS de la página —se veía bien
+     * solo si la figura caía cerca del origen por casualidad, y se descolocaba
+     * en cuanto se la movía a cualquier otro lado.
      */
     const anchoContenido = Math.max(1, caja.x2 - caja.x1);
     const altoContenido = Math.max(1, caja.y2 - caja.y1);
     const escala = Math.min((ANCHO - MARGEN * 2) / anchoContenido, (ALTO - MARGEN * 2) / altoContenido, 1);
 
-    ctx.save();
-    ctx.translate(
-      (ANCHO - anchoContenido * escala) / 2 - caja.x1 * escala,
-      (ALTO - altoContenido * escala) / 2 - caja.y1 * escala,
-    );
-    ctx.scale(escala, escala);
-
     // Se reusa el pintor del documento: una segunda implementación acá haría que
     // la miniatura y el dibujo se fueran separando figura por figura.
-    // `dpr: 1` porque la densidad ya está en la transformación de arriba, y sin
-    // adornos: los recuadros de selección no son contenido de la capa.
+    // `limpiar: false` porque el damero de arriba YA es el fondo: sin esto,
+    // `pintar` lo borraría antes de dibujar encima. Sin adornos: los recuadros
+    // de selección no son contenido de la capa.
     pintar(ctx, ordenarParaPintar(propias, [capa]), {
-      ancho: ANCHO / escala,
-      alto: ALTO / escala,
-      dpr: 1,
+      dpr,
+      escala,
+      desplazamiento: [
+        (ANCHO - anchoContenido * escala) / 2 - caja.x1 * escala,
+        (ALTO - altoContenido * escala) / 2 - caja.y1 * escala,
+      ],
+      limpiar: false,
       conAdornos: false,
       // La miniatura muestra la opacidad de la capa, como pidió el punto 17.
       opacidadDe: (f) => f.opacidad * capa.opacidad,
     });
-    ctx.restore();
   }, [propias, capa]);
 
   return (

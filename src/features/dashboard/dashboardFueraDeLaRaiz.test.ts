@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 /**
- * ══ LA CONSULTA MÁS CARA NO SE PIDE EN LA RAÍZ ═════════════════════════════
+ * ══ LAS CONSULTAS CARAS DEL DASHBOARD NO SE PIDEN EN LA RAÍZ ═════════════════
  *
  * 🔴 **EL DEFECTO QUE ESTE TEST VIGILA NO TIENE SÍNTOMA: SE VE LINDO Y SE PAGA
  * EN EL SERVIDOR.** `App.tsx` montaba `useDashboard()` antes de decidir qué
@@ -16,9 +16,10 @@ import { describe, expect, it } from 'vitest';
  * y eso se le atribuye a «está lento el server».
  *
  * ── LA REGLA, ESCRITA ────────────────────────────────────────────────────
- * **El Dashboard se pide donde se mira.** `VistaDashboard` lo monta (y es la
- * única que lo pide VIVA), `FormularioVenta` lo lee para la foto del embudo del
- * recibo, y la cola lo lee sólo cuando está despachada. Los tres son montajes
+ * **El Dashboard se pide donde se mira.** `useDashboard` (el radar de antes) ya no
+ * lo pide el Dashboard desde ADR 0104: lo leen `FormularioVenta` (la foto del embudo
+ * del recibo) y la cola cuando está despachada. `useHoy` —cada pedido arma en el
+ * server la `todo` de la cola— lo monta sólo `VistaDashboard`. Todos son montajes
  * condicionales; la raíz no lo es.
  *
  * ⚠️ **Por qué el candado mira `App.tsx` y no cuenta pedidos**: un test no puede
@@ -45,9 +46,29 @@ function fuente(sufijo: string): string {
   return FUENTES[clave]!;
 }
 
+/**
+ * Las rutas de producción (sin tests ni galerías) que declaran una `queryKey` que
+ * cumple `patron`, salvo el archivo del hook que la define.
+ */
+function quienesDeclaran(patron: RegExp, elHook: RegExp): string[] {
+  return Object.entries(FUENTES)
+    .filter(([ruta, texto]) => {
+      if (ruta.includes('.test.') || ruta.includes('galeria')) return false;
+      if (elHook.test(ruta)) return false;
+      // `invalidateQueries` sobre la clave es lo correcto: eso no crea un
+      // observador con política propia, que es lo único que rompe.
+      return texto.split('\n').some((linea) => patron.test(linea) && !linea.includes('invalidateQueries'));
+    })
+    .map(([ruta]) => ruta);
+}
+
 describe('el Dashboard se pide donde se mira', () => {
   it('App.tsx no monta useDashboard: la raíz corre en las diez vistas', () => {
     expect(fuente('/App.tsx')).not.toContain('useDashboard');
+  });
+
+  it('App.tsx tampoco monta useHoy: cada pedido de «Hoy» arma la `todo` de la cola en el server', () => {
+    expect(fuente('/App.tsx')).not.toContain('useHoy');
   });
 
   it('nadie levanta la query del dashboard a mano: hay un solo hook (issue #5)', () => {
@@ -55,16 +76,10 @@ describe('el Dashboard se pide donde se mira', () => {
     // `staleTime`, otro con `refetchInterval`— hacen que el refresco dependa de
     // qué componente montó primero. La liveness es un parámetro del hook
     // (`vivo`), justamente para que no vuelva a haber dos definiciones.
-    const aMano = Object.entries(FUENTES).filter(([ruta, texto]) => {
-      if (ruta.includes('.test.') || ruta.includes('galeria')) return false;
-      // El hook ES la definición: es el único que puede nombrar la clave así.
-      if (/(^|\/)dashboard\.ts$/.test(ruta)) return false;
-      // `invalidateQueries` sobre la clave es lo correcto y hay diez: eso no
-      // crea un observador con política propia, que es lo único que rompe.
-      return texto
-        .split('\n')
-        .some((linea) => /queryKey:\s*\['dashboard'\]/.test(linea) && !linea.includes('invalidateQueries'));
-    });
-    expect(aMano.map(([ruta]) => ruta)).toEqual([]);
+    expect(quienesDeclaran(/queryKey:\s*\['dashboard'\]/, /(^|\/)dashboard\.ts$/)).toEqual([]);
+  });
+
+  it('y lo mismo para «Hoy»: su clave la declara `hoy.ts` y nadie más', () => {
+    expect(quienesDeclaran(/queryKey:\s*\['dashboard',\s*'hoy'/, /(^|\/)hoy\.ts$/)).toEqual([]);
   });
 });

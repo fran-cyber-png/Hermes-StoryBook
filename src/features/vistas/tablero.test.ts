@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest';
+import { ETAPA_ROTULO } from '../../lib/etapas';
 import {
   ANCHO_COLUMNA_COLAPSADA,
   ANCHO_MIN_COLUMNA,
   COLUMNAS_TRABAJO,
   columnasDe,
+  contarHoy,
   etapaDeTarjeta,
   plantillaColumnas,
   quedanPorTraer,
@@ -116,6 +118,85 @@ describe('repartirColumnas — dónde cae cada tarjeta', () => {
   });
 });
 
+/**
+ * ══ EL TABLERO QUE REPARTE ES EL QUE PIDIÓ LAS COLUMNAS ═════════════════════
+ *
+ * 🔴 **Lo encontró la galería el día que se sembró «Simpatizan 181» (#785).**
+ * `repartirColumnas` armaba sus mapas con `COLUMNAS_TRABAJO` —las de VENTAS— en
+ * los tres lugares, así que en el tablero de campaña toda tarjeta con etapa
+ * `simpatiza`, `comprometido` o `voluntario` se caía al piso: la columna salía
+ * vacía **con su total en la cabecera y un «Ver más · faltan 177» debajo**.
+ *
+ * Nunca se vio porque esas tres columnas están en cero desde que existen. Estaba
+ * esperando al primer dato — y el primer dato lo trae la escucha (ADR 0095).
+ */
+describe('repartirColumnas en el tablero de CAMPAÑA', () => {
+  const campana = (cargadas: Array<readonly [EtapaTrabajo, ReturnType<typeof tarjeta>[]]>) =>
+    repartirColumnas(cargadas, {});
+
+  test('🔴 una tarjeta de «Simpatizan» cae en «Simpatizan», no al piso', () => {
+    const mapa = campana([
+      ['interesado', [tarjeta('a', 'interesado')]],
+      ['contactado', []],
+      ['simpatiza', [tarjeta('b', 'simpatiza')]],
+      ['comprometido', []],
+      ['voluntario', []],
+    ]);
+    expect(mapa.get('simpatiza')?.map((c) => c.clave)).toEqual(['b']);
+  });
+
+  test('🔴 y los otros dos peldaños también, que se caían por lo mismo', () => {
+    const mapa = campana([
+      ['interesado', []],
+      ['contactado', []],
+      ['simpatiza', []],
+      ['comprometido', [tarjeta('c', 'comprometido')]],
+      ['voluntario', [tarjeta('v', 'voluntario')]],
+    ]);
+    expect(mapa.get('comprometido')?.map((x) => x.clave)).toEqual(['c']);
+    expect(mapa.get('voluntario')?.map((x) => x.clave)).toEqual(['v']);
+  });
+
+  /**
+   * El mapa tiene UNA entrada por columna pedida y ninguna de más: si trajera
+   * las de ventas, la vista pediría `repartidas.get('cotizado')` en un tablero
+   * que no dibuja Cotizados y el bug volvería por la puerta de al lado.
+   */
+  test('el mapa tiene exactamente las columnas que se pidieron', () => {
+    const mapa = campana([
+      ['interesado', []],
+      ['contactado', []],
+      ['simpatiza', []],
+      ['comprometido', []],
+      ['voluntario', []],
+    ]);
+    expect([...mapa.keys()]).toEqual([
+      'interesado',
+      'contactado',
+      'simpatiza',
+      'comprometido',
+      'voluntario',
+    ]);
+    expect(mapa.has('cotizado' as EtapaTrabajo)).toBe(false);
+  });
+
+  /**
+   * Y una etapa que ESTE tablero no dibuja sigue cayéndose, que es lo correcto:
+   * `cotizado` deriva de un precio y en campaña no existe. Antes se caía por el
+   * motivo equivocado —no estaba en la lista de ventas— y ahora por el bueno.
+   */
+  test('una etapa que este tablero no dibuja se sigue descartando', () => {
+    const mapa = campana([
+      ['interesado', [tarjeta('x', 'cotizado')]],
+      ['contactado', []],
+      ['simpatiza', []],
+      ['comprometido', []],
+      ['voluntario', []],
+    ]);
+    expect([...mapa.values()].flat()).toEqual([]);
+  });
+});
+
 describe('etapaDeTarjeta — de dónde sale la etapa actual para las compuertas', () => {
   test('sin movimiento en vuelo, la manda el server (etapa_efectiva)', () => {
     expect(etapaDeTarjeta(tarjeta('a', 'cotizado'), {})).toBe('cotizado');
@@ -188,6 +269,10 @@ describe('resumirColumna — el tamaño real de la columna y el de su recorte', 
       enVentana: 47,
       paraSeguir: 0,
       seCallo: 0,
+      verdes: 0,
+      ambar: 0,
+      grises: 0,
+      rojos: 0,
     });
   });
 
@@ -219,6 +304,10 @@ describe('resumirColumna — el tamaño real de la columna y el de su recorte', 
       enVentana: 0,
       paraSeguir: 0,
       seCallo: 0,
+      verdes: 0,
+      ambar: 0,
+      grises: 0,
+      rojos: 0,
     });
   });
 
@@ -229,6 +318,10 @@ describe('resumirColumna — el tamaño real de la columna y el de su recorte', 
       enVentana: 0,
       paraSeguir: 0,
       seCallo: 0,
+      verdes: 0,
+      ambar: 0,
+      grises: 0,
+      rojos: 0,
     });
   });
 
@@ -239,7 +332,64 @@ describe('resumirColumna — el tamaño real de la columna y el de su recorte', 
       conPrecio: 0,
       paraSeguir: 0,
       seCallo: 0,
+      verdes: 0,
+      ambar: 0,
+      grises: 0,
+      rojos: 0,
     });
+  });
+});
+
+/**
+ * «N HOY» EN CADA COLUMNA — el HOY del dueño (10-sep-2026), columna por columna.
+ * Suma la fila de arriba y cada columna con la MISMA función: si «nuevas hoy»
+ * de arriba no cerrara con la suma de las columnas, sería un bug.
+ */
+describe('contarHoy — cuántas nacieron hoy', () => {
+  const d: FilaDesglose[] = [
+    { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, nacioHoy: true, n: 4 },
+    { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, nacioHoy: false, n: 90 },
+    { etapa: 'contactado', yaLeHablamos: true, precio: false, viva: false, nacioHoy: true, n: 2 },
+  ];
+
+  test('suma sólo las etapas que se le piden', () => {
+    expect(contarHoy(d, ['cotizado'])).toBe(4);
+    expect(contarHoy(d, ['cotizado', 'contactado'])).toBe(6);
+    expect(contarHoy(d, ['cierre'])).toBe(0);
+  });
+
+  test('🔴 sin el campo (server viejo) es null, no cero — y sin desglose también', () => {
+    const viejo: FilaDesglose[] = [{ etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, n: 5 }];
+    expect(contarHoy(viejo, ['cotizado'])).toBeNull();
+    expect(contarHoy(undefined, ['cotizado'])).toBeNull();
+  });
+
+  /**
+   * El «N hoy» de una columna describe la lista que se VE. Con «Verdes» puesto,
+   * «98 hoy» encima de «73 de 1.109» contaba gente que la columna no muestra
+   * (lo encontró la revisión de spec). El desglose trae la luz y las marcas de
+   * los recortes en la misma fila, así que el cruce sale de la misma foto.
+   */
+  test('🔴 con un recorte puesto cuenta sólo las de ese recorte', () => {
+    const conMarcas: FilaDesglose[] = [
+      { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, luz: 'verde', paraSeguir: false, nacioHoy: true, n: 3 },
+      { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, luz: 'ambar', paraSeguir: true, nacioHoy: true, n: 5 },
+      { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, luz: 'ambar', paraSeguir: true, nacioHoy: false, n: 50 },
+    ];
+    expect(contarHoy(conMarcas, ['cotizado'])).toBe(8);
+    expect(contarHoy(conMarcas, ['cotizado'], 'todas')).toBe(8);
+    expect(contarHoy(conMarcas, ['cotizado'], 'verde')).toBe(3);
+    expect(contarHoy(conMarcas, ['cotizado'], 'seguir')).toBe(5);
+    expect(contarHoy(conMarcas, ['cotizado'], 'rojo')).toBe(0);
+  });
+
+  test('🔴 un recorte que el desglose no sabe cruzar (escribió hoy, sin respuesta 24 h) calla: null, no un número inventado', () => {
+    const conMarcas: FilaDesglose[] = [
+      { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, nacioHoy: true, n: 3 },
+      { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, nacioHoy: false, n: 9 },
+    ];
+    expect(contarHoy(conMarcas, ['cotizado'], 'escribioHoy')).toBeNull();
+    expect(contarHoy(conMarcas, ['cotizado'], 'sinRespuesta24h')).toBeNull();
   });
 });
 
@@ -308,6 +458,67 @@ describe('las columnas de campaña', () => {
     for (const col of columnasDe('campana')) {
       expect(col.vacio.length, `«${col.id}» sin texto de vacío`).toBeGreaterThan(10);
       expect(col.pista.length, `«${col.id}» sin pista`).toBeGreaterThan(10);
+    }
+  });
+});
+
+/**
+ * EL ORDEN DE LA COLUMNA EN CAMPAÑA (pedido del dueño, 13-sep-2026): «en verde no
+ * debe estar encima de los naranjas; se respeta el tiempo, el color no reordena».
+ * El server ya manda cada columna ordenada por tiempo; en campaña se deja así.
+ */
+describe('repartirColumnas — el orden por luz es de ventas', () => {
+  const delServer: [EtapaTrabajo, { clave: string; etapa_efectiva: string; luz: 'gris' | 'verde'; respondida: boolean }[]][] = [
+    [
+      'contactado',
+      [
+        { clave: 'reciente-gris', etapa_efectiva: 'contactado', luz: 'gris', respondida: false },
+        { clave: 'vieja-verde', etapa_efectiva: 'contactado', luz: 'verde', respondida: false },
+      ],
+    ],
+  ];
+
+  test('🔴 sin orden por luz, la columna queda en el orden del server: el tiempo', () => {
+    const mapa = repartirColumnas(delServer, {}, { ordenarPorLuz: false });
+    expect(mapa.get('contactado')!.map((t) => t.clave)).toEqual(['reciente-gris', 'vieja-verde']);
+  });
+
+  test('ventas sigue igual: el verde sube', () => {
+    expect(repartirColumnas(delServer, {}).get('contactado')!.map((t) => t.clave)).toEqual(['vieja-verde', 'reciente-gris']);
+  });
+
+  test('lo que se acaba de arrastrar sigue entrando arriba, con o sin orden por luz', () => {
+    const conMovida = repartirColumnas(
+      [...delServer, ['simpatiza', [{ clave: 'movida', etapa_efectiva: 'simpatiza', luz: 'gris', respondida: true }]]],
+      { movida: 'contactado' },
+      { ordenarPorLuz: false },
+    );
+    expect(conMovida.get('contactado')!.map((t) => t.clave)).toEqual(['movida', 'reciente-gris', 'vieja-verde']);
+  });
+});
+
+/**
+ * «RESPONDIDOS» (pedido del dueño, 13-sep-2026): en campaña la columna de
+ * `contactado` se llama por lo que hizo quien atiende. El rótulo canónico de la
+ * etapa no cambia —la ficha y ventas lo siguen leyendo—; lo que cambia es el título
+ * de ESA columna en ESE tablero.
+ */
+describe('los títulos de las columnas de campaña', () => {
+  test('🔴 en campaña «Contestaron» se llama «Respondidos», y en ventas no cambia', () => {
+    const campana = columnasDe('campana').find((c) => c.id === 'contactado');
+    expect(campana?.titulo).toBe('Respondidos');
+    expect(campana?.pista).toMatch(/respondiste/);
+    expect(columnasDe('ventas').find((c) => c.id === 'contactado')?.titulo).toBe(ETAPA_ROTULO.contactado.varios);
+  });
+
+  test('🔴 ningún título de campaña repite el de otra etapa: dos columnas con el mismo nombre no se distinguen', () => {
+    const titulos = columnasDe('campana').map((c) => c.titulo.toLowerCase());
+    expect(new Set(titulos).size).toBe(titulos.length);
+    for (const col of columnasDe('campana')) {
+      const ajenos = Object.entries(ETAPA_ROTULO)
+        .filter(([etapa]) => etapa !== col.id)
+        .map(([, r]) => r.varios.toLowerCase());
+      expect(ajenos, `«${col.titulo}» es el nombre de otra etapa`).not.toContain(col.titulo.toLowerCase());
     }
   });
 });

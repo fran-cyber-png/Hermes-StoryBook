@@ -85,8 +85,21 @@ export interface QuienMira {
 // era reabrir la cicatriz de `Luz`/`luz` en un control de ESCRITURA — que es
 // justamente donde comparar exacto no da error, da que Luz no reconoce lo suyo.
 export function mismaVendedora(a: string, b: string): boolean {
-  const x = a.trim().toLowerCase();
-  return x !== '' && x === b.trim().toLowerCase();
+  const x = claveDeVendedora(a);
+  return x !== '' && x === claveDeVendedora(b);
+}
+
+/**
+ * EL ID CANÓNICO DE UNA VENDEDORA — `lower(btrim(...))`, escrito UNA vez.
+ *
+ * Es la normalización que `mismaVendedora` hace de los dos lados (candado 4) y la
+ * que usan para agrupar y filtrar la Lista del Pipeline y el puente del Dashboard.
+ * Estaba escrita cuatro veces a mano: si una se afinaba (un espacio no separable,
+ * un namespace), el filtro agrupaba con una regla y comparaba con otra — y
+ * divergir en silencio es exactamente lo que el candado 4 persigue (#37).
+ */
+export function claveDeVendedora(vendedoraId: string | null | undefined): string {
+  return (vendedoraId ?? '').trim().toLowerCase();
 }
 
 export function nombreCorto(vendedoraId: string): string {
@@ -139,7 +152,7 @@ export function rotuloDePersona(
   vendedoraId: string,
   nombres?: Record<string, string>,
 ): string {
-  const nombre = nombres?.[vendedoraId.trim().toLowerCase()]?.trim();
+  const nombre = nombres?.[claveDeVendedora(vendedoraId)]?.trim();
   return nombre || nombreCorto(vendedoraId);
 }
 
@@ -159,4 +172,31 @@ export function marcaDeDueno(fila: FilaConDueno, quien: QuienMira = {}): MarcaDu
     texto: nombreCorto(dueno),
     titulo: `Asignada a ${dueno} — puedes abrirla igual, pero ya tiene dueño`,
   };
+}
+
+/**
+ * «¿A QUIÉN ESTÁ ASIGNADA?» — la marca para quien SUPERVISA (Pipeline, 10-sep-2026).
+ *
+ * ⚠️ **Es la otra cara de `marcaDeDueno`, y no la contradice.** Aquella calla
+ * «sin dueño» porque en la cola de una vendedora es ruido; ésta lo DICE, porque
+ * para quien supervisa es justo lo que vino a mirar («para un supervisor es
+ * imprescindible ver a quién está asignado», el dueño). Medido ese día:
+ * `asignada_a` venía vacío en casi toda la mesa salvo «Compraron» (45 %), así
+ * que «Sin asignar» es la mayoría — y un hueco se leería como un dato que no
+ * cargó.
+ *
+ * Quién la VE lo decide la pantalla con `veTodo` (`dominio/lineas.ts`), la misma
+ * señal del rol que ya gobierna el selector de líneas: acá sólo se decide qué se
+ * dice.
+ */
+export interface MarcaAsignacion {
+  asignada: boolean;
+  texto: string;
+  titulo: string;
+}
+
+export function marcaDeAsignacion(fila: FilaConDueno): MarcaAsignacion {
+  const dueno = typeof fila.asignada_a === 'string' ? fila.asignada_a.trim() : '';
+  if (!dueno) return { asignada: false, texto: 'Sin asignar', titulo: 'Nadie la tiene asignada todavía' };
+  return { asignada: true, texto: nombreCorto(dueno), titulo: `Asignada a ${dueno}` };
 }

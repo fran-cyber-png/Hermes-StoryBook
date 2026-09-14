@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { comoQuery, type FiltrosPadron } from './padron';
-import { TOTAL_PADRON } from './galeriaDatos';
-import { COBERTURA_DE_FILTROS, totalIlustrativo } from './galeriaFiltrado';
+import { SIN_ASIGNAR } from './galeriaDatos';
+import { COBERTURA_DE_FILTROS, PADRON_HOY, totalIlustrativo } from './galeriaFiltrado';
 
 /**
  * EL CANDADO CONTRA LA GALERÍA DESINCRONIZADA — regla dura #9, la clase
@@ -60,7 +60,22 @@ describe('totalIlustrativo respeta cada filtro marcado `simulado`', () => {
   }
 
   test('sin ningún filtro, el total es el padrón entero', () => {
-    expect(totalSinFiltros).toBe(TOTAL_PADRON);
+    expect(totalSinFiltros).toBe(PADRON_HOY);
+  });
+
+  /**
+   * LAS VISTAS «SIN ASIGNAR» PROMETEN UNA CIFRA Y LA TABLA TIENE QUE DAR ESA — la
+   * vista cruza una etapa con `sinHabilitar`, y sin el cruce el mock devolvía la
+   * etapa del padrón ENTERO (5.796) bajo una vista que decía 5.792.
+   */
+  test('«En negociación» sin asignar da la cifra de la captura, no la del padrón entero', () => {
+    const params = new URLSearchParams(comoQuery({ etapa: ['delivered'], sinHabilitar: true }));
+    expect(totalIlustrativo(params, SIN_REPARTIDOS)).toBe(5_792);
+  });
+
+  test('«Sin asignar» a secas da los 73.200 de la captura', () => {
+    const params = new URLSearchParams(comoQuery({ sinHabilitar: true }));
+    expect(totalIlustrativo(params, SIN_REPARTIDOS)).toBe(SIN_ASIGNAR.total);
   });
 });
 

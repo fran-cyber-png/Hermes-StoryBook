@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink, Lock, Send } from 'lucide-react';
-import { api } from '../../lib/datos/cliente';
-import { agruparPorDia, SeparadorDia, SkeletonHilo, tintaSeparador } from '../whatsapp/HiloWhatsapp';
+import { api, ErrorApi } from '../../lib/datos/cliente';
+import { agruparPorDia, MediaEnBurbuja, SeparadorDia, SkeletonHilo, tintaSeparador } from '../whatsapp/HiloWhatsapp';
+import { BotonDescargarAdjunto } from '../whatsapp/BotonDescargarAdjunto';
+import type { MediaHilo } from '../whatsapp/conversacionWa';
+import { CabeceraDeChat } from './CabeceraDeChat';
 import type { Conversacion } from '../../dominio/conversaciones';
 
 /**
@@ -28,6 +31,13 @@ interface Mensaje {
   autor: string;
   texto: string | null;
   occurred_at: string;
+  /**
+   * Lo que mandó además del texto (una foto, un audio), ya bajado por el server al
+   * llegar (`server/src/meta/adjuntosDeMeta.ts`). Tiene la misma forma que la media
+   * de WhatsApp, así que se dibuja y se descarga con los mismos componentes.
+   * Ausente en un server viejo y `null` en lo que entró antes del 11-sep-2026.
+   */
+  adjuntos?: MediaHilo[] | null;
 }
 
 /**
@@ -52,7 +62,23 @@ function useHiloMessenger(canal: string, personaId: string | null) {
   });
 }
 
-export function HiloMessenger({ conversacion }: { conversacion: Conversacion }) {
+export function HiloMessenger({
+  conversacion,
+  miVendedora,
+  esDeCampana,
+  onAbrirOtra,
+  senales,
+  onVolver,
+}: {
+  conversacion: Conversacion;
+  /** Ver el mismo prop en `HiloWhatsapp` — viaja hasta `<BarraGestion embebida>`. */
+  miVendedora?: string | null;
+  esDeCampana?: boolean;
+  onAbrirOtra?: (o: { clave: string; telefono: string | null }) => void;
+  senales?: { registrar: number; estado: number; etiqueta: number; agendar: number };
+  /** El celular: volver a la lista. Ver `CabeceraDeChat.onVolver`. */
+  onVolver?: () => void;
+}) {
   const { data, isPending, isError, refetch } = useHiloMessenger(conversacion.canal, conversacion.persona_id);
   const finRef = useRef<HTMLDivElement>(null);
 
@@ -64,18 +90,29 @@ export function HiloMessenger({ conversacion }: { conversacion: Conversacion }) 
   const grupos = agruparPorDia(data?.historial ?? []);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-card shadow-panel">
-      <header className="flex shrink-0 items-center gap-2.5 border-b border-border px-4 py-3">
-        <span className="flex size-8 items-center justify-center rounded-[11px] bg-secondary font-heading text-xs font-bold text-navy-ink">
-          {nombre.slice(0, 2).toUpperCase()}
-        </span>
-        <div className="min-w-0">
-          <div className="truncate font-heading text-sm font-bold text-foreground">{nombre}</div>
-          <div className="text-xs text-muted-foreground">
-            Messenger · {data ? `${data.total} mensajes` : 'cargando…'}
-          </div>
-        </div>
-      </header>
+    // En el celular ocupa la pantalla entera, con las mismas clases `max-md:`
+    // que `HiloWhatsapp` (ver el comentario de su contenedor). Sin `AjusteTeclado`
+    // acá: el alto queda en `100dvh`, alcanza para leer y para el redactor corto.
+    <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-card shadow-panel max-md:fixed max-md:inset-x-0 max-md:top-0 max-md:z-30 max-md:h-dvh max-md:rounded-none max-md:shadow-none">
+      {/* La misma cabecera que WhatsApp y los comentarios de FB/IG (08-sep-2026,
+          pedido del dueño) — ver `CabeceraDeChat`. Acá no hay foto (Messenger
+          no la trae) y el subtítulo es cuántos mensajes se capturaron, en vez
+          de un teléfono. */}
+      <CabeceraDeChat
+        conversacion={conversacion}
+        miVendedora={miVendedora}
+        esDeCampana={esDeCampana}
+        onAbrirOtra={onAbrirOtra}
+        senales={senales}
+        onVolver={onVolver}
+        avatar={
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-[11px] bg-secondary font-heading text-xs font-bold text-navy-ink">
+            {nombre.slice(0, 2).toUpperCase()}
+          </span>
+        }
+        nombre={nombre}
+        subtitulo={<>Messenger · {data ? `${data.total} mensajes` : 'cargando…'}</>}
+      />
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden bg-muted/30 p-4">
         {isPending ? (
@@ -115,20 +152,36 @@ export function HiloMessenger({ conversacion }: { conversacion: Conversacion }) 
             <div key={g.clave} className="space-y-2">
               <SeparadorDia etiqueta={g.etiqueta} tinta={tintaSeparador(gi === grupos.length - 1, g.ultimo)} />
               {g.items.map((m) => (
-                <div key={m.id} className={'flex ' + (m.direccion === 'saliente' ? 'justify-end' : 'justify-start')}>
+                <div
+                  key={m.id}
+                  className={
+                    // `group/burbuja`: Descargar aparece al pasar por ESTA fila, como en WhatsApp.
+                    'group/burbuja flex items-end gap-1 ' +
+                    (m.direccion === 'saliente' ? 'flex-row-reverse justify-start' : 'justify-start')
+                  }
+                >
                   <div
                     className={
-                      'max-w-[75%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm ' +
+                      'max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm md:max-w-[75%] ' +
                       (m.direccion === 'saliente'
                         ? 'rounded-br-md bg-secondary text-navy-ink shadow-[0_1px_2px_rgba(14,42,82,0.06)]'
                         : 'rounded-bl-md bg-card text-foreground ring-1 ring-border')
                     }
                   >
-                    {m.texto ?? <span className="italic text-muted-foreground">(sin texto)</span>}
+                    {m.adjuntos?.map((a) => (
+                      <div key={a.archivo} className="mb-1.5">
+                        <MediaEnBurbuja media={a} cuando={m.occurred_at} />
+                      </div>
+                    ))}
+                    {m.texto ??
+                      (m.adjuntos?.length ? null : <span className="italic text-muted-foreground">(sin texto)</span>)}
                     <div className="mt-0.5 text-right font-mono text-[11px] text-muted-foreground">
                       {new Date(m.occurred_at).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </div>
+                  {m.adjuntos?.map((a) => (
+                    <BotonDescargarAdjunto key={a.archivo} media={a} cuando={m.occurred_at} />
+                  ))}
                 </div>
               ))}
             </div>
@@ -163,6 +216,26 @@ export function HiloMessenger({ conversacion }: { conversacion: Conversacion }) 
  * divergirían mudas — con el agravante de que el reloj del cliente lo pone el
  * usuario.
  */
+const NO_SALIO = 'No se pudo enviar. Puedes intentarlo de nuevo en un momento.';
+
+/**
+ * EL MOTIVO REAL, ya traducido por el server — o el genérico cuando no dijo nada.
+ *
+ * 🔴 **Leía `.error` de un `ErrorApi`, que no tiene esa propiedad** (4-sep-2026):
+ * el server contestaba «Esta persona no puede recibir mensajes de la página…» y
+ * acá se veía siempre el genérico, que invita a reintentar contra un rechazo que
+ * reintentar no cambia. Siete intentos en seis minutos, medidos en producción.
+ *
+ * El genérico queda SOLO para lo que no trajo texto: una caída de nginx (cuerpo
+ * HTML) o un fallo de red antes de llegar al server.
+ */
+function motivoDelRechazo(e: unknown): string {
+  if (!(e instanceof ErrorApi)) return NO_SALIO;
+  const c = e.cuerpo;
+  const dijoAlgo = typeof c?.error === 'string' || typeof c?.message === 'string';
+  return dijoAlgo ? e.message : NO_SALIO;
+}
+
 function RedactorMessenger({
   canal,
   personaId,
@@ -220,7 +293,7 @@ function RedactorMessenger({
   const puedeMandar = Boolean(texto.trim()) && !enviar.isPending;
 
   return (
-    <footer className="shrink-0 border-t border-border bg-card px-3 py-2.5">
+    <footer className="shrink-0 border-t border-border bg-card px-3 py-2.5 max-md:pb-[calc(0.625rem+env(safe-area-inset-bottom))]">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -242,13 +315,13 @@ function RedactorMessenger({
           rows={1}
           placeholder="Escribe por Messenger…"
           disabled={enviar.isPending}
-          className="max-h-28 min-h-[38px] flex-1 resize-y rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+          className="max-h-28 min-h-[38px] flex-1 resize-y rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60 max-md:min-h-11 max-md:text-base"
         />
         <button
           type="submit"
           disabled={!puedeMandar}
           aria-label="Enviar por Messenger"
-          className="flex size-[38px] shrink-0 items-center justify-center rounded-xl bg-primary text-white transition-opacity hover:opacity-90 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex size-[38px] shrink-0 items-center justify-center rounded-xl bg-primary text-white transition-opacity hover:opacity-90 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 max-md:size-11"
         >
           <Send size={16} />
         </button>
@@ -256,12 +329,7 @@ function RedactorMessenger({
 
       <p className="mt-1.5 px-0.5 text-[11px] text-muted-foreground">
         {enviar.isError ? (
-          // El motivo REAL, ya traducido por el server. Un «error al enviar»
-          // genérico deja a la vendedora sin saber si reintentar sirve.
-          <span className="font-semibold text-destructive">
-            {(enviar.error as { error?: string } | undefined)?.error ??
-              'No se pudo enviar. Puedes intentarlo de nuevo en un momento.'}
-          </span>
+          <span className="font-semibold text-destructive">{motivoDelRechazo(enviar.error)}</span>
         ) : (
           ventana.explicacion
         )}

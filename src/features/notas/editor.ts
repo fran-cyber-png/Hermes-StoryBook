@@ -1,36 +1,27 @@
 import { BlockNoteSchema, defaultBlockSpecs, defaultStyleSpecs } from '@blocknote/core';
+import type { BlockNoteEditor } from '@blocknote/core';
 import { es } from '@blocknote/core/locales';
 import { ESTILOS_PROPIOS, Fuente, Tamano } from './estilosDeTexto';
 
 /**
- * CÓMO SE CONFIGURA EL EDITOR DE LA LIBRETA — y las dos cosas que estaban mal.
+ * CÓMO SE CONFIGURA EL EDITOR DE LA LIBRETA — y las cosas que estaban mal.
  *
  * `useCreateBlockNote` recibía SOLO `initialContent`, así que mandaba todo el
  * default de BlockNote. Dos consecuencias, las dos visibles el primer día:
  *
  *  1. **El editor entero estaba en inglés** dentro de una app 100 % en español:
  *     el menú de «/», los placeholders, la barra de formato, todo.
- *  2. **Ofrecía bloques de archivo que no se pueden guardar.**
+ *  2. **Ofrecía bloques de archivo que no se podían guardar.**
  *
- * ══ POR QUÉ SALEN LOS BLOQUES DE ARCHIVO ════════════════════════════════════
- *
- * `image` / `video` / `audio` / `file` tienen contenido `"none"`: su URL, su
- * nombre y su caption viven en `props`. El server deriva el texto plano con
- * `aTextoPlano`, que lee `text`/`content`/`children`/`rows`/`cells` y **nunca
- * props** (por diseño). Entonces una página que sea SOLO una imagen aplana a
- * cadena vacía, `validarTexto` la rechaza por vacía y el 400 se perdía.
- *
- * El ítem «Image» aparecía en el «/» aunque no hubiera `uploadFile`, y el file
- * panel dejaba pegar una URL: el camino estaba abierto y terminaba en una
- * página que no se guarda nunca, sin aviso.
- *
- * Sacarlos del schema es **barato AHORA y caro después**: hoy no hay ni un
- * documento viejo que los contenga (la tabla venía de cero filas). Cuando los
- * haya, sacarlos del schema los rompe al abrir.
- *
- * Cuando existan los adjuntos de verdad (`uploadFile` + `resolveFileUrl` +
- * almacenamiento), esto se revierte junto con el arreglo del aplanado — no
- * antes, o vuelve el mismo agujero.
+ * `image`/`video`/`audio`/`file` tienen contenido `"none"` (su URL vive en
+ * `props`), y el server deriva el texto plano con `aTextoPlano`, que lee
+ * `text`/`content`/`children`/`rows`/`cells` y **nunca `props`** (por diseño,
+ * ver `textoPlano.ts`) — así que una página que fuera SOLO uno de estos
+ * bloques aplanaba a cadena vacía y `validarTexto` la rechazaba por «vacía»,
+ * sin que nadie viera por qué. Reactivar cualquiera de los cuatro exige el
+ * mismo trío junto: `uploadFile`, `resolveFileUrl` y un arreglo del aplanado
+ * que le diga a `prepararContenido` que esa página no está vacía — ninguno
+ * de los tres existe todavía, así que los cuatro se sacan del esquema acá.
  */
 
 // Los cuatro se descartan por desestructuración: el `_` es la convención del
@@ -43,7 +34,7 @@ const {
   ...BLOQUES_QUE_SE_PUEDEN_GUARDAR
 } = defaultBlockSpecs;
 
-/** Los cuatro que se sacaron, para que el test los pueda nombrar sin adivinar. */
+/** Los que se retiran, para que el test los pueda nombrar sin adivinar. */
 export const BLOQUES_RETIRADOS = ['image', 'video', 'audio', 'file'] as const;
 
 /**
@@ -63,6 +54,20 @@ export const ESQUEMA_LIBRETA = BlockNoteSchema.create({
   // para el documento guardado está escrito en `estilosDeTexto.tsx`.
   styleSpecs: { ...defaultStyleSpecs, fuente: Fuente, tamano: Tamano },
 });
+
+/**
+ * EL TIPO DEL EDITOR DE LA LIBRETA, especializado a `ESQUEMA_LIBRETA` — no el
+ * `BlockNoteEditor` a secas, que trae el esquema DEFAULT (con `image` y
+ * compañía) y no es asignable desde/hacia una instancia creada con este
+ * esquema recortado. Lo necesita cualquier lugar que reciba la instancia viva
+ * del editor por prop (`dibujo/anclaje.ts`, `CapaDeAnotaciones`, `Libreta`),
+ * en vez de repetir los tres genéricos a mano en cada uno.
+ */
+export type EditorLibreta = BlockNoteEditor<
+  (typeof ESQUEMA_LIBRETA)['blockSchema'],
+  (typeof ESQUEMA_LIBRETA)['inlineContentSchema'],
+  (typeof ESQUEMA_LIBRETA)['styleSchema']
+>;
 
 /**
  * 🔴 UN BLOQUE QUE EL ESQUEMA NO CONOCE TUMBA LA APP ENTERA, NO LA NOTA.

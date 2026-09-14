@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/datos/cliente';
 
 export interface LlamadaEnTimeline {
@@ -21,24 +21,5 @@ export function useHistorialLlamadas(personaId: string | null, activo = true) {
     enabled: activo && personaId != null && personaId !== '',
     queryFn: () => api<HistorialLlamadas>(`/api/llamadas/historial/${personaId}`),
     staleTime: 30_000,
-  });
-}
-
-interface ResultadoPermiso {
-  ok: boolean;
-  mensaje?: string;
-}
-
-export function useIniciarLlamada() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (variables: { telefono: string; texto?: string }) =>
-      api<ResultadoPermiso>('/api/llamadas/iniciar', {
-        method: 'POST',
-        body: JSON.stringify(variables),
-      }),
-    onSuccess: (_data, variables) => {
-      void qc.invalidateQueries({ queryKey: ['llamadas', variables.telefono] });
-    },
   });
 }

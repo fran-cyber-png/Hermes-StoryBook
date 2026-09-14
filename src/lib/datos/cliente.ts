@@ -284,7 +284,10 @@ export async function api<T>(ruta: string, init?: RequestInit): Promise<T> {
         ? cuerpo.errors
         : undefined;
     throw new ErrorApi(
-      cuerpo.message ?? `Error ${res.status}`,
+      // `message` es la canónica (305 rutas); `error` es la otra (11, `routes/persona.ts` entre
+      // ellas — medido el 4-sep-2026). Leer sólo la primera aplanaba el rechazo de Meta ya
+      // traducido a «Error 502», y el hilo de Messenger mostraba su genérico encima.
+      cuerpo.message ?? (typeof cuerpo.error === 'string' ? cuerpo.error : undefined) ?? `Error ${res.status}`,
       res.status,
       cuerpo.type,
       errores,
@@ -317,4 +320,16 @@ export const claves = {
   persona: (id: number) => ['persona', id] as const,
   cuentasPauta: () => ['config', 'cuentas-pauta'] as const,
   cuentasMeta: () => ['meta', 'ad-accounts'] as const,
+  /**
+   * Lo que un comentario ya tiene respondido y quién más lo tiene abierto
+   * (`features/canales/respuestaUnica.ts`). Vive acá porque la invalidan DOS
+   * lugares: el panel y el SSE (`tiempoReal.ts`). Con la clave escrita dos
+   * veces, el aviso en vivo refrescaría una consulta que nadie pidió.
+   */
+  estadoDeRespuesta: (interactionId: number) => ['responder', 'estado', interactionId] as const,
+  /**
+   * Quién tiene abierto cada comentario, para las pastillas de la cola y del
+   * Pipeline (ADR 0121). La invalidan las pastillas y el SSE, por el mismo motivo.
+   */
+  presenciasDeComentarios: () => ['responder', 'presencias'] as const,
 } as const;

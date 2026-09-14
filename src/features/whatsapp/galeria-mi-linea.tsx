@@ -15,6 +15,7 @@ import { VistaMiLinea, type PasoMiLinea } from './VincularMiWhatsapp';
  *     npx vite --port 5199
  *     → http://localhost:5199/galeria-mi-linea.html?paso=formulario
  *     → ?paso=qr | conectado | conectado_sin_montar | baneado | error
+ *     → ?paso=revinculando  (el campo prellenado, con el número REAL de México)
  */
 
 const QR_DEMO =
@@ -38,6 +39,33 @@ const PASOS: Record<string, PasoMiLinea> = {
     onNumero: () => {},
     onVincular: () => {},
     error: 'ese número ya está registrado en Hermes',
+  },
+  /**
+   * 🔴 EL CASO REAL, CON EL NÚMERO REAL — no uno inventado (regla dura #10).
+   *
+   * `5215610584485` es la línea de México: trece dígitos, con el «1» heredado que
+   * el teléfono de la vendedora **no muestra**. Es justo la forma que hacía
+   * imposible adivinar el valor cuando el campo salía vacío, así que un
+   * `51955135507` de ejemplo escondería exactamente lo que hay que ver.
+   */
+  revinculando: {
+    tipo: 'formulario',
+    numero: '5215610584485',
+    onNumero: () => {},
+    onVincular: () => {},
+    error: null,
+    esReVinculacion: true,
+  },
+  /** El 409 que antes no decía cuál era el número bueno. */
+  revinculando_otro_numero: {
+    tipo: 'formulario',
+    numero: '525610584485',
+    onNumero: () => {},
+    onVincular: () => {},
+    error:
+      'ya tienes la línea 5215610584485 a tu nombre. Puedes volver a vincular ESA ' +
+      '(escribe ese mismo número), pero para cambiarla por otra habla con quien administra Hermes',
+    esReVinculacion: true,
   },
   esperando: { tipo: 'esperando', onCancelar: () => {} },
   qr: { tipo: 'qr', qr: QR_DEMO, onCancelar: () => {} },

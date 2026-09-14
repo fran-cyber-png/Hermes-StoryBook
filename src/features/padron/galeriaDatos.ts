@@ -62,3 +62,23 @@ export const NOMBRES = [
 ] as const;
 
 export const TOTAL_PADRON = 73_145;
+
+/**
+ * LO QUE LA PANTALLA DEL DUEÑO MOSTRABA EL 10-SEP-2026 — su captura, en tema
+ * oscuro, con «sin repartir» puesto. Son los únicos números de HOY que tiene
+ * esta galería: el SSH a producción no estuvo disponible para medir el resto.
+ *
+ * ⚠️ **De la captura salen sólo cuatro cifras**: `total` (73.200), «Contactado»
+ * (850, la suma de sus tres valores), «En negociación» (5.792) y `ventasMeta`
+ * (7.025). El reparto valor por valor de `etapa` es PROPORCIONAL a lo medido el
+ * 24-ago (`FACETAS.etapa`) para que los grupos den esas cifras y el total cuadre:
+ * sirve para fotografiar la pantalla, no como dato de un valor suelto.
+ */
+export const SIN_ASIGNAR = {
+  total: 73_200,
+  etapa: [
+    ['contacted', 61410], ['delivered', 5792], ['sold', 4972], ['interested', 667],
+    ['new', 140], ['follow_up', 137], ['recontact', 46], ['resold', 28], ['lost', 7], ['client', 1],
+  ],
+  ventasMeta: 7_025,
+} satisfies { total: number; etapa: [string, number][]; ventasMeta: number };

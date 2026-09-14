@@ -6,6 +6,7 @@ import { arrancarTema } from '../../lib/tema';
 import { queryClient } from '../../lib/datos/cliente';
 import { AvisoFilaQueBajo } from './AvisoFilaQueBajo';
 import { BarraFiltros } from './BarraFiltros';
+import { opcionesDeLinea } from './alcance';
 import { FilaConversacion } from './FilaConversacion';
 import type { FiltroSec } from '../../dominio/cola';
 import type { Conversacion } from '../../dominio/conversaciones';
@@ -289,6 +290,23 @@ const LINEAS: LineaWhatsapp[] = [
   { numero: '51963139984', etiqueta: 'Campaña Betto', estado: 'conectado', transporte: 'whatsmeow' },
 ];
 
+/**
+ * LAS LÍNEAS TAL CUAL ESTÁN EN PRODUCCIÓN el 7-sep-2026, con lo que cada una
+ * tiene en la ventana de 30 días (`interactions` × `numeros_wa`) y con el mapa
+ * de `alex`: una sola línea suya, `51984429504`.
+ *
+ * ⚠️ Los rótulos y los números son los REALES a propósito (regla de la cabecera
+ * de este archivo): con líneas inventadas, el caso de abajo se vería igual de
+ * bien con la regla rota.
+ */
+const LINEAS_DE_ALEX: LineaWhatsapp[] = [
+  { numero: '51970356062', etiqueta: 'luz', estado: 'conectado', transporte: 'whatsmeow' },
+  { numero: '51984429504', etiqueta: 'Ventas Meta', estado: 'conectado', mias: true, compartida: true, transporte: 'cloud-api' },
+  { numero: '593969185042', etiqueta: 'Darian', estado: 'conectado', transporte: 'whatsmeow' },
+  { numero: '51986855496', etiqueta: 'Darwin', estado: 'conectado', transporte: 'whatsmeow' },
+  { numero: '5215610584485', etiqueta: 'Libros Mx', estado: 'conectado', transporte: 'whatsmeow' },
+];
+
 function Galeria() {
   const [filtroSec, setFiltroSec] = useState<FiltroSec>('');
 
@@ -310,14 +328,59 @@ function Galeria() {
             filtroSec={filtroSec}
             onFiltro={setFiltroSec}
             conteos={CONTEOS}
-            lineas={LINEAS}
+            opciones={opcionesDeLinea(LINEAS, true)}
             lineaActiva=""
             onLinea={() => {}}
-            hayMias
             categoriaActiva={null}
             onCategoria={() => {}}
             onListas={() => {}}
           />
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-3">
+          <p className="mb-2 px-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+            🔴 El supervisor y su línea — el defecto del 7-sep-2026, antes y después
+          </p>
+          <p className="mb-3 px-1 text-xs leading-relaxed text-muted-foreground">
+            <code>alex</code> es <strong>supervisor</strong> y el mapa le asigna UNA línea
+            (Ventas Meta). El selector decidía mirando sólo el mapa: una opción, el control no se
+            dibujaba y <code>lineaEfectiva</code> le clavaba esa línea. Su pantalla decía{' '}
+            <strong>2.346 en cola</strong> —el conteo exacto de Ventas Meta— mientras el server le
+            servía las <strong>7.178</strong> de la mesa entera.
+          </p>
+          <p className="mb-1 px-1 text-xs font-semibold text-muted-foreground">
+            ANTES (<code>veTodo</code> afuera): sin selector. No hay forma de salir de Ventas Meta.
+          </p>
+          <div className="mb-4 rounded-lg border border-dashed border-destructive/40 p-2">
+            <BarraFiltros
+              filtroSec=""
+              onFiltro={() => {}}
+              conteos={CONTEOS}
+              opciones={opcionesDeLinea(LINEAS_DE_ALEX, true)}
+              lineaActiva="51984429504"
+              onLinea={() => {}}
+              categoriaActiva={null}
+              onCategoria={() => {}}
+              onListas={() => {}}
+            />
+          </div>
+          <p className="mb-1 px-1 text-xs font-semibold text-muted-foreground">
+            DESPUÉS (con el rol): «Todas» primera —es a donde cae <code>lineaEfectiva</code>—,
+            «Las mías» como atajo a lo suyo, y las cinco líneas vivas.
+          </p>
+          <div className="rounded-lg border border-dashed border-primary/40 p-2">
+            <BarraFiltros
+              filtroSec=""
+              onFiltro={() => {}}
+              conteos={CONTEOS}
+              opciones={opcionesDeLinea(LINEAS_DE_ALEX, true, true)}
+              lineaActiva=""
+              onLinea={() => {}}
+              categoriaActiva={null}
+              onCategoria={() => {}}
+              onListas={() => {}}
+            />
+          </div>
         </section>
 
         <section className="rounded-xl border border-border bg-card p-3">

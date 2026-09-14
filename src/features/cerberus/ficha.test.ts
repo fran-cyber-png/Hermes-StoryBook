@@ -59,4 +59,19 @@ describe('resumenCompras — la cifra que cambia el trato', () => {
       n: 2,
     });
   });
+
+  // 🔴 #1033 — qué es compra lo decide el server con `dominio/estadosVenta.ts` (1, 2 y 9). Una
+  // cotización no dice «Anulado» en su rótulo, y sumaba como si se hubiera vendido.
+  it('una venta que el server marca como no-compra no suma ni cuenta, diga lo que diga su rótulo', () => {
+    expect(
+      resumenCompras([
+        venta({ monto: '1960.00', esCompra: true }),
+        venta({ folio: 'GOB-2', monto: '2800.00', estado: 'Cotización', esCompra: false }),
+      ]),
+    ).toEqual({ moneda: 'MXN', total: 1960, n: 1 });
+  });
+
+  it('sin la marca del server (la consulta en vivo no la trae) el rótulo «Anulado» sigue decidiendo', () => {
+    expect(resumenCompras([venta({ estado: 'Anulada' })])).toBeNull();
+  });
 });

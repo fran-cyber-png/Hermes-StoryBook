@@ -26,6 +26,15 @@ import { bloquesDeTexto } from './bloques';
  */
 export const LIMITE_TEXTO = 20_000;
 
+/**
+ * EL TOPE DE FIJADAS POR APARTADO (04-sep-2026, ADR 0093) — misma advertencia
+ * que `LIMITE_TEXTO`: **copia del server** (`MAX_FIJADAS_POR_APARTADO`,
+ * `server/src/notas/notas.ts`), no la fuente de verdad. Solo se usa para
+ * redactar el aviso cuando el 409 de `editarNota` llega — la garantía real es
+ * el rechazo del server, con su `pg_advisory_xact_lock` contando de verdad.
+ */
+export const MAX_FIJADAS_POR_APARTADO = 5;
+
 /** Quién puede abrir un link (ADR 0048). Copia del server; ver `linkModelo.ts`. */
 export type Alcance = 'publico' | 'goberna';
 /** Qué puede hacer quien lo abre. `editar` NUNCA se combina con `publico`. */
@@ -52,11 +61,32 @@ export interface Nota {
    * antes de esta función, y toda histórica de `gestiones`.
    */
   anotaciones?: unknown;
+  /**
+   * ORDENA la página primero en su apartado — máximo 5 a la vez, cada
+   * apartado (la libreta privada, cada espacio) con su propio tope
+   * (`MAX_FIJADAS_POR_APARTADO` en el server). Ya NO decide si aparece en
+   * Favoritos: eso es `favorita`, un campo aparte (04-sep-2026, ADR 0093).
+   */
   fijada: boolean;
+  /**
+   * ENTRA A «FAVORITOS» (04-sep-2026, ADR 0093) — cruza TODOS los apartados
+   * (la libreta privada Y cada espacio del que la vendedora es miembro), y no
+   * tiene tope: es una marca personal, no un orden. Independiente de `fijada`.
+   *
+   * ⚠️ Opcional en la lectura, igual que `espacioId`: un server viejo no lo
+   * manda y la ausencia es `false` — nunca al revés.
+   */
+  favorita?: boolean;
   creadoAt: string;
   /** null = nunca editada. */
   editadoAt: string | null;
-  /** null = viva. No hay borrado físico. */
+  /**
+   * null = viva. Archivar es soft-delete.
+   *
+   * ⚠️ Ya no es el único destino final (03-sep-2026, Papelera): desde ahí,
+   * "Eliminar para siempre" SÍ borra la fila de verdad — `eliminarParaSiempre`
+   * en `useMutacionesNotas`, y siempre sobre algo que ya pasó por acá.
+   */
   archivadoAt: string | null;
   /**
    * 'nota' = editable, de la tabla `notas`. 'gestion' = HISTÓRICA — el texto
@@ -100,14 +130,11 @@ export interface Nota {
    */
   paginaDivididaId?: number | null;
   /**
-   * `'texto'` (BlockNote, el de siempre), `'diagrama'` (React Flow — nodos y
-   * conexiones) o `'archivo'` (un PDF/Word/txt adjuntado, 26-ago-2026). Ausente
-   * se lee como `'texto'`: un server viejo no lo manda, y toda fila de antes
-   * de este frente ES texto.
+   * `'texto'` (BlockNote, el de siempre) o `'archivo'` (un PDF/Word/txt
+   * adjuntado, 26-ago-2026). Ausente se lee como `'texto'`: un server viejo
+   * no lo manda, y toda fila de antes de este frente ES texto.
    */
-  tipo?: 'texto' | 'diagrama' | 'archivo';
-  /** El diagrama de React Flow, o `null`/ausente si `tipo !== 'diagrama'`. */
-  diagrama?: { nodes: unknown[]; edges: unknown[] } | null;
+  tipo?: 'texto' | 'archivo';
   /** El documento adjuntado, o `null`/ausente si `tipo !== 'archivo'`. */
   archivo?: { archivo: string; nombreOriginal: string; mime: string; bytes: number } | null;
 }
@@ -156,6 +183,38 @@ export function useNotas(clave: string, espacioId: number | null = null, activo 
 }
 
 /**
+ * LA PAPELERA (03-sep-2026) — SIEMPRE de la libreta privada, nunca de un
+ * espacio: "MI LIBRETA" en la barra lateral lleva "solo tú", y esa etiqueta
+ * también describe a esta vista. Mismo molde que `useNotas`, pero pidiendo
+ * `archivadas=1` en vez de `espacio` — el server rechaza la combinación de
+ * los dos (`routes/notas.ts`).
+ */
+export function usePapelera(clave: string, activo = true) {
+  return useQuery({
+    queryKey: ['notas', clave, 'papelera'],
+    queryFn: () => api<{ notas: Nota[] }>(`/api/notas?clave=${encodeURIComponent(clave)}&archivadas=1`),
+    select: (d) => ordenarNotas(d.notas),
+    enabled: activo && Boolean(clave),
+  });
+}
+
+/**
+ * FAVORITOS (04-sep-2026, ADR 0093) — CRUZA todos los apartados: la libreta
+ * privada Y cada espacio del que la vendedora es miembro, igual que la
+ * Papelera (`usePapelera`) y por el mismo motivo — una marca personal no
+ * debería depender de dónde estás parada para verla. `?favoritas=1`; el
+ * server rechaza combinarlo con `espacio` (siempre se pide sin él).
+ */
+export function useFavoritas(clave: string, activo = true) {
+  return useQuery({
+    queryKey: ['notas', clave, 'favoritas'],
+    queryFn: () => api<{ notas: Nota[] }>(`/api/notas?clave=${encodeURIComponent(clave)}&favoritas=1`),
+    select: (d) => ordenarNotas(d.notas),
+    enabled: activo && Boolean(clave),
+  });
+}
+
+/**
  * UNA PÁGINA, POR SU ID — lo que la pantalla dividida necesita para mostrar al
  * lado una página que no pertenece a la `clave`/`espacio` que `useNotas` está
  * trayendo. `null` la apaga: no hay pantalla dividida (todavía) que mirar.
@@ -169,13 +228,36 @@ export function useNotaPorId(id: number | null) {
   });
 }
 
-export function useBuscarNotas(q: string) {
+/**
+ * `clave` (03-sep-2026, opcional) — acota la búsqueda a UNA clave en vez de
+ * cruzar todas las que la vendedora puede ver. El filtro fijo de la Libreta
+ * la pasa (`CLAVE_LIBRETA`): sin esto, buscar ahí devolvía también notas
+ * pegadas a una conversación de WhatsApp. `PantallaDividida.tsx`/
+ * `PanelNotas.tsx` siguen llamando sin ella — cruzar claves ahí es a
+ * propósito, no un olvido.
+ *
+ * `activo` (03-sep-2026, opcional) — cuándo pedirla. Por default sigue
+ * siendo "solo con texto" (`termino.length > 0`), igual que siempre. El
+ * filtro fijo de la Libreta lo fuerza a `true` incluso con el buscador
+ * VACÍO cuando hay un tipo o un alcance elegidos — "dame todo lo visible
+ * de este lugar" es una búsqueda válida sin una sola letra. `?buscar=1` es
+ * la señal que el server necesita para entrar a `buscarNotas` con un `q`
+ * vacío en vez de leerlo como "no hay búsqueda, cae al `clave` de siempre" —
+ * mandarla siempre acá no cambia nada para quien sigue sin pasar `activo`,
+ * porque para ellos la pregunta solo se hace con texto de por medio.
+ */
+export function useBuscarNotas(q: string, opciones: { clave?: string; activo?: boolean } = {}) {
   const termino = q.trim();
+  const clave = opciones.clave;
+  const activo = opciones.activo ?? termino.length > 0;
   return useQuery({
-    queryKey: ['notas', 'buscar', termino],
-    queryFn: () => api<{ notas: Nota[] }>(`/api/notas?q=${encodeURIComponent(termino)}`),
+    queryKey: ['notas', 'buscar', termino, clave ?? null],
+    queryFn: () =>
+      api<{ notas: Nota[] }>(
+        `/api/notas?buscar=1&q=${encodeURIComponent(termino)}${clave ? `&clave=${encodeURIComponent(clave)}` : ''}`,
+      ),
     select: (d) => ordenarNotas(d.notas),
-    enabled: termino.length > 0,
+    enabled: activo,
   });
 }
 
@@ -191,6 +273,34 @@ export function useBuscarNotas(q: string) {
 export function useMutacionesNotas(clave: string, espacioId: number | null = null) {
   const qc = useQueryClient();
   const invalidar = () => qc.invalidateQueries({ queryKey: ['notas', clave, espacioId] });
+  /**
+   * LOS CONTADORES DE "TUS ESPACIOS" (03-sep-2026) viven en OTRA queryKey
+   * (`['espacios']`, `useEspacios` en `espacios.ts`) — nada de lo de arriba la
+   * toca. Sin este invalidado, crear/archivar/desarchivar/mover una página de
+   * un espacio corría bien pero el número de al lado de su nombre en el riel
+   * quedaba VIEJO hasta recargar la app entera: reportado como "los espacios
+   * no se están contando correctamente".
+   */
+  const invalidarEspacios = () => qc.invalidateQueries({ queryKey: ['espacios'] });
+  /**
+   * LA PAPELERA (03-sep-2026) es OTRA queryKey (`['notas', clave, 'papelera']`,
+   * `usePapelera`) — nunca la misma que `['notas', clave, espacioId]`, ni
+   * siquiera cuando `espacioId` es `null` (mi libreta privada): son dos listas
+   * que miran el MISMO `archivadoAt` desde lados opuestos. `archivar` la
+   * ignoraba, así que una página recién archivada no aparecía en la Papelera
+   * hasta recargar — reportado junto con lo de arriba como "los botones de
+   * eliminar no funcionan": no es que el botón fallara, es que la fila que
+   * había que borrar nunca llegaba a mostrarse.
+   */
+  const invalidarPapelera = () => qc.invalidateQueries({ queryKey: ['notas', clave, 'papelera'] });
+  /**
+   * FAVORITOS (04-sep-2026, ADR 0093) — mismo motivo que la Papelera arriba:
+   * otra queryKey (`['notas', clave, 'favoritas']`, `useFavoritas`) que mira
+   * el mismo campo `favorita`/`archivadoAt` desde su propio ángulo. Marcar,
+   * desmarcar, archivar (se cae de Favoritos si estaba viva) y desarchivar
+   * (puede volver a aparecer) la tienen que tocar.
+   */
+  const invalidarFavoritas = () => qc.invalidateQueries({ queryKey: ['notas', clave, 'favoritas'] });
 
   const crear = useMutation({
     mutationFn: (v: string | { texto?: string; doc?: unknown; anotaciones?: unknown }) => {
@@ -203,14 +313,28 @@ export function useMutacionesNotas(clave: string, espacioId: number | null = nul
         body: JSON.stringify({ clave, espacioId, ...cuerpo }),
       });
     },
-    onSuccess: invalidar,
+    // Nace en `espacioId`: si es un espacio de verdad, su contador subió uno.
+    onSuccess: () => Promise.all([invalidar(), invalidarEspacios()]),
   });
 
   const editar = useMutation({
-    mutationFn: (v: { id: number; texto?: string; doc?: unknown; anotaciones?: unknown; fijada?: boolean }) =>
+    mutationFn: (v: {
+      id: number;
+      texto?: string;
+      doc?: unknown;
+      anotaciones?: unknown;
+      fijada?: boolean;
+      favorita?: boolean;
+    }) =>
       api<{ ok: true; nota: Nota }>(`/api/notas/${v.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ texto: v.texto, doc: v.doc, anotaciones: v.anotaciones, fijada: v.fijada }),
+        body: JSON.stringify({
+          texto: v.texto,
+          doc: v.doc,
+          anotaciones: v.anotaciones,
+          fijada: v.fijada,
+          favorita: v.favorita,
+        }),
       }),
     onSuccess: (r) => {
       // 🔴 `useNotaPorId` (pantalla dividida, y ahora la barra de pestañas)
@@ -220,7 +344,7 @@ export function useMutacionesNotas(clave: string, espacioId: number | null = nul
       // algo más forzara un refetch (30 s de `staleTime`, o cambiar de vista
       // y volver).
       qc.setQueryData(['notas', 'por-id', r.nota.id], { ok: true as const, nota: r.nota });
-      return invalidar();
+      return Promise.all([invalidar(), invalidarFavoritas()]);
     },
   });
 
@@ -249,27 +373,17 @@ export function useMutacionesNotas(clave: string, espacioId: number | null = nul
   });
 
   /**
-   * UN DIAGRAMA DE REACT FLOW (17-ago-2026) — el gemelo de `crear`/`autoguardar`
-   * para `tipo: 'diagrama'`. Aparte y no una rama de las de arriba: un diagrama
-   * nunca manda `texto`/`doc` (no hay BlockNote de por medio), así que
-   * mezclarlos habría dejado un solo body con dos formas posibles según qué
-   * campos vinieran — más difícil de leer que dos mutaciones chicas.
-   */
-  const crearDiagrama = useMutation({
-    mutationFn: (v: { diagrama: unknown }) =>
-      api<{ ok: true; nota: Nota }>('/api/notas', {
-        method: 'POST',
-        body: JSON.stringify({ clave, espacioId, tipo: 'diagrama', diagrama: v.diagrama }),
-      }),
-    onSuccess: invalidar,
-  });
-
-  /**
-   * UN DOCUMENTO ADJUNTADO (26-ago-2026) — el gemelo de `crearDiagrama` para
-   * `tipo: 'archivo'`. Nunca se autoguarda: a diferencia del texto o el
-   * diagrama, no hay nada que la vendedora vaya cambiando en pantalla — el
-   * documento nace subido entero de una vez (`documentos.ts: subirDocumento`)
-   * y esto solo crea la fila que lo referencia.
+   * UN DOCUMENTO ADJUNTADO (26-ago-2026) — el gemelo de `crear` para
+   * `tipo: 'archivo'`. Nunca se autoguarda: a diferencia del texto, no hay
+   * nada que la vendedora vaya cambiando en pantalla — el documento nace
+   * subido entero de una vez (`documentos.ts: subirDocumento`) y esto solo
+   * crea la fila que lo referencia.
+   *
+   * Nace en `espacioId` igual que `crear` (03-sep-2026): adjuntar un
+   * documento adentro de un espacio también le sube el contador uno, así
+   * que invalida `['espacios']` por el mismo motivo — quedaba afuera y era
+   * el mismo síntoma reportado como "los espacios no se están contando
+   * correctamente", solo que por esta puerta en vez de la del texto.
    */
   const crearDocumento = useMutation({
     mutationFn: (v: { archivo: string; nombreOriginal: string; mime: string; bytes: number }) =>
@@ -277,31 +391,60 @@ export function useMutacionesNotas(clave: string, espacioId: number | null = nul
         method: 'POST',
         body: JSON.stringify({ clave, espacioId, tipo: 'archivo', archivo: v }),
       }),
-    onSuccess: invalidar,
-  });
-
-  const autoguardarDiagrama = useMutation({
-    mutationFn: (v: { id: number; diagrama: unknown }) =>
-      api<{ ok: true; nota: Nota }>(`/api/notas/${v.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ diagrama: v.diagrama }),
-      }),
-    onSuccess: (r) => {
-      qc.setQueryData<{ notas: Nota[] }>(['notas', clave, espacioId], (prev) =>
-        prev ? { notas: prev.notas.map((n) => (n.id === r.nota.id && n.origen === 'nota' ? { ...n, ...r.nota } : n)) } : prev,
-      );
-    },
+    onSuccess: () => Promise.all([invalidar(), invalidarEspacios()]),
   });
 
   const archivar = useMutation({
     mutationFn: (id: number) => api<{ ok: true; nota: Nota }>(`/api/notas/${id}/archivar`, { method: 'PATCH' }),
-    onSuccess: invalidar,
+    // Se va de la lista viva de `espacioId` (`invalidar`) Y —si `espacioId` es
+    // `null`— entra a la Papelera; si es un espacio de verdad, su contador baja
+    // uno. Y si estaba marcada favorita, se cae de Favoritos (que solo mira lo
+    // vivo) — las cuatro, siempre: es más barato refrescar una consulta de más
+    // que dejar una lista mintiendo.
+    onSuccess: () => Promise.all([invalidar(), invalidarPapelera(), invalidarEspacios(), invalidarFavoritas()]),
   });
 
-  /** El «Deshacer» del toast que sigue a archivar — el camino de vuelta que faltaba. */
+  /**
+   * El «Deshacer» del toast que sigue a archivar — el camino de vuelta que faltaba.
+   *
+   * 🔴 **Y desde el 04-sep-2026 no alcanza con `invalidar()`** (04-sep-2026,
+   * ADR 0093): esa función refresca `['notas', clave, espacioId]` con el
+   * `espacioId` con el que se CREÓ el hook (`useMutacionesNotas`), no el de la
+   * nota que se está restaurando. Restaurar SIEMPRE se dispara parada en la
+   * Papelera (`espacioId` del hook es `null`) — mientras la Papelera solo traía
+   * páginas privadas, coincidía. Ahora que también trae páginas de un espacio
+   * (ADR 0093), restaurar una de ésas dejaba el contador de "Tus espacios" bien
+   * (`invalidarEspacios` no mira `espacioId`) pero la LISTA del espacio seguía
+   * mostrando la versión vieja hasta navegar afuera y volver — reportado como
+   * «archivar/restaurar dejó de llevar a Papelera» cuando en realidad archivar
+   * y la Papelera ya andaban bien: lo que fallaba era el paso de VUELTA.
+   * `r.nota.espacioId` es la fuente de verdad de A DÓNDE vuelve, no `espacioId`
+   * del cierre — mismo criterio que ya usa `mover` con `v.destino`.
+   */
   const desarchivar = useMutation({
     mutationFn: (id: number) => api<{ ok: true; nota: Nota }>(`/api/notas/${id}/desarchivar`, { method: 'PATCH' }),
-    onSuccess: invalidar,
+    // Simétrico a `archivar`: sale de la Papelera y vuelve a la lista viva —
+    // la de la nota, no la del hook.
+    onSuccess: (r) =>
+      Promise.all([
+        invalidar(),
+        qc.invalidateQueries({ queryKey: ['notas', clave, r.nota.espacioId ?? null] }),
+        invalidarPapelera(),
+        invalidarEspacios(),
+        invalidarFavoritas(),
+      ]),
+  });
+
+  /**
+   * ELIMINAR PARA SIEMPRE (Papelera, 03-sep-2026) — el único DELETE físico de
+   * una nota. Solo tiene sentido desde adentro de la Papelera (el server
+   * rechaza con 400 una página que no esté ya archivada), así que invalida
+   * ESA queryKey y no la de `espacioId` — la página no vuelve a la lista viva
+   * porque nunca estuvo ahí para esta mutación, estaba en la Papelera.
+   */
+  const eliminarParaSiempre = useMutation({
+    mutationFn: (id: number) => api<{ ok: true }>(`/api/notas/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notas', clave, 'papelera'] }),
   });
 
   /**
@@ -318,10 +461,15 @@ export function useMutacionesNotas(clave: string, espacioId: number | null = nul
         method: 'PATCH',
         body: JSON.stringify({ espacioId: v.destino }),
       }),
+    // + `invalidarEspacios`: el contador de origen baja uno y el de destino
+    // sube uno (o no cambian, si alguno de los dos es la libreta privada) —
+    // la única forma de saber cuál es cuál sin duplicar la regla acá es
+    // refrescar la consulta entera.
     onSuccess: (_r, v) =>
       Promise.all([
         qc.invalidateQueries({ queryKey: ['notas', clave, espacioId] }),
         qc.invalidateQueries({ queryKey: ['notas', clave, v.destino] }),
+        invalidarEspacios(),
       ]),
   });
 
@@ -376,14 +524,13 @@ export function useMutacionesNotas(clave: string, espacioId: number | null = nul
     editar,
     archivar,
     desarchivar,
+    eliminarParaSiempre,
     autoguardar,
     mover,
     abrirLink,
     cortarLink,
     dividir,
     cortarDivision,
-    crearDiagrama,
-    autoguardarDiagrama,
     crearDocumento,
   };
 }
@@ -404,6 +551,42 @@ export function resumenDeNota(nota: Nota, tope = 90): string {
   const resto = nota.texto.slice(titulo.length).replace(/\s+/g, ' ').trim();
   return resto.length > tope ? `${resto.slice(0, tope)}…` : resto;
 }
+
+/**
+ * EL TIPO DE ARCHIVO, para el filtro del panel de "Páginas" (03-sep-2026) y
+ * para la etiqueta de cada fila (04-sep-2026, ver `ETIQUETA_DE_CLASE`).
+ * `'texto'` es una página de BlockNote de siempre. Las otras tres son un
+ * documento adjuntado, distinguidas por el MIME que ya valida
+ * `documentos.ts: TIPOS_DOCUMENTO_ACEPTADOS` — son las ÚNICAS tres que
+ * existen porque `subirDocumento` rechaza cualquier otra antes de llegar a
+ * guardarse, así que esta función nunca necesita un `'otro'`.
+ */
+export type ClaseDeArchivo = 'texto' | 'pdf' | 'word' | 'txt';
+
+export function claseDeArchivo(nota: Nota): ClaseDeArchivo {
+  if (nota.tipo !== 'archivo') return 'texto';
+  switch (nota.archivo?.mime) {
+    case 'application/pdf':
+      return 'pdf';
+    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+      return 'word';
+    default:
+      return 'txt';
+  }
+}
+
+/**
+ * LA ETIQUETA QUE CADA FILA MUESTRA (04-sep-2026, a pedido explícito) — en
+ * el lugar donde antes decía «· editada» (`FilaPagina`, `Libreta.tsx`): qué
+ * ES la página, no si se tocó desde que se creó. «Bloc» es el nombre que la
+ * vendedora reconoce para un `.txt` (Bloc de notas); el resto son literales.
+ */
+export const ETIQUETA_DE_CLASE: Record<ClaseDeArchivo, string> = {
+  texto: 'Página',
+  pdf: 'PDF',
+  word: 'Word',
+  txt: 'Bloc',
+};
 
 /**
  * El `doc` que le entra al editor. Una nota vieja (o una histórica de

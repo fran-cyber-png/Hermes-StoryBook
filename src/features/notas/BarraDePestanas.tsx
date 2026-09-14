@@ -1,4 +1,4 @@
-import { FileText, Paperclip, Workflow, X } from 'lucide-react';
+import { FileText, Paperclip, X } from 'lucide-react';
 import { tituloDeNota, useNotaPorId } from './notas';
 import type { RefPestana } from './pestanas';
 
@@ -9,9 +9,14 @@ import type { RefPestana } from './pestanas';
  * `PantallaDividida.tsx` para mostrar una página que puede no estar en la
  * lista cargada (una pestaña de OTRO espacio, por ejemplo). Cachea por id, así
  * que dos pestañas de la misma página no piden dos veces.
+ *
+ * ⚠️ El texto es `text-sm` (03-sep-2026, antes `text-xs`) — a pedido
+ * explícito, para que no se lea más chico que «Nueva página» y «Todas las
+ * páginas», que están inmediatamente abajo: las tres son parte del mismo
+ * bloque visual desde que «Nueva página» se mudó a la fila de acá debajo.
  */
 
-const ICONO_POR_TIPO = { texto: FileText, diagrama: Workflow, archivo: Paperclip } as const;
+const ICONO_POR_TIPO = { texto: FileText, archivo: Paperclip } as const;
 
 function Pestana({
   pestana,
@@ -25,12 +30,16 @@ function Pestana({
   onCerrar: () => void;
 }) {
   const nota = useNotaPorId(pestana.id);
-  const Icono = ICONO_POR_TIPO[nota.data?.tipo ?? pestana.tipo];
+  // `?? FileText`: una pestaña puede venir de `localStorage` de ANTES de un
+  // cambio como el de hoy (se sacó `copy` de `ICONO_POR_TIPO`) — sin este
+  // resguardo, un `tipo` que ya no existe en el mapa deja `Icono` en
+  // `undefined` y React se cae entero al intentar renderizarlo.
+  const Icono = ICONO_POR_TIPO[nota.data?.tipo ?? pestana.tipo] ?? FileText;
   const titulo = nota.data ? tituloDeNota(nota.data) || 'Sin título' : '…';
 
   return (
     <div
-      className={`group/pestana flex h-8 shrink-0 items-center gap-1.5 rounded-t-lg border-x border-t px-2.5 text-xs transition ${
+      className={`group/pestana flex h-8 shrink-0 items-center gap-1.5 rounded-t-lg border-x border-t px-2.5 text-sm transition ${
         activa
           ? 'border-border bg-card text-foreground'
           : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'

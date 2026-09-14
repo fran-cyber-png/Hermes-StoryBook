@@ -12,6 +12,8 @@ import { PasarConversacion } from '../reparto/PasarConversacion';
 import { BotonLlamar } from './BotonLlamar';
 import { Intereses } from './Intereses';
 import { MenuHerramientas } from './MenuHerramientas';
+import { ConfirmarPerdida, type PerdidaDeclarada } from './ConfirmarPerdida';
+import { esMotivoDePerdida, type MotivoDePerdida } from '../../lib/motivosDePerdida';
 import { useCategorias, useEtiquetasDe, useMutacionesCategorias, usePuedeAdministrarCategorias } from './categorias';
 import {
   CLASE_FONDO,
@@ -290,6 +292,8 @@ function SelectorEtapa({
   moviendo,
   onElegir,
   senalAbrir = 0,
+  pideMotivo,
+  motivoActual = null,
 }: {
   etapa: string;
   /**
@@ -303,9 +307,14 @@ function SelectorEtapa({
    */
   etapas: readonly { id: string; label: string }[];
   moviendo: boolean;
-  onElegir: (etapa: string) => void;
+  /** `perdida` sólo viaja con `perdido`, y sólo cuando se pidió el motivo (ventas). */
+  onElegir: (etapa: string, perdida?: PerdidaDeclarada | null) => void;
   /** Señal externa (contador): al cambiar, abre el menú. La usa el atajo `E`. */
   senalAbrir?: number;
+  /** ¿«Dijo que no» pide su motivo? Sí en ventas, no en campaña (ADR 0107). */
+  pideMotivo: boolean;
+  /** El motivo de la pérdida vigente, para corregirlo arrancando desde el que tiene. */
+  motivoActual?: MotivoDePerdida | null;
 }) {
   const [abierto, setAbierto] = useState(false);
   const [confirmaPerdido, setConfirmaPerdido] = useState(false);
@@ -317,8 +326,8 @@ function SelectorEtapa({
     setAbierto(true);
   }
 
-  function elegir(id: string) {
-    onElegir(id);
+  function elegir(id: string, perdida?: PerdidaDeclarada | null) {
+    onElegir(id, perdida);
     setAbierto(false);
     setConfirmaPerdido(false);
   }
@@ -344,7 +353,14 @@ function SelectorEtapa({
       {abierto && (
         <>
           <span {...propsOverlay} />
-          <div role="menu" className="absolute left-0 top-8 z-30 w-48 rounded-xl bg-card p-1 shadow-panel">
+          <div
+            role="menu"
+            className={
+              'absolute left-0 top-8 z-30 rounded-xl bg-card p-1 shadow-panel ' +
+              // Con los motivos a la vista el menú se ensancha: seis chips en 192 px serían seis renglones.
+              (confirmaPerdido && pideMotivo ? 'w-72' : 'w-48')
+            }
+          >
             {etapas.map((e) => (
               <button
                 key={e.id}
@@ -365,23 +381,12 @@ function SelectorEtapa({
             <div className="my-1 border-t border-border" />
 
             {confirmaPerdido ? (
-              <div className="flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold">
-                <span className="flex-1 text-muted-foreground">¿{rotuloEtapa('perdido')}?</span>
-                <button
-                  type="button"
-                  onClick={() => elegir('perdido')}
-                  className="rounded px-1.5 text-destructive transition-colors hover:bg-destructive/10"
-                >
-                  Sí
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmaPerdido(false)}
-                  className="rounded px-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  No
-                </button>
-              </div>
+              <ConfirmarPerdida
+                pideMotivo={pideMotivo}
+                motivoInicial={motivoActual}
+                onConfirmar={(perdida) => elegir('perdido', perdida)}
+                onCancelar={() => setConfirmaPerdido(false)}
+              />
             ) : (
               <button
                 type="button"
@@ -494,6 +499,7 @@ export function BarraGestion({
   senalEstado = 0,
   senalEtiqueta = 0,
   senalAgendar = 0,
+  embebida = false,
 }: {
   conversacion: Conversacion;
   /** Quién está mirando — lo necesita el reparto para decir «tú» (`PasarConversacion`). */
@@ -519,6 +525,16 @@ export function BarraGestion({
    *   el playbook de la Escuela y su ruta ya contesta 403 para campaña.
    */
   esDeCampana?: boolean;
+  /**
+   * DENTRO DE LA CABECERA DE `HiloWhatsapp` (07-sep-2026, pedido del dueño):
+   * el marco y el fondo de tarjeta los pone quien la embebe —ahí ya está
+   * puesto el `rounded-2xl bg-card shadow-panel` del panel entero—, así que
+   * una segunda tarjeta adentro se vería como una tarjeta dentro de otra.
+   * `false` = como siempre: su propia tarjeta, para Messenger y los
+   * comentarios de FB/IG, que la siguen usando como fila separada arriba del
+   * chat (`ConversacionActiva.tsx`).
+   */
+  embebida?: boolean;
 }) {
   const ETAPAS_BARRA = etapasBarraDe(esDeCampana ? 'campana' : 'ventas');
   const qc = useQueryClient();
@@ -530,12 +546,17 @@ export function BarraGestion({
   const { data } = useQuery({
     queryKey: ['gestiones', conversacion.clave],
     queryFn: () =>
-      api<{ etapa: string | null }>(`/api/gestiones/de/${encodeURIComponent(conversacion.clave)}`),
+      api<{ etapa: string | null; perdida?: { motivo: string | null; detalle: string | null } | null }>(
+        `/api/gestiones/de/${encodeURIComponent(conversacion.clave)}`,
+      ),
   });
   const etapaActual = data?.etapa ?? 'interesado';
+  // La pérdida vigente, para corregirla arrancando desde su motivo. Ausente = server viejo (ADR 0007).
+  const motivoDeLaPerdida = data?.perdida?.motivo;
+  const motivoActual = esMotivoDePerdida(motivoDeLaPerdida) ? motivoDeLaPerdida : null;
 
   const mover = useMutation({
-    mutationFn: (etapa: string) =>
+    mutationFn: ({ etapa, perdida }: { etapa: string; perdida?: PerdidaDeclarada | null }) =>
       api('/api/gestiones', {
         method: 'POST',
         body: JSON.stringify({
@@ -545,6 +566,8 @@ export function BarraGestion({
           personaNombre: conversacion.persona_nombre,
           numeroPropio: conversacion.numero_propio,
           etapa,
+          // Sólo cuando se declaró con motivo (ventas). En campaña no viaja: el server lo rechazaría.
+          ...(perdida ? { motivoPerdida: perdida.motivo, detallePerdida: perdida.detalle } : {}),
         }),
       }),
     onSuccess: () => {
@@ -553,7 +576,7 @@ export function BarraGestion({
       void qc.invalidateQueries({ queryKey: ['embudo'] });
       void qc.invalidateQueries({ queryKey: ['dashboard'] });
     },
-    onError: (err, etapaIntentada) => {
+    onError: (err, { etapa: etapaIntentada }) => {
       setError(err instanceof ErrorApi ? err.message : 'No se pudo cambiar la etapa.');
       // La compuerta de Cotizado pide un interés: en vez de solo avisar, la
       // barra señala el control que la destraba y le pone el foco.
@@ -566,7 +589,7 @@ export function BarraGestion({
   });
 
   return (
-    <div className="shrink-0 rounded-2xl bg-card px-3 py-2 shadow-panel">
+    <div className={embebida ? 'min-w-0 flex-1' : 'shrink-0 rounded-2xl bg-card px-3 py-2 shadow-panel'}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {/* LA ETAPA, EN UN DROPDOWN. Era un segmented de cinco botones que se
             llevaba media barra a 1280 y dejaba a las acciones peleando el
@@ -580,8 +603,13 @@ export function BarraGestion({
           etapa={etapaActual}
           etapas={ETAPAS_BARRA}
           moviendo={mover.isPending}
-          onElegir={(e) => etapaActual !== e && mover.mutate(e)}
+          // Otra etapa, o volver a declarar «Dijo que no» con su motivo: así se corrige (ADR 0107).
+          onElegir={(e, perdida) => {
+            if (etapaActual !== e || (e === 'perdido' && perdida)) mover.mutate({ etapa: e, perdida });
+          }}
           senalAbrir={senalEstado}
+          pideMotivo={!esDeCampana}
+          motivoActual={motivoActual}
         />
 
         <span className="hidden h-4 w-px bg-border sm:block" />
@@ -633,12 +661,21 @@ export function BarraGestion({
               (`App.tsx`), que es lo único que hacía falta para que sacarlo de
               acá no se llevara el atajo puesto. */}
           <AgendarRapido conversacion={conversacion} senalAbrir={senalAgendar} />
-          <ContactoRegistrado
-            conversacion={conversacion}
-            onAbrirOtra={onAbrirOtra}
-            senalAbrir={senalRegistrar}
-            esDeCampana={esDeCampana}
-          />
+          {/* 🔴 **En campaña, CONTACTO se retira por la misma razón que ya se
+              fueron «Notas» acá arriba**: era la MISMA acción en dos puertas.
+              «Anotar quién es»/«Editar la ficha», al pie del timeline del panel
+              derecho (`PieAccionTimeline`), abre el MISMO `FichaRapida` sobre el
+              MISMO contacto — pedido del dueño (1-sep-2026). En ventas se queda,
+              porque ahí `PieAccionTimeline` no ofrece esa puerta (`conCerberus`
+              usa «Vender» en su lugar). */}
+          {!esDeCampana && (
+            <ContactoRegistrado
+              conversacion={conversacion}
+              onAbrirOtra={onAbrirOtra}
+              senalAbrir={senalRegistrar}
+              esDeCampana={esDeCampana}
+            />
+          )}
           <MenuHerramientas conversacion={conversacion} esDeCampana={esDeCampana} />
         </span>
       </div>

@@ -1,10 +1,48 @@
+/**
+ * 🔴🔴🔴 AVISO PARA QUIEN HAGA EL MERGE CON `fix/corregir-vermas` (dejado el
+ * 07-sep-2026, antes de que ese merge exista) 🔴🔴🔴
+ *
+ * Hay OTRO checkout en paralelo — `37_Hermes_07_09_26_Fix_Chat/corregir-vermas`,
+ * rama `fix/corregir-vermas`, commit `c4496f5c` («fix(mensajes): filtra
+ * Facebook/Messenger en el server, no sobre lo ya traído») — que edita ESTE
+ * MISMO ARCHIVO, en la zona de `useConversaciones({...})` y el `useMemo` de
+ * `visibles` (el filtro `porTipo`). El dueño va a mergear esas dos carpetas a
+ * mano; esto queda escrito para que ese merge no pierda ninguna de las dos
+ * mitades.
+ *
+ * Qué toca CADA lado, para que no se pisen:
+ *   · **Acá** (esta sesión, 07-sep-2026): la cabecera de tres pestañas
+ *     (Canales flotante / Chats / Llamadas), que internaliza `canal` como
+ *     estado propio —dejó de ser prop— y saca `RielDeCanales` de `App.tsx`.
+ *     Ver el docblock grande de `ColaUnificada` más abajo.
+ *   · **`corregir-vermas`**: manda `tipo` al server dentro de
+ *     `useConversaciones({ canal, tipo })` y BORRA el recorte `porTipo` que
+ *     hoy vive en el `useMemo` de `visibles` (Facebook/Messenger compartían
+ *     `canal` y se separaban acá, sobre la página ya traída — con eso
+ *     sobrevivían 0 o 1 fila de 30 y hacían falta muchos «Ver más»). También
+ *     toca `dominio/cola.ts` (`EstadoCola.tipo`, `parametrosDeCola`) y
+ *     `canalesDelRiel.ts` (docblock).
+ *
+ * NINGUNO de los dos cambios pisa al otro en el sentido de LÓGICA: el `canal`
+ * que este archivo ahora resuelve como estado interno sigue siendo el mismo
+ * valor que `opcionDeCanal`/`useConversaciones` ya consumían — sólo cambió de
+ * dónde sale. Lo que el merge tiene que verificar a mano es que, después de
+ * unir las dos ramas, `useConversaciones` reciba `tipo` (de `corregir-vermas`)
+ * usando el `canal` que ahora es estado local (de acá), y que el `useMemo` de
+ * `visibles` quede SIN el recorte `porTipo` (se movió al server) pero SÍ con
+ * todo lo demás que este archivo agregó alrededor. Si al mergear este aviso
+ * ya no aplica —porque alguna de las dos ramas cambió de nuevo, o porque el
+ * merge ya pasó—, bórralo: un aviso de un merge que ya ocurrió es ruido, no
+ * ayuda.
+ */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, Filter, MessageSquarePlus, Search, Smartphone, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Filter, MessageSquarePlus, Phone, Search, Smartphone, X } from 'lucide-react';
 import { useLocalStorage } from '../../lib/useLocalStorage';
 import { api, ErrorApi } from '../../lib/datos/cliente';
 import { esFresca, hace, horasDesdeIngesta, useFrescura } from '../../lib/datos/frescura';
 import { useSelloDeViejo } from '../../lib/datos/useSelloDeViejo';
+import { botonAzulClass } from '../../lib/styles';
 import { SelloDeAntes } from '../../components/SelloDeAntes';
 import { useSesionWa } from '../whatsapp/conversacionWa';
 import { pendientesQueApuran, useAgenda } from '../agenda/agenda';
@@ -25,53 +63,38 @@ import {
 import { lineaEfectiva, opcionesDeLinea } from './alcance';
 import { BarraFiltros } from './BarraFiltros';
 import { RotuloDeLaCola } from './RotuloDeLaCola';
+import { FallaConReintento } from '../../components/FallaConReintento';
 import { VacioDeLineaPropia } from './VacioDeLineaPropia';
 import { useConversaciones, useEstadoConversacion, type Conversacion } from '../../dominio/conversaciones';
 import { useLineas } from '../../dominio/lineas';
 import { lineaDelChatNuevo, lineasParaChatNuevo } from '../../dominio/lineaParaAbrir';
 import { usePopover } from '../../lib/teclado/usePopover';
+import { ANCHO_RIEL_REM, RielDeCanales } from './RielDeCanales';
 import { FilaConversacion } from './FilaConversacion';
 import { AvisoFilaQueBajo } from './AvisoFilaQueBajo';
 import { avisoDeFilaQueSeFue } from './filaQueSeFue';
 import { MenuFila } from './MenuFila';
 import { ListaCategorias } from './ListaCategorias';
-import { insigniaDe, LogoDeCanal, nombreCanal } from '../../components/BadgeCanal';
+import { nombreCanal } from '../../components/BadgeCanal';
+import { opcionDeCanal } from './canalesDelRiel';
+import { useEfectoAlCambiar } from '../../lib/useEfectoAlCambiar';
 
 /** Solo anima lo que llegó AHORA (SSE): lo viejo que entra por «Ver más» no. */
 const RECIEN_LLEGADA_MS = 10 * 60_000;
 
-/**
- * EL SELECTOR «CANALES» — filtro por canal, fuera del contenedor de tabs
- * (Todo · No leídos · Favoritos): es OTRO eje, no un cuarto tab.
- *
- * `canal` es el valor que ya entiende el server (`?canal=`, `cola/consultarCola.ts`
- * — el mismo parámetro que la línea, ya recortado con `AND canal = …`). `tipo`
- * es SOLO del front: Facebook y Messenger comparten `canal: 'facebook'`
- * (`components/BadgeCanal.tsx` — «un directo de Facebook es Messenger», pedido
- * del dueño 25-ago-2026) y la única forma de separarlos hoy es mirando el
- * `tipo` de cada fila ya traída (`comentario` vs `mensaje`); el server no
- * ofrece ese segundo filtro. `logo` es el ícono a dibujar (`LogoDeCanal`), que
- * tampoco es siempre el canal: Messenger dibuja su propio glifo.
- */
-const OPCIONES_CANAL = [
-  { id: 'whatsapp', label: 'WhatsApp', canal: 'whatsapp', tipo: null, logo: 'whatsapp' },
-  { id: 'facebook', label: 'Facebook', canal: 'facebook', tipo: 'comentario', logo: 'facebook' },
-  { id: 'messenger', label: 'Messenger', canal: 'facebook', tipo: 'mensaje', logo: 'messenger' },
-  { id: 'instagram', label: 'Instagram', canal: 'instagram', tipo: null, logo: 'instagram' },
-  { id: 'formulario', label: 'Formulario', canal: 'landing', tipo: null, logo: 'landing' },
-] as const;
+/** La pestaña de arriba del contenedor (ver el docblock de más abajo). Persistida: es la misma clase de preferencia que `KEY_TAB`/`KEY_LINEA` en `dominio/cola.ts`, sólo que vive acá porque no es un recorte de la CONSULTA — «Llamadas» ni siquiera pide datos. */
+const KEY_PESTANA = 'hermes.colaPestana';
 
 /**
- * EL COLOR DE MARCA DE CADA OPCIÓN — misma fuente que la píldora de canal de
- * cada fila (`insigniaDe`, `components/BadgeCanal.tsx`): no se inventa un
- * segundo mapa de colores que pueda divergir del que ya pinta la cola (#37).
- * `Formulario` (`landing`) no tiene color de marca A PROPÓSITO —no es una red
- * social— y `insigniaDe` devuelve `null`: el ícono se queda del color del
- * texto, como ya hace la píldora de canal en ese mismo caso.
+ * LOS BOTONES AZULES DE LA CABECERA — el filtro de canal y el chat nuevo
+ * (08-sep-2026, pedido del dueño: «deben tener los mismos efectos»).
+ *
+ * `botonAzulClass` vive en `lib/styles.ts` (08-sep-2026, ampliación del mismo
+ * día): el trigger que abre/cierra el panel de la ficha, en `App.tsx`, lo
+ * pidió también, así que dejó de ser cosa de esta pantalla — una sola cadena
+ * compartida entre features, no dos (o tres) copias que un cambio futuro
+ * puede desalinear sin que nadie lo note (#37).
  */
-function colorDeOpcionCanal(o: (typeof OPCIONES_CANAL)[number]): string | undefined {
-  return insigniaDe(o.canal, o.tipo ?? undefined)?.color;
-}
 
 /**
  * LA COLA UNIFICADA — el corazón de Hermes, ahora la MESA DE TRABAJO (#49).
@@ -87,13 +110,40 @@ function colorDeOpcionCanal(o: (typeof OPCIONES_CANAL)[number]): string | undefi
  * LISTAS: la lista de la izquierda se convierte en la lista de categorías, y
  * entrar a una la filtra (drill-down). El pin, la favorita y el «no leído» son
  * POR VENDEDORA (`estado_conversacion`).
+ *
+ * ══ 🔴 TRES PESTAÑAS ARRIBA DEL TODO (07-sep-2026, pedido del dueño) ═════════
+ *
+ * El contenedor entero —éste, el que ya tenía su propio `rounded-2xl bg-card
+ * shadow-panel`— gana una cabecera de tres botones, y NADA de su tamaño
+ * cambia (mismo alto, mismo ancho: los da `<main>` en `App.tsx`, acá no se
+ * toca): **el ícono de canales**, que despliega los mismos WhatsApp/Facebook/
+ * Instagram/… de `RielDeCanales` pero FLOTANDO (`mostrarCanales`, con
+ * `usePopover` — el mismo mecanismo que ya cierra el menú de «por qué línea»
+ * unas líneas más abajo, Escape y clic afuera incluidos) en vez de como
+ * columna fija; **Chats**, que es exactamente todo lo que este componente ya
+ * dibujaba (búsqueda, tabs, filtros, la lista) — no se movió una línea de esa
+ * parte, sólo se le puso una puerta al lado; y **Llamadas**, hoy un cartel de
+ * «Próximamente» y nada más, porque la función no existe todavía.
+ *
+ * 🔴 **`RielDeCanales` DEJA DE VIVIR EN `App.tsx`.** La razón por la que
+ * vivía afuera —«el riel no puede leer el canal sin que la cola se lo
+ * empuje hacia arriba»— dejó de aplicar: ahora el riel se dibuja ACÁ, así
+ * que lee `canal`/`setCanal` directo, sin cruzar un componente. Por eso esos
+ * dos dejan de ser PROPS (nadie más los necesitaba: `grep -rn
+ * "canalDeLaCola" App.tsx` sólo daba este componente) y pasan a ser estado
+ * de acá, con el mismo default `''` que tenían en el shell — ningún
+ * comportamiento cambia, sólo de dónde sale el dato. De regalo, la
+ * revisión de canal ya no necesita su propio `{!revision.activo && …}`: en
+ * modo revisión no se monta `ColaUnificada` (se monta `ColaRevision`), así
+ * que el riel desaparece SOLO con la revisión, sin una condición aparte que
+ * pudiera desincronizarse de esa otra.
  */
 export function ColaUnificada({
   seleccionada,
   onSeleccionar,
   conversacionAbierta,
   miVendedora,
-  esDeCampana,
+  esDeCampana = false,
   onIrAgenda,
   inputRef,
 }: {
@@ -115,6 +165,27 @@ export function ColaUnificada({
   /** Ref de la búsqueda, para el atajo «/» global (se cablea en el shell). */
   inputRef?: Ref<HTMLInputElement>;
 }) {
+  // La pestaña de arriba del contenedor — ver el docblock de más arriba.
+  // Persistida, como el tab de abajo; arranca en «chats» para quien nunca la
+  // tocó (Llamadas todavía no hace nada, así que no es un default razonable).
+  const [pestana, setPestana] = useLocalStorage<'chats' | 'llamadas'>(KEY_PESTANA, 'chats');
+  // El riel de canales — efímero (no se persiste abierto/cerrado, igual que
+  // el menú «por qué línea» unas líneas más abajo).
+  const [mostrarCanales, setMostrarCanales] = useState(false);
+  const dispararCanales = useRef<HTMLButtonElement>(null);
+  // Sólo por el Escape (`usePopover` lo registra igual, mire o no algo el
+  // `propsOverlay` que devuelve) — el riel acoplado ya no usa el overlay de
+  // clic-afuera, ver el docblock grande de más abajo.
+  usePopover(mostrarCanales, () => {
+    setMostrarCanales(false);
+    dispararCanales.current?.focus();
+  });
+  // EL CANAL ELEGIDO EN EL RIEL — el id de `canalesDelRiel`, vacío = todos.
+  // Vivía como prop del shell (`App.tsx`) mientras el riel se dibujaba AFUERA
+  // de este componente; ahora que se dibuja ACÁ (acoplado, ver el docblock de
+  // más abajo) nadie más lo necesita — mismo default `''` que tenía allá.
+  const [canal, setCanal] = useState('');
+
   // El tab es el eje (persistido). El default dejó de ser `puedo-escribirle`:
   // `migrarFiltroViejo` mapea cualquier valor viejo/basura a un tab válido, así
   // el caché persistido no abre mostrando un filtro que ya no existe (#49).
@@ -125,7 +196,7 @@ export function ColaUnificada({
   // dejar la cola vacía sin explicación — un número que ya no está no puede
   // seguir escondiendo el trabajo.
   const [lineaGuardada, setLinea] = useLocalStorage<string>(KEY_LINEA, '');
-  const { lineas, hayMias } = useLineas();
+  const { lineas, hayMias, veTodo } = useLineas();
   /**
    * ⚠️ **El fallback ya NO es «Todas».** La regla vive pura en `alcance.ts` y es
    * la misma que decide qué ofrece el selector, para que no puedan divergir.
@@ -136,40 +207,30 @@ export function ColaUnificada({
    * viejo, quien alguna vez eligió «Todas» se quedaba viendo las cuatro líneas
    * para siempre, sin nada que lo explicara ni que lo apagara. Ahora cae a lo
    * suyo. Sin mapa sigue cayendo a «Todas», que ahí sí es lo correcto (fail-open).
+   *
+   * 🔴 **Y `veTodo` NO es opcional acá: es el arreglo del 7-sep-2026.** Con el
+   * rol afuera, esta línea le clavaba a `alex` —supervisor con UNA línea en
+   * `numero_vendedora`— la cola de Ventas Meta y le escondía las otras 4.832
+   * conversaciones que el server sí le servía. **Se decide UNA sola vez y el
+   * resultado baja a `BarraFiltros` como `opciones`**: antes la barra volvía a
+   * llamar a la regla con sus propios argumentos, así que agregar un tercero
+   * dejaba dos lugares donde olvidarlo y ningún síntoma que lo delatara (#37).
    */
-  const opcionesLinea = opcionesDeLinea(lineas, hayMias);
+  const opcionesLinea = opcionesDeLinea(lineas, hayMias, veTodo);
   const linea = lineaEfectiva(lineaGuardada, opcionesLinea);
   // Filtros secundarios y modo Listas: efímeros (la sesión arranca en limpio).
   const [filtroSec, setFiltroSec] = useState<FiltroSec>('');
   const [modoListas, setModoListas] = useState(false);
   const [categoriaActiva, setCategoriaActiva] = useState<{ nombre: string; color: string } | null>(null);
   const [gestorAbierto, setGestorAbierto] = useState(false);
-  // «Canales»: mismo criterio que el resto de los secundarios — efímero, la
-  // sesión arranca sin nada elegido.
-  // ⚠️ «Formulario» sale para campaña (pedido del dueño): ahí no hay landing de
-  // la Escuela, así que ofrecerlo sería un filtro que siempre da cero.
-  const opcionesCanal = esDeCampana ? OPCIONES_CANAL.filter((o) => o.id !== 'formulario') : OPCIONES_CANAL;
-  const [canalFiltroId, setCanalFiltroId] = useState('');
-  const opcionCanal = opcionesCanal.find((o) => o.id === canalFiltroId);
-  const [menuCanalAbierto, setMenuCanalAbierto] = useState(false);
-  const dispararCanal = useRef<HTMLButtonElement>(null);
-  const primerItemCanal = useRef<HTMLButtonElement>(null);
-  const { propsOverlay: propsMenuCanal } = usePopover(menuCanalAbierto, () => {
-    setMenuCanalAbierto(false);
-    dispararCanal.current?.focus();
-  });
-  useEffect(() => {
-    if (menuCanalAbierto) primerItemCanal.current?.focus();
-  }, [menuCanalAbierto]);
-  function elegirCanal(id: string) {
-    setCanalFiltroId(id);
-    setMenuCanalAbierto(false);
-    dispararCanal.current?.focus();
-  }
+  // La opción se resuelve desde el id que baja del riel. `esDeCampana` decide
+  // qué lista se consulta, igual que antes: sin él, «Formulario» existiría en
+  // campaña y sería un filtro que siempre da cero.
+  const opcionCanal = opcionDeCanal(canal, esDeCampana);
 
   // La key de la cola cambió con los tabs: quien venía usando la vieja tiene que
   // encontrar SU filtro, no un default mudo. Se traduce una vez, al montar.
-  useEffect(() => {
+  useEfectoAlCambiar([], () => {
     const migrado = migracionDesdeKeyVieja(
       (k) => {
         try {
@@ -190,8 +251,7 @@ export function ColaUnificada({
     setTab(migrado.tab);
     setFiltroSec(migrado.filtroSec);
     // Solo al montar: la migración es de una vez y borra su propia key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
   const { data: catalogo = [] } = useCategorias();
   const estadoMut = useEstadoConversacion();
@@ -211,12 +271,23 @@ export function ColaUnificada({
     sinLineasPropias,
     colaRecortada,
     conLineaPropia,
+    falla,
+    reintentar,
+    reintentando,
   } = useConversaciones({
     tab,
     filtroSec,
     categoria: categoriaActiva?.nombre ?? null,
     linea,
-    canal: opcionCanal?.canal,
+    // `?? undefined` y no `?? null`: una entrada del riel que no filtra la cola
+    // (Grupos) tiene `canal: null`, y mandarlo como filtro pediría el canal
+    // llamado «null» en vez de no filtrar.
+    canal: opcionCanal?.canal ?? undefined,
+    // Separa comentario de mensaje cuando `canal` no alcanza (Facebook y
+    // Messenger comparten `canal: 'facebook'`, ver `canalesDelRiel.ts`). Va al
+    // server para que la PÁGINA ya venga separada — antes solo se recortaba
+    // acá, sobre lo ya traído (ver `visibles` más abajo).
+    tipo: opcionCanal?.tipo ?? undefined,
   });
 
   /**
@@ -247,17 +318,48 @@ export function ColaUnificada({
   // Búsqueda: filtra lo YA cargado (nombre, teléfono, texto). Si no aparece,
   // «Buscar en más historia» trae más — honesto: busca en lo que hay, no en toda la base.
   const [busqueda, setBusqueda] = useState('');
+  /**
+   * ══ EL BUSCADOR SE VUELVE UN ÍCONO QUE SE EXPANDE (07-sep-2026, pedido del
+   * dueño) ══
+   *
+   * Antes era una píldora fija en su propio renglón. Ahora vive al lado de
+   * Chats/Llamadas, pegado a la derecha junto al botón de chat nuevo, y por
+   * default es sólo el ícono — con el `title` diciendo qué hace, como
+   * cualquier otro botón sin rótulo de esta app.
+   *
+   * `busquedaAbierta` es el gesto (foco/clic); `expandida` —unas líneas más
+   * abajo, donde se usa— es lo que de verdad gobierna el dibujo: con texto
+   * adentro, el buscador SIGUE expandido aunque pierda el foco, porque
+   * colapsarlo escondería la razón por la que la lista está filtrada.
+   *
+   * ⚠️ **El `<input>` NUNCA se desmonta** (sólo cambia de clases entre
+   * colapsado y expandido): el atajo global `/` (`App.tsx`) hace
+   * `inputRef.current?.focus()`, y un input que no existe en el DOM porque
+   * `busquedaAbierta` era `false` habría dejado a `/` apretando un `focus()`
+   * sobre `null` — el atajo se habría muerto en silencio. Como sigue montado,
+   * enfocarlo (por `/` o por el ícono) dispara `onFocus`, que es lo que abre
+   * `busquedaAbierta` — un solo mecanismo para las dos puertas.
+   */
+  const [busquedaAbierta, setBusquedaAbierta] = useState(false);
+  const expandida = busquedaAbierta || busqueda !== '';
+  /**
+   * El ícono de la lupa necesita poder enfocar el input a mano (clic del
+   * mouse, no llega por teclado), y el `inputRef` que baja como prop puede
+   * ser una función (el molde genérico `Ref<T>`) — de esos no se puede leer
+   * `.current`. Se resuelve con un ref PROPIO en el mismo nodo, fusionado a
+   * mano con el que venga de afuera (mismo patrón que `FilaConversacion.tsx`
+   * usa para el roving-tabindex + el IntersectionObserver de la foto).
+   */
+  const campoBusquedaRef = useRef<HTMLInputElement>(null);
   const visibles = useMemo(() => {
-    // Facebook y Messenger piden el mismo `canal` al server (`opcionCanal.canal`);
-    // lo que los separa es el `tipo` de cada fila, y eso el server no lo filtra
-    // (ver el porqué en `OPCIONES_CANAL`). Se recorta acá, sobre lo ya traído.
-    const porTipo = opcionCanal?.tipo ? items.filter((c) => c.tipo === opcionCanal.tipo) : items;
+    // El recorte por `tipo` (Facebook vs. Messenger) ya lo aplicó el server
+    // (`useConversaciones` lo manda arriba) — acá solo queda la búsqueda.
     const q = busqueda.trim().toLowerCase();
     const filtradas = q
-      ? porTipo.filter((c) =>
+      ? items.filter((c) =>
           [c.persona_nombre, c.persona_id, c.texto, c.contexto_texto].some((v) => v?.toLowerCase().includes(q)),
         )
-      : porTipo;
+      : items;
 
     /**
      * CON UNA ETIQUETA ACTIVA, LO SIN LEER SUBE PRIMERO Y DESPUÉS ES
@@ -274,7 +376,7 @@ export function ColaUnificada({
      */
     if (!categoriaActiva) return filtradas;
     return ordenarConEtiquetaActiva(filtradas);
-  }, [items, busqueda, opcionCanal, categoriaActiva]);
+  }, [items, busqueda, categoriaActiva]);
 
   /**
    * El estado vacío NO puede decir «estás al día» si en realidad no estamos
@@ -294,7 +396,8 @@ export function ColaUnificada({
   // sin ningún filtro es trabajo terminado — la Deuda en cero. Se celebra con la
   // cifra del día + la siguiente jugada.
   const sinFiltros = tab === 'todo' && !filtroSec && !categoriaActiva && !opcionCanal;
-  const despachada = !cargando && visibles.length === 0 && !busqueda && sinFiltros && frescura != null && frescuraFresca;
+  // `!falla`: una cola en error y sin datos no está al día, está sin llegar (ADR 0108).
+  const despachada = !cargando && !falla && visibles.length === 0 && !busqueda && sinFiltros && frescura != null && frescuraFresca;
 
   // La cifra del día sale del MISMO hook que el radar (issue #5): acá vivía un
   // `useQuery` a mano sobre la misma `queryKey` con `staleTime` donde el hook
@@ -329,7 +432,8 @@ export function ColaUnificada({
   const conteoPrecio = useQuery({
     queryKey: ['conversaciones', 'conteo', 'pregunto-precio'],
     queryFn: () => api<{ total?: number }>('/api/conversaciones?intencion=pregunto-precio&limit=1&offset=0'),
-    enabled: despachada,
+    // En campaña no se habla de precio (regla del dueño, 13-sep-2026): ni el botón ni su conteo.
+    enabled: despachada && !esDeCampana,
     staleTime: 60_000,
   });
   const nPreguntoPrecio = conteoPrecio.data?.total ?? 0;
@@ -539,7 +643,7 @@ export function ColaUnificada({
     setFiltroSec('');
     setCategoriaActiva(null);
     setModoListas(false);
-    setCanalFiltroId('');
+    setCanal('');
   }
 
   /**
@@ -556,10 +660,334 @@ export function ColaUnificada({
   }
 
   // ── MODO LISTAS: la lista de la izquierda se vuelve la lista de categorías ──
-  if (modoListas && !categoriaActiva) {
-    return (
-      <>
-        <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-card shadow-panel">
+  // Ya no es un `return` aparte (07-sep-2026): con la cabecera de pestañas de
+  // arriba, el contenedor tiene que dibujarse SIEMPRE — esta rama devolvía su
+  // PROPIO `rounded-2xl bg-card shadow-panel`, que hubiera duplicado la
+  // cabecera si se quedaba como estaba. `enListas` es sólo la pregunta; la
+  // respuesta se usa una vez, adentro del cuerpo de la pestaña «Chats».
+  const enListas = modoListas && !categoriaActiva;
+
+  return (
+    /* ══ EN EL CELULAR LA COLA ES LA PANTALLA (11-sep-2026) ══
+       Debajo de `md` esta caja ocupa el ancho entero (`App.tsx`), así que deja
+       de ser una tarjeta flotando sobre el fondo. Y todo lo que se toca crece a
+       40 px o más con `max-md:` —los botones de la cabecera, las pestañas, los
+       chips—, porque a 28 px el dedo erra; los campos van a 16 px de letra,
+       que es el mínimo con el que Safari de iOS no hace zoom al enfocar. En
+       escritorio no cambia una clase: todo lo nuevo lleva `max-md:`. */
+    <div className="relative flex h-full overflow-hidden rounded-2xl bg-card shadow-panel max-md:rounded-none max-md:shadow-none">
+      {/*
+        ══ EL RIEL DE CANALES SE ACOPLA Y EMPUJA, YA NO FLOTA (08-sep-2026,
+        pedido del dueño) ══
+
+        Hasta acá `RielDeCanales` colgaba `absolute` sobre la cola —el
+        docblock viejo decía «flota, no empuja», y hasta tenía un test con ese
+        nombre (`PestanasDeLaCola.test.tsx`)— así que abrirlo no le movía un
+        píxel a nada de abajo. El pedido fue el contrario: que la cola se
+        angoste MIENTRAS se elige un canal. Por eso ahora es un HERMANO del
+        resto del contenedor (`flex h-full`, sin `flex-col`) en vez de una
+        capa flotante.
+        ⚠️ **Y sigue sin ser la columna fija que `RielDeCanales.tsx` describe
+        y descarta** (§«por qué es angosto»): esa columna angostaba la cola
+        TODO el tiempo, y ahí está escrito por qué eso es malo. Acá sólo
+        angosta mientras el panel está abierto —elegir un canal sigue
+        cerrándolo (`onCanal` más abajo), igual que hoy— así que el
+        presupuesto de ancho de 1280 se devuelve solo, apenas se elige.
+
+        ══ 🔴 SIEMPRE MONTADO, PARA PODER ANIMAR EL CIERRE (corrección del
+        mismo día, pedido del dueño: «se abre y se cierra muy de golpe») ══
+
+        La primera vuelta montaba/desmontaba con `{mostrarCanales && …}` —el
+        mismo mecanismo que el panel flotante que reemplaza— y por eso
+        aparecía y desaparecía de un salto: no hay forma de transicionar un
+        ancho HACIA/DESDE un elemento que no existe todavía. Ahora el wrapper
+        vive siempre y lo que cambia es su `width`/`opacity` (`ANCHO_RIEL_REM`
+        exportado por `RielDeCanales.tsx`, para que este número y el `w-[…]`
+        de su `<nav>` no puedan desviarse — #37). `duration-[240ms]
+        ease-house`: la MISMA física que `--animate-entrar` (`index.css`),
+        una sola curva de movimiento para toda la casa.
+
+        ⚠️ **`inert` reemplaza al montado condicional como guarda de
+        accesibilidad.** Un riel oculto por ancho pero presente en el DOM
+        sin más sería tabulable y su texto («WhatsApp», «Instagram»…)
+        aparecería en cualquier búsqueda de contenido — el defecto que el
+        montado condicional evitaba. `inert` (React 19, sin polyfill) apaga
+        el subárbol entero —nada tabulable, afuera del árbol de accesibilidad—
+        sin desmontarlo, que es justo lo que permite animar. `aria-hidden`
+        de acompañante para el lector de pantalla que todavía no respeta
+        `inert` a pleno.
+      */}
+      <div
+        inert={!mostrarCanales}
+        aria-hidden={!mostrarCanales}
+        className={
+          'h-full shrink-0 overflow-hidden transition-[width,opacity] duration-[240ms] ease-house ' +
+          (mostrarCanales ? 'border-r border-border opacity-100' : 'border-r border-transparent opacity-0')
+        }
+        style={{ width: mostrarCanales ? `${ANCHO_RIEL_REM}rem` : 0 }}
+      >
+        {/* El overlay `fixed inset-0` de `usePopover` que un panel flotante
+            necesitaría para el clic-afuera NO está acá, a propósito: cubriría
+            la pantalla entera para cerrar con un clic, y medido, se comía la
+            rueda del mouse sobre la fila de chips que scrollea horizontal
+            (`BarraFiltros.tsx`, `overflow-x-auto`) — abrir el filtro de canal
+            apagaba ese scroll sin ningún aviso. `Escape` sigue cerrando (el
+            listener de teclado de `usePopover` no depende de ningún overlay,
+            sólo de `abierto`) y elegir un canal también — lo que se pierde es
+            SOLO «cualquier clic en la cola también cierra», que en un panel
+            acoplado no es una expectativa tan fuerte como en uno flotante.
+
+            ⚠️ **SIN `p-1` (08-sep-2026, pedido del dueño: «no estuvieran
+            centradas horizontalmente»)** — este `<div>` mide EXACTO
+            `ANCHO_RIEL_REM` (lo pone el wrapper de arriba) y el `<nav>` de
+            adentro (`RielDeCanales.tsx`) YA es ese mismo ancho, `w-[4.5rem]`
+            fijo. Un `p-1` acá le restaba 8px de espacio disponible al `<nav>`
+            sin restarle nada a SU propio ancho — quedaba más angosto que su
+            contenedor, pegado a la izquierda en vez de ocupar el ancho
+            entero, y encima levemente recortado por el `overflow-hidden` del
+            wrapper de arriba. El `<nav>` ya trae su propio `py-1` vertical;
+            lo único que faltaba acá era el scroll, no otro padding. */}
+        <div className="h-full overflow-y-auto">
+          <RielDeCanales
+            canal={canal}
+            onCanal={(id) => {
+              setCanal(id);
+              setMostrarCanales(false);
+              dispararCanales.current?.focus();
+            }}
+            esDeCampana={esDeCampana}
+          />
+        </div>
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/*
+        ══ LA CABECERA DE TRES PESTAÑAS (07-sep-2026, pedido del dueño) ══
+        Ver el docblock grande de más arriba.
+      */}
+      {/*
+        ⚠️ **`min-h-[3.25rem]`, y no un padding a ojo (07-sep-2026, comprimida
+        el mismo día a pedido del dueño)**: la primera vuelta clavaba 5,25rem
+        —la altura que la cabecera de `HiloWhatsapp` daba con `py-3`—, y el
+        pedido fue explícito: la fila entera tiene que medir apenas lo que
+        mide el bloque nombre+teléfono de esa cabecera (37px) más un poco de
+        aire, no lo que ocupaba con el padding viejo. `HiloWhatsapp` bajó a
+        `py-1.5` y esta fila apunta al MISMO número resultante (52px, medido
+        con Playwright DESPUÉS del recorte) — para que el borde de abajo de
+        esta fila y el de la cabecera del chat sigan a la misma altura.
+        `items-center`: el ícono de canales, el buscador y el de chat nuevo
+        (que centran dentro de su propio botón, no pegados a ningún borde) y
+        las pestañas tienen que verse a la misma altura entre sí, y el
+        subrayado de la pestaña activa va pegado a su propio texto (`py-2`
+        simétrico en los botones de Chats/Llamadas), no al borde del
+        contenedor.
+      */}
+      <div className="flex min-h-[3.25rem] shrink-0 items-center gap-1 border-b border-border px-2">
+        {/* ══ LA ZONA QUE EL BUSCADOR TAPA AL EXPANDIRSE (07-sep-2026) ══
+            `relative` + `min-w-0 flex-1`: éste es el ancho que el buscador
+            ocupa cuando se abre — el ícono de canales, «Chats» y «Llamadas»
+            siguen ACÁ debajo (no se desmontan: `tabIndex={-1}` cuando está
+            expandido alcanza para que no se puedan tabular por error, sin
+            perder su estado). El botón de chat nuevo, en el `span` de más
+            abajo, queda AFUERA de esta zona a propósito: el pedido fue que el
+            buscador tape el filtro de canal y las pestañas, no ese botón.
+
+            ⚠️ **`items-center`, y la altura la fija la PESTAÑA, no el
+            contenedor (08-sep-2026: «elevá la línea, no bajes el círculo»,
+            corrección de una primera vuelta con `items-end` que sí bajaba el
+            círculo — y con él, lo desalineaba del ícono de buscar y de «chat
+            nuevo», que viven en OTRO contenedor y se quedaron centrados
+            donde siempre)**: el botón (28px, círculo fijo) tiene que seguir
+            centrado en la fila como cualquier otro ícono de la cabecera; lo
+            que se corrige es que la PESTAÑA mida esos mismos 28px —ver
+            `h-7` en «Chats»/«Llamadas» más abajo—, así el subrayado cae
+            solo donde termina el círculo sin mover a ninguno de los dos del
+            centro. */}
+        <div className="relative flex min-w-0 flex-1 items-center gap-1">
+          {/* ══ UNA FLECHA QUE SE DA VUELTA, NO DOS ÍCONOS (08-sep-2026,
+              pedido del dueño) ══
+              Reemplaza a la cuadrícula (`LayoutGrid`, que decía «todos los
+              canales juntos» pero no decía nada de CÓMO se abre el panel).
+              `ChevronRight` sola + `rotate-180` cuando está abierto: cerrada
+              apunta hacia la derecha —hacia el riel, que se acopla ahí mismo
+              (ver el docblock grande de arriba)—, abierta apunta a la
+              izquierda, el mismo lenguaje de flecha-que-se-da-vuelta que ya
+              usa cualquier disclosure. Un solo componente, nunca dos íconos
+              que puedan desalinearse en tamaño entre sí.
+
+              ⚠️ **Azul sólido SIEMPRE, no sólo mientras está abierto
+              (08-sep-2026, corrección del mismo día, pedido del dueño)**: la
+              primera vuelta lo dejaba gris en reposo y sólo se pintaba
+              (`bg-secondary`) al abrir o con un canal elegido — se perdía
+              entre el resto de íconos apagados de la fila.
+              ⚠️ **Y usa `botonAzulClass`, la MISMA constante que el botón de
+              chat nuevo (más abajo) y el que abre/cierra la ficha (`App.tsx`),
+              no una copia parecida** — «los mismos efectos» (pedido del
+              dueño) dejó de ser una promesa que un className suelto pudiera
+              romper en el próximo cambio. */}
+          <button
+            ref={dispararCanales}
+            type="button"
+            tabIndex={expandida ? -1 : undefined}
+            aria-haspopup="true"
+            aria-expanded={mostrarCanales}
+            title="Filtrar por canal"
+            onClick={() => setMostrarCanales((v) => !v)}
+            className={botonAzulClass}
+          >
+            <ChevronRight
+              size={15}
+              aria-hidden="true"
+              className={'transition-transform duration-200 ' + (mostrarCanales ? 'rotate-180' : '')}
+            />
+          </button>
+          {/* 🔴 **`h-7`, NO `py-2` (08-sep-2026, corrección del mismo día:
+              «elevá la línea, no bajes el círculo»)** — la vuelta anterior
+              (`py-2` simétrico) centraba el TEXTO bien, pero dejaba la caja
+              entera en 37,5px (línea de texto + padding + el subrayado)
+              contra los 28px del círculo de al lado: centrados los dos por
+              separado, sus bases quedaban a 4,75px de distancia una de otra.
+              `h-7` (28px, LA MISMA medida que `size-7` del círculo — no un
+              número aparte que pueda desviarse) fuerza la caja al tamaño
+              exacto del círculo; `flex items-center justify-center` adentro
+              sigue centrando el texto DENTRO de esa caja, así que el
+              subrayado (`border-b-2`, incluido en los 28px por el
+              `box-sizing: border-box` que ya usa toda la app) cae justo
+              donde termina el círculo — sin tocar la posición del círculo,
+              que se queda centrado en la fila como el resto de los íconos de
+              la cabecera.
+              ⚠️ **`ml-2` PROPIO, no sólo el `gap-1` de la fila (08-sep-2026,
+              pedido del dueño: «no tienen buena distancia del filtro por
+              canal»)**: el `gap-1` (4px) es el mismo que separa Chats de
+              Llamadas, un par que SÍ tiene que leerse pegado —son la misma
+              pestaña, dos vistas—. El botón azul es otra cosa: un color
+              sólido con sombra al lado de texto plano a 4px se leía apretado,
+              no como dos grupos. El margen extra va SOLO acá (el primero del
+              grupo de pestañas), no en el `gap` general: separar el botón del
+              grupo, sin aflojar el grupo entre sí. */}
+          <button
+            type="button"
+            role="tab"
+            tabIndex={expandida ? -1 : undefined}
+            aria-selected={pestana === 'chats'}
+            onClick={() => setPestana('chats')}
+            className={
+              'ml-2 flex h-7 items-center justify-center border-b-2 px-1 text-[13px] font-bold transition-colors max-md:h-10 max-md:px-1.5 max-md:text-[15px] ' +
+              (pestana === 'chats'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground')
+            }
+          >
+            Chats
+          </button>
+          <button
+            type="button"
+            role="tab"
+            tabIndex={expandida ? -1 : undefined}
+            aria-selected={pestana === 'llamadas'}
+            onClick={() => setPestana('llamadas')}
+            className={
+              'flex h-7 items-center justify-center border-b-2 px-1 text-[13px] font-bold transition-colors max-md:h-10 max-md:px-1.5 max-md:text-[15px] ' +
+              (pestana === 'llamadas'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground')
+            }
+          >
+            Llamadas
+          </button>
+
+          {/* ══ EL BUSCADOR — ícono que se expande hacia la izquierda,
+              pedido del dueño (07-sep-2026) ══
+              `absolute inset-0` los dos estados, para que el único cambio
+              entre colapsado y expandido sea de clases — nunca de montaje
+              (ver el docblock grande de `busquedaAbierta`, arriba del
+              `return`, sobre por qué el atajo global `/` lo exige). */}
+          <div
+            className={
+              /* `absolute inset-0` en los dos estados: un `mb-2` acá no
+                 pintaría nada (`inset-0` fija los cuatro bordes contra el
+                 padre `relative`, sin importar el margen). */
+              'flex items-center gap-2 rounded-full transition-[opacity] ' +
+              (expandida
+                ? 'absolute inset-0 z-20 border border-border bg-card px-3 opacity-100 focus-within:border-primary'
+                : 'pointer-events-none absolute inset-0 z-0 opacity-0')
+            }
+          >
+            <Search size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+            <input
+              ref={(el) => {
+                campoBusquedaRef.current = el;
+                if (typeof inputRef === 'function') inputRef(el);
+                else if (inputRef) inputRef.current = el;
+              }}
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              onFocus={() => setBusquedaAbierta(true)}
+              onBlur={() => setBusquedaAbierta(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  if (busqueda) setBusqueda('');
+                  else (e.target as HTMLInputElement).blur();
+                }
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setIdxFoco(0);
+                  refsFilas.current[0]?.focus();
+                }
+              }}
+              tabIndex={expandida ? undefined : -1}
+              placeholder="Buscar nombre, teléfono o texto…"
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground max-md:text-base"
+            />
+            {busqueda && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setBusqueda('')}
+                className="shrink-0 text-muted-foreground hover:text-foreground"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* El ícono del buscador y el de chat nuevo, pegados a la derecha
+            (pedido del dueño, 07-sep-2026) — antes vivían en su propio
+            renglón, arriba de Todo/No leídos/Favoritos. */}
+        <span className="flex shrink-0 items-center gap-1.5">
+          {!expandida && (
+            <button
+              type="button"
+              title="Buscar nombre, teléfono o texto…"
+              aria-label="Buscar nombre, teléfono o texto…"
+              onClick={() => campoBusquedaRef.current?.focus()}
+              className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground max-md:size-10"
+            >
+              <Search size={15} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            type="button"
+            title={conectado ? 'Chat nuevo (a un número que no está en la cola)' : 'WhatsApp no está conectado'}
+            disabled={!conectado}
+            onClick={() => setNuevoAbierto((v) => !v)}
+            className={botonAzulClass}
+          >
+            <MessageSquarePlus size={14} />
+          </button>
+        </span>
+      </div>
+
+      {pestana === 'llamadas' ? (
+        // Sólo el cartel — pedido explícito del dueño: nada más todavía.
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
+          <Phone size={28} className="mb-1 text-muted-foreground/50" aria-hidden="true" />
+          <p className="font-heading text-2xl font-bold text-navy-ink">Próximamente</p>
+        </div>
+      ) : enListas ? (
+        <>
           <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
             <button
               type="button"
@@ -572,57 +1000,21 @@ export function ColaUnificada({
           <div className="min-h-0 flex-1">
             <ListaCategorias onElegir={entrarACategoria} onGestionar={() => setGestorAbierto(true)} />
           </div>
-        </div>
-        {gestorAbierto && <GestorCategorias onCerrar={() => setGestorAbierto(false)} />}
-      </>
-    );
-  }
-
-  return (
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-card shadow-panel">
-      {/* Header: búsqueda + acciones arriba, tabs + filtros abajo, un solo bloque. */}
-      <div className="shrink-0 border-b border-border px-3 pb-2 pt-3">
-        <div className="mb-2 flex items-center gap-2">
-          <div className="flex flex-1 items-center gap-2 rounded-full border border-border bg-muted/50 px-3 py-1.5 transition-[border-color,background-color] focus-within:border-primary focus-within:bg-card">
-            <Search size={13} className="shrink-0 text-muted-foreground" />
-            <input
-              ref={inputRef}
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape' && busqueda) {
-                  e.stopPropagation();
-                  setBusqueda('');
-                }
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setIdxFoco(0);
-                  refsFilas.current[0]?.focus();
-                }
-              }}
-              placeholder="Buscar nombre, teléfono o texto…"
-              className="w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-            />
-            {busqueda && (
-              <button type="button" onClick={() => setBusqueda('')} className="text-muted-foreground hover:text-foreground">
-                <X size={12} />
-              </button>
-            )}
-          </div>
-          {/* El botón de Listas que vivía acá se fue a la barra de filtros: dos
-              puertas a lo mismo era redundancia, y la barra es donde ahora se
-              ven las categorías con su color. */}
-          <button
-            type="button"
-            title={conectado ? 'Chat nuevo (a un número que no está en la cola)' : 'WhatsApp no está conectado'}
-            disabled={!conectado}
-            onClick={() => setNuevoAbierto((v) => !v)}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_2px_10px_-2px_rgba(37,99,235,0.5)] transition-[background-color,transform,box-shadow] hover:bg-primary-hover active:scale-[0.95] disabled:opacity-40 disabled:shadow-none"
-          >
-            <MessageSquarePlus size={15} />
-          </button>
-        </div>
-
+        </>
+      ) : (
+        <>
+      {/* Header: tabs + filtros — la búsqueda y el chat nuevo se fueron arriba,
+          al lado de Chats/Llamadas (07-sep-2026, pedido del dueño).
+          ⚠️ **`px-2`, no `px-3` (08-sep-2026, pedido del dueño: «alineemos
+          los botones al filtro por canal»)**: la fila de arriba —el botón
+          azul, Chats/Llamadas— vive en `px-2`; con `px-3` acá, el borde
+          izquierdo de Todo/No leídos y de la barra de chips quedaba 4px más
+          adentro que el botón, así que las dos filas no se leían como parte
+          de la misma columna. `BarraFiltros.tsx` sangra con `-mx-3`/`px-3`
+          contra ESTE padding (para que sus chips lleguen hasta el borde del
+          panel) — ese número bajó con éste, en el mismo commit, o el sangrado
+          se desalinea de nuevo. */}
+      <div className="shrink-0 border-b border-border px-2 pb-2 pt-3">
         {nuevoAbierto && (
           <div className="mb-2 rounded-xl border border-border bg-muted/30 p-2">
             <div className="flex gap-1.5">
@@ -633,14 +1025,14 @@ export function ColaUnificada({
                 autoFocus
                 inputMode="tel"
                 placeholder="Teléfono con país, ej. 51 986…"
-                className="w-0 flex-1 rounded-lg border border-border bg-card px-2 py-1.5 font-mono text-xs outline-none focus:border-primary placeholder:font-sans"
+                className="w-0 flex-1 rounded-lg border border-border bg-card px-2 py-1.5 font-mono text-xs outline-none focus:border-primary placeholder:font-sans max-md:py-2.5 max-md:text-base"
               />
               <input
                 value={nuevoNombre}
                 onChange={(e) => setNuevoNombre(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && alTocarAbrir()}
                 placeholder="Nombre (opcional)"
-                className="w-0 flex-1 rounded-lg border border-border bg-card px-2 py-1.5 text-xs outline-none focus:border-primary"
+                className="w-0 flex-1 rounded-lg border border-border bg-card px-2 py-1.5 text-xs outline-none focus:border-primary max-md:py-2.5 max-md:text-base"
               />
               {/* EL BOTÓN, Y EL MENÚ DE LÍNEAS COLGANDO DE ÉL.
                   Molde: `vistas/BotonAbrirChat.tsx` (el de la tarjeta del
@@ -661,7 +1053,7 @@ export function ColaUnificada({
                   aria-expanded={hayQueElegirLinea ? menuLineaAbierto : undefined}
                   onClick={alTocarAbrir}
                   disabled={nuevoTel.replace(/\D/g, '').length < 8}
-                  className="rounded-lg bg-navy px-3 py-1.5 text-xs font-bold text-white transition-[background-color,transform] hover:bg-navy/90 active:scale-[0.97] disabled:opacity-40"
+                  className="rounded-lg bg-navy px-3 py-1.5 text-xs font-bold text-white transition-[background-color,transform] hover:bg-navy/90 active:scale-[0.97] disabled:opacity-40 max-md:py-2.5 max-md:text-sm"
                 >
                   Abrir
                 </button>
@@ -713,7 +1105,7 @@ export function ColaUnificada({
                   aria-selected={tab === t.valor}
                   onClick={() => setTab(t.valor)}
                   className={
-                    'rounded-md px-2.5 py-1 text-xs font-bold transition-colors ' +
+                    'rounded-md px-2.5 py-1 text-xs font-bold transition-colors max-md:px-3 max-md:py-2 max-md:text-[13px] ' +
                     (tab === t.valor ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')
                   }
                 >
@@ -721,75 +1113,6 @@ export function ColaUnificada({
                 </button>
               ))}
             </div>
-            {/*
-              «CANALES» — A PROPÓSITO FUERA de la píldora de tabs de arriba: no
-              es un cuarto tab (Todo/No leídos/Favoritos siguen siendo el eje),
-              es OTRO eje que angosta por dónde entró la conversación. Mismo
-              patrón de menú que «Abrir» más arriba (`usePopover`, foco al
-              primer item, cierre con Escape/clic afuera).
-            */}
-            <span className="relative shrink-0">
-              <button
-                ref={dispararCanal}
-                type="button"
-                aria-haspopup="true"
-                aria-expanded={menuCanalAbierto}
-                onClick={() => setMenuCanalAbierto((v) => !v)}
-                className={
-                  'flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-bold transition-colors ' +
-                  (opcionCanal ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')
-                }
-              >
-                {opcionCanal && (
-                  <span style={{ color: colorDeOpcionCanal(opcionCanal) }}>
-                    <LogoDeCanal canal={opcionCanal.logo} size={12} />
-                  </span>
-                )}
-                <span className="max-w-20 truncate">{opcionCanal?.label ?? 'Canales'}</span>
-                <ChevronDown size={12} className="shrink-0" aria-hidden="true" />
-              </button>
-              {menuCanalAbierto && (
-                <>
-                  <span {...propsMenuCanal} />
-                  <div
-                    role="menu"
-                    aria-label="Filtrar por canal"
-                    className="absolute left-0 top-8 z-30 w-48 rounded-xl bg-card p-1.5 text-left shadow-panel"
-                  >
-                    <button
-                      ref={primerItemCanal}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => elegirCanal('')}
-                      className={
-                        'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] font-medium transition-colors hover:bg-muted/50 ' +
-                        (!opcionCanal ? 'text-foreground' : 'text-muted-foreground')
-                      }
-                    >
-                      Todos los canales
-                    </button>
-                    {opcionesCanal.map((o) => (
-                      <button
-                        key={o.id}
-                        type="button"
-                        role="menuitem"
-                        aria-pressed={opcionCanal?.id === o.id}
-                        onClick={() => elegirCanal(o.id)}
-                        className={
-                          'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] font-medium transition-colors hover:bg-muted/50 ' +
-                          (opcionCanal?.id === o.id ? 'bg-muted/60 text-foreground' : 'text-foreground')
-                        }
-                      >
-                        <span style={{ color: colorDeOpcionCanal(o) }}>
-                          <LogoDeCanal canal={o.logo} size={13} />
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </span>
           </div>
           {deAntes ? (
             <SelloDeAntes texto={deAntes} actualizando={actualizando} />
@@ -817,10 +1140,9 @@ export function ColaUnificada({
             filtroSec={filtroSec}
             onFiltro={setFiltroSec}
             conteos={conteosFiltro}
-            lineas={lineas}
+            opciones={opcionesLinea}
             lineaActiva={linea}
             onLinea={setLinea}
-            hayMias={hayMias}
             catalogo={catalogo}
             categoriaActiva={categoriaActiva?.nombre ?? null}
             /* Desde la BARRA la categoría afina lo que ya se está mirando (el tab
@@ -855,7 +1177,7 @@ export function ColaUnificada({
             <button
               type="button"
               onClick={limpiarFiltros}
-              className="shrink-0 rounded-md px-1.5 py-0.5 font-bold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="shrink-0 rounded-md px-1.5 py-0.5 font-bold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 max-md:px-3 max-md:py-2 max-md:text-xs"
             >
               Ver todo
             </button>
@@ -892,8 +1214,14 @@ export function ColaUnificada({
         </p>
       )}
 
+      {/* `overscroll-contain` en el celular: sin él, arrastrar hacia abajo con
+          la lista ya arriba de todo encadena el gesto a la página y Chrome de
+          Android la RECARGA — con un borrador a medias. El `safe-area` de abajo
+          es la barra de gestos: la última fila no puede quedar debajo. Y
+          `--piso-movil` es la píldora Mensajes/Pipeline de campaña (ADR 0113),
+          que flota encima: la publica `App.tsx` sólo cuando la monta. */}
       <div
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-y-auto max-md:overscroll-contain max-md:pb-[calc(var(--piso-movil,0px)+env(safe-area-inset-bottom))]"
         onKeyDown={onTeclasLista}
         data-scroll-cola
       >
@@ -919,7 +1247,27 @@ export function ColaUnificada({
           />
         )}
 
-        {cargando ? (
+        {falla && items.length > 0 && (
+          // Lo que se ve es la cola de antes: el último pedido falló, y se dice arriba de ella.
+          <FallaConReintento
+            compacta
+            error={falla}
+            generico="No se pudo actualizar la cola."
+            onReintentar={reintentar}
+            reintentando={reintentando}
+          />
+        )}
+
+        {falla && items.length === 0 ? (
+          // 🔴 Sin esto, una cola en error y sin datos se veía VACÍA, y con la frescura al día eso era
+          // «Estás al día»: un festejo encima de una falla. El server cerró con 503 (ADR 0108).
+          <FallaConReintento
+            error={falla}
+            generico="La cola no llegó del servidor."
+            onReintentar={reintentar}
+            reintentando={reintentando}
+          />
+        ) : cargando ? (
           /* Skeleton con la anatomía real de la fila: avatar + dos barras. */
           <div aria-hidden="true">
             {Array.from({ length: 6 }, (_, i) => (
@@ -961,7 +1309,19 @@ export function ColaUnificada({
                   <p className="mt-1.5 text-sm text-muted-foreground">No queda deuda en la cola ahora mismo.</p>
                 </>
               )}
-              {nPreguntoPrecio > 0 ? (
+              {statsDia.isError && (
+                // La cifra del día sale de `/api/dashboard`, que también cierra con 503 si no lee las líneas.
+                <FallaConReintento
+                  compacta
+                  error={statsDia.error}
+                  generico="No pudimos traer tu cifra de hoy."
+                  onReintentar={() => void statsDia.refetch()}
+                  reintentando={statsDia.isFetching}
+                />
+              )}
+              {/* La guarda va AUNQUE la query esté apagada en campaña: su clave es la misma
+                  en los dos módulos, y un conteo de ventas guardado en el caché lo dibujaría. */}
+              {!esDeCampana && nPreguntoPrecio > 0 ? (
                 <button
                   type="button"
                   onClick={() => setFiltroSec('pregunto-precio')}
@@ -1035,6 +1395,7 @@ export function ColaUnificada({
             <div key={c.clave} className="group/fila relative">
               <FilaConversacion
                 c={c}
+                esDeCampana={esDeCampana}
                 seleccionada={seleccionada === c.clave}
                 onAbrir={onSeleccionar}
                 etapa={c.etapa_manual}
@@ -1081,7 +1442,7 @@ export function ColaUnificada({
               type="button"
               onClick={cargarMas}
               disabled={cargandoMas}
-              className="w-full rounded-lg border border-border py-2 text-xs font-bold text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
+              className="w-full rounded-lg border border-border py-2 text-xs font-bold text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50 max-md:py-3 max-md:text-sm"
             >
               {cargandoMas ? 'Cargando…' : busqueda && visibles.length === 0 ? 'Buscar en más historia' : 'Ver más'}
             </button>
@@ -1090,6 +1451,9 @@ export function ColaUnificada({
         {!cargando && !hayMas && busqueda !== '' && visibles.length === 0 && (
           <p className="pb-4 text-center text-[11px] text-muted-foreground">Ya está cargada toda la historia.</p>
         )}
+      </div>
+        </>
+      )}
       </div>
 
       {gestorAbierto && <GestorCategorias onCerrar={() => setGestorAbierto(false)} />}

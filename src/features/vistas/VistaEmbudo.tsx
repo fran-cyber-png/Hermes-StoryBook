@@ -1,14 +1,17 @@
-import { useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
+  ArrowRight,
   BadgeDollarSign,
   Check,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Columns3,
   History,
   Info,
+  List,
   MessageSquareOff,
   X,
   type LucideIcon,
@@ -22,6 +25,7 @@ import {
 import { useLineas } from '../../dominio/lineas';
 import { useLocalStorage } from '../../lib/useLocalStorage';
 import { ETAPA_ROTULO, type Etapa } from '../../lib/etapas';
+import { cifra } from '../../lib/formato';
 import { decidirDrop, decidirRebote, reintentoTrasInteres } from './compuertas';
 import { ModalInteresCotizado, ModalVentaCierre } from './ModalesCompuerta';
 import { HojaContacto } from '../panel/HojaContacto';
@@ -33,19 +37,54 @@ import {
   cifrasDeColumna,
   columnasDe,
   COLUMNA_CON_FRANJA,
+  contarHoy,
+  esRecorteSemaforo,
   etapaDeTarjeta,
   plantillaColumnas,
+  primeraParaAtender,
   quedanPorTraer,
   recortesDeColumna,
   repartirColumnas,
   resumirBandeja,
   resumirColumna,
+  tarjetasVisibles,
+  totalServidoDe,
   vacioDeColumna,
+  type ColumnaTablero,
+  NOMBRE_DEL_RECORTE_DEL_DIA,
+  TITULO_NUEVAS_HOY,
   type EtapaTrabajo,
   type Recorte,
 } from './tablero';
+import { esRecorteDelDia, type RecorteDelDia } from '../../dominio/recortesDelDia';
 import { FiltroCuando } from './FiltroCuando';
-import { limitesDe, type Franja } from './franja';
+import { limitesDe } from './franja';
+import { CabeceraPipeline } from './CabeceraPipeline';
+import { TiraDeChips } from './TiraDeChips';
+import { ListaPipeline } from './ListaPipeline';
+import { filasDeLista } from './lista';
+import {
+  chipsDeColumnaVisibles,
+  hayRango,
+  MESA_INICIAL,
+  mesaSiguiente,
+  origenDelVacio,
+  rangoDelTablero,
+  recorteDeLaColumna,
+} from './mesa';
+import { planDelPuente, resolverRecorteDelPuente, type PuentePipeline } from './puentePipeline';
+import { nombreDeCanal } from '../../components/BadgeCanal';
+import {
+  alcanceDeCanal,
+  CANAL_INICIAL,
+  canalesDeLaMesa,
+  conteoPorCanal,
+  filasDelCanal,
+  TODOS_LOS_CANALES,
+} from './canalDeMesa';
+import { respondidosDeLaMesa, resumirTablero } from './resumen';
+import { CabeceraColumnaCampana } from './CabeceraColumnaCampana';
+import { ICONO_DE_ETAPA } from './iconoDeEtapa';
 
 /**
  * EL PIPELINE — el tablero de venta de la vendedora.
@@ -109,20 +148,22 @@ const GRID = 'grid min-h-0 flex-1 gap-2 overflow-x-auto';
  * número, esto solo lo dibuja. Así el módulo puro se puede testear en `node` sin
  * arrastrar React.
  */
-/**
- * El texto del ícono informativo de «Te esperan» — literal y no `col.pista`:
- * esa columna dejó de mostrar su pista fija (pedido del dueño, 27-ago-2026,
- * para toda vendedora y campaña) y el dato de `tablero.ts` quedó vacío. El
- * tooltip lo necesita de todas formas, así que vive acá.
- */
-const PISTA_TE_ESPERAN = 'Escribieron y nadie les contestó todavía. La pelota es tuya.';
-
 const ICONO_RECORTE: Record<Recorte, LucideIcon | null> = {
   todas: null,
   precio: BadgeDollarSign,
   ventana: Clock,
   seguir: History,
   seCallo: MessageSquareOff,
+  // Las luces ya no son chips de columna —se recortan desde la leyenda de
+  // arriba, para las cinco—, pero siguen siendo `Recorte` y el tipo pide su
+  // entrada. Nunca llegan a dibujarse acá.
+  verde: null,
+  ambar: null,
+  gris: null,
+  rojo: null,
+  // Los recortes del día los pone la mesa (el puente), nunca un chip de columna.
+  escribioHoy: null,
+  sinRespuesta24h: null,
 };
 
 export function VistaEmbudo({
@@ -132,6 +173,8 @@ export function VistaEmbudo({
   miVendedora,
   esDeCampana,
   onMandarCorreo,
+  recorteInicial,
+  onConsumido,
 }: {
   onAbrir: (c: Conversacion) => void;
   /** La siguiente jugada del recibo de venta (cae en la Agenda vía puente). */
@@ -148,6 +191,13 @@ export function VistaEmbudo({
   esDeCampana?: boolean;
   /** Puente a Correos: baja hasta la ficha de la hoja. Sin esto, ahí no hay «Escribirle». */
   onMandarCorreo?: (destino: DestinoCorreo) => void;
+  /**
+   * EL PUENTE DESDE EL DASHBOARD (ADR 0104): abrir el Pipeline ya recortado. Se
+   * aplica UNA vez y se limpia con `onConsumido`, el mismo patrón que la Agenda:
+   * a partir de ahí mandan los controles de esta pantalla.
+   */
+  recorteInicial?: PuentePipeline | null;
+  onConsumido?: () => void;
 }) {
   const qc = useQueryClient();
   /**
@@ -157,24 +207,66 @@ export function VistaEmbudo({
    * barra de filtros de la cola (misma `queryKey`, `staleTime` de 5 min), así
    * que entrar al Pipeline no agrega un request.
    */
-  const { lineas } = useLineas();
+  // `veTodo` viaja con las líneas: es el rol (supervisor o admin) que decide si
+  // cada tarjeta dice a quién está asignada. Misma señal que usa el selector de
+  // líneas de la cola (`canales/alcance.ts`), no una segunda regla del rol.
+  const { lineas, veTodo } = useLineas();
   /**
-   * EL RECORTE ES POR COLUMNA — y ése es el cambio (§3.1 del plan).
+   * ══ LA MESA: el rango, el recorte de arriba, los de columna y la franja ═════
    *
-   * Hasta acá había **un solo recorte, global a la vista**, y solo se dibujaba
-   * arriba de Contactados. Alcanzaba mientras Contactados era la única columna
-   * con tarjetas; desde que el embudo se DERIVA (8-ago-2026) la pila se mudó a
-   * Cotizados —3.064 tarjetas— y la única columna con recorte quedó con 534. Una
-   * columna de 3.064 no es una lista de trabajo: es la misma pila con otro
-   * rótulo.
+   * UN estado y no cuatro, porque los cuatro ejes se apagan entre sí y esas
+   * exclusiones vivían escritas a mano en cada `onClick`. Qué convive con qué lo
+   * decide `mesaSiguiente` (`mesa.ts`, puro y con tests); acá sólo se despacha.
    *
-   * Cada eje sigue siendo UNO con varias posiciones y no varios toggles: cruzar
-   * «con precio» × «en ventana» × «para seguir» daría ocho estados, y la mitad
-   * no son listas que nadie pida. Qué chips se ofrecen lo decide
-   * `recortesDeColumna` (puro, con tests), no este componente.
+   * Tocar «Verdes 278» aplica esa luz a LAS CINCO columnas y le gana al recorte
+   * de cada una. Poner la luz limpia los de columna y la franja: un «Para seguir»
+   * vivo debajo de «Verdes» sería un filtro cruzado sin botón a la vista que lo
+   * apague, y un conteo («12 de 1.109») que no dice cuál de los dos lo achicó.
+   *
+   * ── EL RECORTE DE CADA COLUMNA (§3.1 del plan) ──
+   * Hasta el 8-ago-2026 había **un solo recorte, global a la vista**, y solo se
+   * dibujaba arriba de Contactados. Desde que el embudo se DERIVA la pila se mudó
+   * a Cotizados —3.064 tarjetas— y la única columna con recorte quedó con 534:
+   * una columna de 3.064 no es una lista de trabajo, es la misma pila con otro
+   * rótulo. Cada eje sigue siendo UNO con varias posiciones y no varios toggles
+   * (cruzar «con precio» × «en ventana» × «para seguir» daría ocho estados); qué
+   * chips se ofrecen lo decide `recortesDeColumna`, no este componente.
    */
-  const [recortes, setRecortes] = useState<Partial<Record<EtapaTrabajo, Recorte>>>({});
-  const recorteDe = (etapa: EtapaTrabajo): Recorte => recortes[etapa] ?? 'todas';
+  const [mesa, despachar] = useReducer(mesaSiguiente, MESA_INICIAL);
+  /**
+   * Qué rangos precargar: los que no están puestos, y sólo si el server ya dijo que
+   * los sabe servir. Se lee de la respuesta ANTERIOR (un render de atraso), que es
+   * justo cuando la precarga puede salir: después de que la visible contestó.
+   */
+  const [serverSabeDeRangos, setServerSabeDeRangos] = useState(false);
+  const precargaDeRangos = serverSabeDeRangos
+    ? (['hoy', 'd7', 'cola'] as const).filter((r) => r !== mesa.rango).map((r) => rangoDelTablero(r, new Date()))
+    : [];
+  const recorteDe = (etapa: EtapaTrabajo): Recorte => recorteDeLaColumna(mesa, etapa);
+
+  /**
+   * LA LÍNEA QUE ACOTA EL TABLERO ENTERO — hoy sólo la pone el puente del
+   * Dashboard (ADR 0104). No se guarda: es de esa visita, y se ve como un chip con
+   * su ✕ en la fila de arriba, nunca como un filtro escondido.
+   */
+  const [linea, setLinea] = useState<string | null>(null);
+  /**
+   * Lo mismo para el canal DEL PUENTE: los DMs que no entraron por ninguna línea.
+   * Mientras está puesto le gana al ícono (`canalDeMesa.ts#alcanceDeCanal`).
+   */
+  const [canal, setCanal] = useState<'facebook' | 'instagram' | null>(null);
+  /**
+   * ══ EL CANAL DE LA MESA — la fila de íconos (13-sep-2026, `canalDeMesa.ts`) ══
+   *
+   * «Te esperan» sumaba chats, DMs y COMENTARIOS en una cifra, y mil y pico se
+   * leían como mil y pico personas esperando por WhatsApp. La mesa se mira canal
+   * por canal y **arranca en WhatsApp**, cada vez que se entra: no se guarda,
+   * igual que el rango, porque lo que se trabaja al abrir son los chats.
+   */
+  const [canalElegido, setCanalElegido] = useState<string>(CANAL_INICIAL);
+  // 🔴 Sólo en campaña («exclusivamente para campaña»): en ventas no hay fila de
+  // íconos, y lo único que acota por canal es el puente del Dashboard.
+  const alcanceCanal = alcanceDeCanal(esDeCampana ? canalElegido : TODOS_LOS_CANALES, canal);
 
   /**
    * ══ LA FRANJA DE TIEMPO — «¿a quiénes les escribí hoy?» (`franja.ts`) ═════
@@ -191,15 +283,7 @@ export function VistaEmbudo({
    * revés. Con exclusión, cada chip promete un número que es cierto: el de la
    * lista que aparece cuando lo tocas.
    */
-  const [franja, setFranja] = useState<Franja | null>(null);
-  const ponerRecorte = (etapa: EtapaTrabajo, r: Recorte) => {
-    if (etapa === COLUMNA_CON_FRANJA) setFranja(null);
-    setRecortes((v) => ({ ...v, [etapa]: r }));
-  };
-  const ponerFranja = (f: Franja | null) => {
-    setFranja(f);
-    if (f) setRecortes((v) => ({ ...v, [COLUMNA_CON_FRANJA]: 'todas' }));
-  };
+  const franja = mesa.franja;
 
   /**
    * El recorte de una columna, como lo pide el tablero. `todas` = sin recorte.
@@ -212,7 +296,15 @@ export function VistaEmbudo({
    */
   const pedidoDe = (etapa: EtapaTrabajo): ColumnaDelTablero => {
     const r = recorteDe(etapa);
-    const base: ColumnaDelTablero = { etapa, recorte: r === 'todas' ? undefined : r };
+    // EL SEMÁFORO (#826, S.2): el server todavía no filtra la PÁGINA por luz
+    // (`cola/semaforoSql.ts` solo la CUENTA, en el desglose) — estos cuatro se
+    // recortan del lado del cliente, sobre lo que ya está cargado (más abajo,
+    // donde se arma `enEtapa`). Acá no viajan como `recorte`: la columna se
+    // pide entera, como si el chip activo fuera «Todas».
+    const base: ColumnaDelTablero = {
+      etapa,
+      recorte: r === 'todas' || esRecorteSemaforo(r) ? undefined : r,
+    };
     if (etapa !== COLUMNA_CON_FRANJA || !franja) return base;
     const { desde, hasta } = limitesDe(franja, new Date());
     return { ...base, franja: { desde: desde.toISOString(), hasta: hasta?.toISOString() ?? null } };
@@ -238,7 +330,27 @@ export function VistaEmbudo({
    * test dice —el ancho de la mesa a 1280— y ya no por una restricción de React.
    */
   const columnas = columnasDe(esDeCampana ? 'campana' : 'ventas');
-  const tablero = useTablero(columnas.map((c) => pedidoDe(c.id)));
+  const tablero = useTablero(
+    columnas.map((c) => pedidoDe(c.id)),
+    // El rango viaja como CLAVE (con el día, para «Hoy») y sus instantes se
+    // resuelven cuando sale cada pedido (`mesa.ts#rangoDelTablero`): con el
+    // instante en la clave, «7 d» relanzaba el tablero entero cada minuto.
+    // ⚠️ `new Date()` en el render sólo decide el DÍA de «Hoy», y sirve porque el
+    // React Compiler NO compila este componente (#950: se sale por el
+    // `{ [clave]: _, ...resto }` de `quitarOverride`). Compilado, la clave de «Hoy»
+    // no cambiaría a la medianoche hasta que cambie `mesa.rango`.
+    {
+      linea,
+      canal: alcanceCanal,
+      rango: rangoDelTablero(mesa.rango, new Date()),
+      // Los otros dos rangos, detrás (`useTablero`). Con un server que no sabe de
+      // rangos (sin `recortesDisponibles`), nada: «Hoy» y «7 d» le darían 400.
+      precargar: precargaDeRangos,
+      // El desglose por canal y en el rango (13-sep-2026), SÓLO en campaña: es lo que
+      // cuenta la composición de cada columna. Ventas sigue con el de siempre.
+      mesaPorCanal: Boolean(esDeCampana),
+    },
+  );
   const porColumna = tablero.porColumna as Record<
     EtapaTrabajo,
     (typeof tablero.porColumna)[string]
@@ -246,7 +358,17 @@ export function VistaEmbudo({
 
   // El desglose (conteos reales por etapa × turno × precio) viene UNA vez para
   // todo el tablero: es la misma foto, y contarla por columna era contarla cinco.
-  const desglose = tablero.desglose;
+  /**
+   * 🔴 CON `mesaPorCanal` EL DESGLOSE TRAE TODOS LOS CANALES, Y LA MESA MIRA UNO.
+   * La composición de cada columna lee `desgloseTodosLosCanales`; todo lo demás —la
+   * cifra, el «hoy», los respondidos, la bandeja y la leyenda— lee `desglose`, que
+   * es el del canal elegido (`canalDeMesa.ts#filasDelCanal`). Así «Verdes 12» es lo
+   * que queda al tocarlo. Un server viejo ya lo manda recortado por canal, y de 30
+   * días: ahí se usa tal cual llega.
+   */
+  const desgloseDelRango = Boolean(esDeCampana) && tablero.mesaPorCanal;
+  const desgloseTodosLosCanales = tablero.desglose;
+  const desglose = desgloseDelRango ? filasDelCanal(desgloseTodosLosCanales, alcanceCanal) : desgloseTodosLosCanales;
   const conteos = tablero.conteos;
 
   /**
@@ -255,6 +377,8 @@ export function VistaEmbudo({
    * siendo la misma función pura, con los mismos tests.
    */
   const bandeja = resumirBandeja(desglose, conteos);
+  /** La mesa entera, para la cabecera: la suma de ESTAS columnas (`resumen.ts`). */
+  const resumenMesa = resumirTablero(columnas, desglose, conteos);
 
   /**
    * ══ QUÉ COLUMNAS ESTÁN COLAPSADAS (ADR 0089) ═══════════════════════════════
@@ -313,7 +437,14 @@ export function VistaEmbudo({
   const repartidas = repartirColumnas(
     columnas.map((col) => [col.id, porColumna[col.id]!.items] as const),
     overrides,
+    // En campaña manda el tiempo: «el color no reordena» (dueño, 13-sep-2026).
+    { ordenarPorLuz: !esDeCampana },
   );
+
+  // «ATENDER SIGUIENTE» (#807, S.3): sobre TODO lo que el tablero ya cargó,
+  // en las columnas que se están dibujando — el mismo universo que ya
+  // acotaron el reparto y la frontera de cliente al pedir cada columna.
+  const paraAtender = primeraParaAtender([...repartidas.values()].flat());
 
   function quitarOverride(clave: string) {
     setOverrides((o) => {
@@ -488,26 +619,236 @@ export function VistaEmbudo({
     mover.mutate({ c, etapa: d.etapa });
   }
 
+  /**
+   * ══ TABLERO · LISTA ═════════════════════════════════════════════════════════
+   *
+   * Preferencia de PANTALLA, como el colapso de columnas (ADR 0089): va a
+   * `localStorage` y nunca al server. Un valor guardado que no es ninguno de los
+   * dos —una versión vieja, un dedazo— cae al tablero.
+   */
+  const [vistaGuardada, setVista] = useLocalStorage<'tablero' | 'lista'>('hermes.embudo.vista', 'tablero');
+  const enLista = vistaGuardada === 'lista';
+
+  /**
+   * ══ EL PUENTE ENTRA (ADR 0104) ══════════════════════════════════════════════
+   *
+   * Un puente es «abre el Pipeline ASÍ»: por eso limpia lo que había (recortes de
+   * columna, franja, la luz anterior) en vez de sumarse encima. Lo que no se puede
+   * aplicar todavía va al aviso de siempre (`planDelPuente`). Si pide una dueña,
+   * abre la Lista con ese filtro — el tablero no sabe recortar por dueña — y la
+   * remonta (`key`) para que el filtro inicial se lea de nuevo.
+   */
+  const [filtroAsignadaInicial, setFiltroAsignadaInicial] = useState('');
+  const [vecesDelPuente, setVecesDelPuente] = useState(0);
+  /** El recorte del día que pidió el puente, mientras el server no dijo si lo sabe hacer. */
+  const [recorteDelPuente, setRecorteDelPuente] = useState<RecorteDelDia | null>(null);
+  useEffect(() => {
+    if (!recorteInicial) return;
+    const plan = planDelPuente(recorteInicial);
+    despachar({ tipo: 'abrir', luz: plan.luz });
+    setRecorteDelPuente(plan.recorteDelDia);
+    setLinea(plan.linea);
+    setCanal(plan.canal);
+    // Las cifras del Dashboard cuentan TODOS los canales: el puente abre la mesa
+    // así, y si trae un canal propio, ése le gana al ícono (`alcanceDeCanal`).
+    setCanalElegido(TODOS_LOS_CANALES);
+    if (plan.filtroAsignada != null) {
+      setFiltroAsignadaInicial(plan.filtroAsignada);
+      setVecesDelPuente((n) => n + 1);
+      setVista('lista');
+    }
+    onConsumido?.();
+  }, [recorteInicial, onConsumido, setVista]);
+
+  /**
+   * EL RECORTE DEL DÍA SE DECIDE CON LA RESPUESTA, no con el puente
+   * (`resolverRecorteDelPuente`): mandarlo antes de saber si el server lo conoce
+   * sería apostar el tablero entero a un 400. Con un server que no lo publica, se
+   * abre sin él y se dice.
+   */
+  const { recortesDisponibles, contesto, fallo } = tablero;
+  useEffect(() => {
+    if (recortesDisponibles != null) setServerSabeDeRangos(true);
+  }, [recortesDisponibles]);
+
+  /**
+   * 🔴 LA MESA ARRANCA EN «HOY», Y UN SERVER VIEJO NO SABE QUÉ ES (`mesa.ts`).
+   * Sin `recortesDisponibles` (#946), `franjaEn=*` se lee como una columna que no
+   * existe y el tablero entero da 400. Si eso pasa con un rango puesto, la mesa
+   * vuelve a 30 días en vez de quedarse en blanco: es la ventana de siempre, y la
+   * cabecera ya dice por qué «Hoy» y «7 d» están apagados.
+   */
+  useEffect(() => {
+    if (fallo && recortesDisponibles == null && hayRango(mesa.rango)) despachar({ tipo: 'rango', rango: 'cola' });
+  }, [fallo, recortesDisponibles, mesa.rango]);
+  useEffect(() => {
+    if (!recorteDelPuente) return;
+    const r = resolverRecorteDelPuente(recorteDelPuente, recortesDisponibles, !contesto, fallo);
+    if (r.tipo === 'esperar') return;
+    if (r.tipo === 'aplicar') despachar({ tipo: 'recorteDelDia', recorte: r.recorte });
+    else setAviso(r.aviso);
+    setRecorteDelPuente(null);
+  }, [recorteDelPuente, recortesDisponibles, contesto, fallo]);
+
+  /**
+   * LO QUE UNA COLUMNA DIBUJA Y CUÁNTO DICE QUE MIDE — lo leen las DOS vistas:
+   * cada columna del Tablero y el pie de la Lista («Mostrando X de N»). Con dos
+   * cuentas, la Lista diría un total que las columnas del Tablero no suman.
+   */
+  const vistaDeColumna = (col: ColumnaTablero) => {
+    const columna = porColumna[col.id]!;
+    const resumen = resumirColumna(desglose, col.id, conteos);
+    const recorte = recorteDe(col.id);
+    // EL SEMÁFORO (#826, S.2): el server no filtró la página por luz (arriba, en
+    // `pedidoDe`), así que se recorta del lado del cliente, sobre lo que ya se
+    // cargó y ya se ordenó por luz (`tarjetasVisibles`).
+    const enEtapa = tarjetasVisibles(repartidas.get(col.id) ?? [], recorte);
+    // Las DOS cifras: la del recorte manda, el total acompaña («47 · de 3.064»).
+    // La regla vive en `tablero.ts`; con un recorte de semáforo el «servido» sale
+    // del desglose, porque el server no recortó nada (`totalServidoDe`).
+    const conFranja = col.id === COLUMNA_CON_FRANJA && franja != null;
+    // Con un rango Y una luz, el total de la luz del desglose es de 30 días: lo
+    // que describe la lista es lo que quedó de las cargadas del rango.
+    // Con `mesaPorCanal` el desglose YA es del rango, así que su total de la luz sí vale.
+    const luzEnElRango = hayRango(mesa.rango) && esRecorteSemaforo(recorte) && !desgloseDelRango;
+    const cifras = cifrasDeColumna(
+      resumen,
+      recorte,
+      luzEnElRango ? undefined : totalServidoDe(resumen, recorte, columna.total),
+      enEtapa.length,
+      // La franja de la columna o el rango de la mesa: los dos achican por
+      // tiempo, y el desglose —de donde sale el número grande— no sabe de
+      // ninguno de los dos. Con cualquiera, manda el total servido.
+      // Con `mesaPorCanal` el desglose YA es del rango: ahí el rango no achica
+      // nada, y forzar el «de N» dejaba «20 de 23» con dos cuentas de la misma lista.
+      conFranja || (hayRango(mesa.rango) && !desgloseDelRango),
+    );
+    return { columna, resumen, recorte, enEtapa, conFranja, cifras };
+  };
+
   const etapaArrastrada = arrastrada ? etapaDeTarjeta(arrastrada, overrides) : null;
+  // Vacío es vacío en TODOS los canales: con WhatsApp en cero y 900 comentarios, las
+  // columnas se dibujan, porque su composición dice dónde está la gente.
   const tableroVacio =
     !cargando &&
-    (desglose != null || conteos != null) &&
-    (desglose?.length ?? Object.keys(conteos ?? {}).length) === 0;
+    (desgloseTodosLosCanales != null || conteos != null) &&
+    (desgloseTodosLosCanales?.length ?? Object.keys(conteos ?? {}).length) === 0;
+  /** Lo que sirvió el server para las columnas dibujadas, sumado: con el rango y el recorte ya aplicados. */
+  const servidasEnLaMesa = columnas.reduce((suma, col) => suma + porColumna[col.id]!.total, 0);
 
   return (
     // `relative`: la hoja de la ficha se ancla acá adentro (`absolute inset-y-3
     // right-3`), no al viewport — así respeta el padding del tablero y no se
     // mete abajo de la barra de la cabecera.
     <div className="relative flex min-h-0 flex-1 flex-col p-3">
-      <div className="mb-2 flex min-h-4 shrink-0 items-center gap-3 px-1">
-        {arrastrada != null && (
-          <p className="text-xs text-muted-foreground">
-            A <span className="font-semibold">{ETAPA_ROTULO.cotizado.varios}</span> con curso de
-            interés; a <span className="font-semibold">{ETAPA_ROTULO.cierre.varios}</span>,
-            registrando la venta. Si falta algo, se pide al soltar.
-          </p>
-        )}
-      </div>
+      <CabeceraPipeline
+        resumen={resumenMesa}
+        desgloseDelRango={desgloseDelRango}
+        recorte={mesa.recorte}
+        onRecorte={(luz) => despachar({ tipo: 'luz', luz })}
+        rango={mesa.rango}
+        onRango={(rango) => despachar({ tipo: 'rango', rango })}
+        // `recortesDisponibles` es también la señal de `franjaEn=*` (#946): a un
+        // server sin ella, «Hoy» mandaría `*` como una columna y el tablero entero
+        // daría 400.
+        rangoDisponible={recortesDisponibles != null}
+        // Con un recorte del día puesto, lo que sirvió cada columna es la
+        // INTERSECCIÓN con el rango y no el tamaño del rango: esa cifra va en el
+        // chip del recorte, que es lo que la nombra (como «Verdes 278»).
+        totalDelRango={hayRango(mesa.rango) && !esRecorteDelDia(mesa.recorte) ? servidasEnLaMesa : null}
+        recorteDelDia={
+          esRecorteDelDia(mesa.recorte)
+            ? {
+                nombre: NOMBRE_DEL_RECORTE_DEL_DIA[mesa.recorte],
+                n: cargando ? null : servidasEnLaMesa,
+                onQuitar: () => despachar({ tipo: 'recorteDelDia', recorte: null }),
+              }
+            : null
+        }
+        cargando={cargando}
+        linea={
+          linea
+            ? { etiqueta: lineas.find((l) => l.numero === linea)?.etiqueta ?? linea, onQuitar: () => setLinea(null) }
+            : null
+        }
+        // Se nombra como DM («Messenger», «Instagram»), porque es lo que se pide:
+        // `tipo=mensaje` (`canalDeMesa.ts#alcanceDeCanal`).
+        canal={canal ? { etiqueta: nombreDeCanal(canal, 'mensaje'), onQuitar: () => setCanal(null) } : null}
+        // La fila de íconos, SÓLO en campaña. Tocar uno reemplaza el canal del
+        // puente: un eje por vez.
+        canales={
+          esDeCampana
+            ? {
+                opciones: canalesDeLaMesa(),
+                elegido: canal ? null : canalElegido,
+                onElegir: (id) => {
+                  setCanal(null);
+                  setCanalElegido(id);
+                },
+              }
+            : null
+        }
+        // La pista nombra las dos compuertas de VENTAS (curso de interés y
+        // venta registrada): en campaña no existe ninguna de las dos, así que
+        // ahí no se dice nada en vez de explicar reglas de otro tablero.
+        pista={
+          arrastrada != null && !esDeCampana ? (
+            <p className="text-xs text-muted-foreground">
+              A <span className="font-semibold">{ETAPA_ROTULO.cotizado.varios}</span> con curso de
+              interés; a <span className="font-semibold">{ETAPA_ROTULO.cierre.varios}</span>,
+              registrando la venta. Si falta algo, se pide al soltar.
+            </p>
+          ) : undefined
+        }
+        acciones={
+          <>
+            {/* TABLERO · LISTA — la misma mesa en dos formas. Segmentado como el
+                de `PanelNegocio`, para que un conmutador de la casa se lea igual
+                en todas las pantallas. */}
+            <div role="group" aria-label="Vista" className="flex rounded-full border border-border p-0.5">
+              {(
+                [
+                  ['tablero', 'Tablero', Columns3],
+                  ['lista', 'Lista', List],
+                ] as const
+              ).map(([id, rotulo, Icono]) => {
+                const activa = (id === 'lista') === enLista;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={activa}
+                    onClick={() => setVista(id)}
+                    className={
+                      'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition-colors duration-200 ease-house ' +
+                      (activa ? 'bg-navy text-white' : 'text-muted-foreground hover:text-foreground')
+                    }
+                  >
+                    <Icono size={12} aria-hidden />
+                    {rotulo}
+                  </button>
+                );
+              })}
+            </div>
+            {/* «ATENDER SIGUIENTE» (#807, S.3) — abre el primer verde que espera
+                (el más antiguo primero), después ámbar, después gris, nunca un
+                rojo. La precedencia vive una vez en `tablero.ts#primeraParaAtender`;
+                acá solo se llama sobre lo que YA está cargado —el mismo universo
+                que ya filtró el reparto y la frontera de cliente para esta
+                vendedora (ADR 0083), no una segunda regla de alcance. */}
+            {paraAtender && (
+              <button
+                type="button"
+                onClick={() => setFicha(paraAtender)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 font-heading text-xs font-bold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Atender siguiente
+                <ArrowRight size={13} />
+              </button>
+            )}
+          </>
+        }
+      />
 
       {servidorSinEtapas && (
         <div className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-secondary/70 px-3 py-2 text-xs text-foreground">
@@ -556,23 +897,47 @@ export function VistaEmbudo({
           <p className="text-sm font-semibold text-foreground">El embudo está vacío.</p>
           <p className="max-w-sm text-xs text-muted-foreground">
             Cuando alguien escriba por WhatsApp, Facebook o Instagram, cae solo en la bandeja — y al
-            responderle, pasa solo a «{ETAPA_ROTULO.contactado.varios}».
+            responderle, pasa solo a «{columnas.find((c) => c.id === 'contactado')?.titulo ?? ETAPA_ROTULO.contactado.varios}».
           </p>
         </div>
+      ) : enLista ? (
+        <ListaPipeline
+          key={vecesDelPuente}
+          filtroInicial={filtroAsignadaInicial}
+          filas={filasDeLista(columnas, repartidas, recorteDe)}
+          columnas={columnas}
+          lineas={lineas}
+          conAsignacion={veTodo}
+          esDeCampana={esDeCampana}
+          total={columnas.reduce((suma, col) => suma + vistaDeColumna(col).cifras.principal, 0)}
+          hayMas={columnas.some((col) => porColumna[col.id]!.hayMas)}
+          cargandoMas={columnas.some((col) => porColumna[col.id]!.cargandoMas)}
+          // «Traer más» pide la página siguiente a TODAS las columnas que tienen
+          // más: la Lista mezcla las cinco, y traer de una sola le cambiaría el
+          // orden a lo que ya se estaba mirando.
+          onTraerMas={() => {
+            for (const col of columnas) {
+              const c = porColumna[col.id]!;
+              if (c.hayMas && !c.cargandoMas) c.cargarMas();
+            }
+          }}
+          onFicha={setFicha}
+          fichaAbierta={ficha?.clave ?? null}
+          onAbrir={onAbrir}
+        />
       ) : (
         <div className={GRID} style={{ gridTemplateColumns: plantillaColumnas(columnas, colapsadas) }}>
           {columnas.map((col) => {
-            const enEtapa = repartidas.get(col.id) ?? [];
-            const columna = porColumna[col.id];
-            const resumen = resumirColumna(desglose, col.id, conteos);
-            const recorte = recorteDe(col.id);
+            const { columna, resumen, recorte, enEtapa, conFranja, cifras } = vistaDeColumna(col);
             const opciones = recortesDeColumna(col.id, resumen, recorte);
-            // Las DOS cifras: la del recorte manda, el total acompaña («47 · de
-            // 3.064»). La regla vive en `tablero.ts`, no acá.
-            const conFranja = col.id === COLUMNA_CON_FRANJA && franja != null;
-            const cifras = cifrasDeColumna(resumen, recorte, columna.total, enEtapa.length, conFranja);
             // El «Ver más» cuenta siempre sobre lo que la columna está pidiendo.
-            const faltan = quedanPorTraer(cifras.principal, columna.items.length);
+            // ⚠️ Con un recorte de semáforo puesto, «Ver más» sigue pidiendo más
+            // de la columna ENTERA (el server no sabe filtrar por luz todavía):
+            // puede traer más páginas sin que aparezca ni una tarjeta nueva del
+            // color que se está mirando. Limitación conocida, no un bug mudo.
+            const faltan = esRecorteSemaforo(recorte)
+              ? quedanPorTraer(columna.total, columna.items.length)
+              : quedanPorTraer(cifras.principal, columna.items.length);
             const esDestino = sobre === col.id && arrastrada != null;
             const esPerdidos = false;
             const esCierre = col.id === 'cierre';
@@ -580,6 +945,135 @@ export function VistaEmbudo({
             const esContactados = col.id === 'contactado';
             const fondo = esDestino ? 'bg-secondary' : esPerdidos ? 'bg-transparent' : 'bg-secondary/50';
             const estaColapsada = colapsadas.has(col.id);
+            // «N hoy» junto al total (pedido del dueño, 10-sep-2026): la misma
+            // cuenta que el «nuevas hoy» de arriba, acotada a esta columna y a su
+            // recorte, así describe la lista que se ve. Con franja calla: la
+            // franja es de tiempo, el desglose no la conoce y el cruce sería falso.
+            // Con el RANGO de la mesa sí se dice: las que nacieron hoy tienen
+            // mensajes de hoy, así que caen adentro de «Hoy» y de «7 d».
+            // Con un recorte del día calla sola (`contarHoy`).
+            // Va en el renglón de abajo y no en el del título a propósito: ahí, a
+            // 1280, dejaba «Nunca contestaron» en «Nunca…».
+            const hoy = conFranja ? null : contarHoy(desglose, [col.id], recorte);
+            const conHoy = hoy != null && hoy > 0;
+            // «Sin abrir» y «volvieron» salen del desglose de 30 días: sólo describen
+            // la columna cuando su número es el universo (`cifras.de == null`). Con
+            // cualquier cosa que la achique —su chip, una luz, un recorte del día,
+            // Hoy o 7 d—, «48 de 1.109 · 877 sin abrir» se leía como parte de la
+            // lista recortada. Es la cabecera de VENTAS: campaña ya no los dice
+            // («volvieron quítalo», «sin abrir no está funcionando», 13-sep-2026).
+            const conDesgloseDeBandeja =
+              esTeEsperan && bandeja.hayDetalle && bandeja.total > 0 && cifras.de == null;
+            // «N RESPONDIDOS» EN «TE ESPERAN» (campaña, 13-sep-2026): la columna de al
+            // lado, contada en la misma foto. Con un chip, una luz o un recorte del día
+            // calla, igual que callaban «sin abrir» y «volvieron»: ahí la card describe
+            // otra lista.
+            const respondidos =
+              esDeCampana && esTeEsperan && recorte === 'todas'
+                ? respondidosDeLaMesa(desglose, mesa.rango, desgloseDelRango)
+                : null;
+
+            // El (i) de la columna: reemplaza al texto fijo que iba siempre debajo del
+            // título, y la pista se cuenta al pasar el mouse.
+            // ⚠️ SIN `title`: ese atributo dispara el tooltip NATIVO del navegador
+            // encima del nuestro —dos burbujas a la vez, una sin ningún diseño—, así que
+            // la única fuente de texto accesible es `aria-label`.
+            // ⚠️ El fondo es `bg-navy` y no `bg-navy-ink`: `-ink` es TINTA y en oscuro se
+            // ACLARA (`#DCE7F7`, para que un TÍTULO se siga leyendo sobre una tarjeta
+            // oscura) — de fondo daba una burbuja casi blanca con letra blanca encima,
+            // ilegible. `navy` es SUPERFICIE y no se invierte: queda oscura en los dos
+            // temas (ver `index.css`).
+            const pistaDeColumna = col.pista && (
+              <span className="group/info relative inline-flex shrink-0 self-center">
+                <button
+                  type="button"
+                  data-pista-columna={col.id}
+                  aria-label={col.pista}
+                  className="inline-flex h-4 w-4 items-center justify-center rounded-full text-primary transition-colors hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  <Info size={12} />
+                </button>
+                <span
+                  role="tooltip"
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-1/2 top-full z-10 mt-1.5 w-56 -translate-x-1/2 rounded-lg bg-navy px-2.5 py-1.5 text-[11px] font-normal leading-snug text-white opacity-0 shadow-xl transition-opacity duration-150 group-hover/info:opacity-100 group-focus-within/info:opacity-100"
+                >
+                  {col.pista}
+                </span>
+              </span>
+            );
+
+            // EL COLAPSO (ADR 0089): oculta la columna en una franja angosta con el
+            // título vertical, sin perder la tarjeta que se está arrastrando por encima —
+            // el `<section>` sigue siendo destino de drop igual colapsada.
+            // ⚠️ Con fondo y borde a propósito, y no solo un ícono gris: un chevron de
+            // 14px sin marco se perdía al lado del número y el título (pedido del dueño,
+            // «que se note más»). El círculo se resalta en navy al pasar el mouse, el
+            // mismo tratamiento que ya usan los chips activos del recorte — así se lee
+            // como un control, no como ruido.
+            const botonColapsar = (
+              <button
+                type="button"
+                data-alternar-colapso={col.id}
+                onClick={() => alternarColapso(col.id)}
+                title={`Colapsar ${col.titulo}`}
+                aria-label={`Colapsar ${col.titulo}`}
+                className="ml-auto flex shrink-0 items-center justify-center self-center rounded-full border border-border bg-secondary p-1 text-muted-foreground transition-colors duration-200 ease-house hover:border-navy hover:bg-navy hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              >
+                <ChevronLeft size={15} strokeWidth={2.5} />
+              </button>
+            );
+
+            // EL RECORTE — en CADA columna de trabajo, con su propio estado. Qué chips
+            // aparecen lo decide `recortesDeColumna` (puro): la regla del cero, y que
+            // Cierre y Perdidos no lleven ninguno, viven ahí con su porqué.
+            // Con un recorte de la MESA o un rango puestos no se ofrece el de la columna
+            // (ni la franja): un eje por vez, y con «Hoy» sus números serían de 30 días
+            // (`mesa.ts`). La salida está arriba, y el vacío de la columna lo dice.
+            const chipsDeColumna = chipsDeColumnaVisibles(mesa) && (opciones.length > 1 || col.id === COLUMNA_CON_FRANJA) && (
+              <div className="mt-1.5 flex items-center gap-1">
+                {/* El filtro de tiempo va PRIMERO y en la misma fila: es un recorte
+                    más de esta columna, no un control aparte.
+                    ⚠️ Pero AFUERA de la tira que se desliza: su menú es absoluto y
+                    `overflow-x-auto` lo cortaría. */}
+                {col.id === COLUMNA_CON_FRANJA && (
+                  <FiltroCuando
+                    franja={franja}
+                    onElegir={(f) => despachar({ tipo: 'franjaDeColumna', franja: f })}
+                    ahora={new Date()}
+                  />
+                )}
+                {/* Un «Todas» solo —sin otro eje al lado— es un botón que no cambia
+                    nada: sigue escondido, como antes. */}
+                {opciones.length > 1 && (
+                  <TiraDeChips>
+                    {opciones.map((r) => {
+                      const activo = recorte === r.id;
+                      const Icono = ICONO_RECORTE[r.id];
+                      return (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onClick={() => despachar({ tipo: 'recorteDeColumna', etapa: col.id, recorte: r.id })}
+                          aria-pressed={activo}
+                          title={r.ayuda}
+                          className={
+                            'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 py-px text-[11px] font-semibold transition-colors ' +
+                            (activo
+                              ? 'border-navy bg-navy text-white'
+                              : 'border-border text-muted-foreground hover:text-foreground')
+                          }
+                        >
+                          {Icono && <Icono size={10} />}
+                          {r.label}
+                          {r.n != null && ` ${cifra(r.n)}`}
+                        </button>
+                      );
+                    })}
+                  </TiraDeChips>
+                )}
+              </div>
+            );
             return (
               <section
                 key={col.id}
@@ -616,7 +1110,7 @@ export function VistaEmbudo({
                       <ChevronRight size={15} strokeWidth={2.5} />
                     </span>
                     <span className="font-heading text-sm font-bold tabular-nums text-foreground">
-                      {cifras.principal.toLocaleString('es-PE')}
+                      {cifra(cifras.principal)}
                     </span>
                     <h3 className="[writing-mode:vertical-rl] rotate-180 whitespace-nowrap font-heading text-[13px] font-bold text-foreground">
                       {col.titulo}
@@ -624,29 +1118,53 @@ export function VistaEmbudo({
                   </button>
                 ) : (
                   <>
+                  {esDeCampana ? (
+                    /* LA CABECERA DE CAMPAÑA (13-sep-2026): ícono, título, la cifra del
+                       canal elegido y la composición por canal de la etapa, en CADA
+                       columna; en «Te esperan», lo del día. Ventas conserva la suya. */
+                    <CabeceraColumnaCampana
+                      columna={col}
+                      cifras={cifras}
+                      conteos={desgloseDelRango ? conteoPorCanal(desgloseTodosLosCanales, col.id) : null}
+                      alcance={alcanceCanal}
+                      delDia={esTeEsperan ? { hoy, respondidos } : null}
+                      pista={pistaDeColumna}
+                      colapsar={botonColapsar}
+                      chips={chipsDeColumna}
+                    />
+                  ) : (
                   <header className="px-1.5 pb-2 pt-1">
                     <div className="flex items-baseline gap-1.5">
                       <span
                         className={
-                          'font-heading text-xl font-bold tabular-nums ' +
+                          'shrink-0 font-heading text-xl font-bold tabular-nums ' +
                           (esPerdidos ? 'text-muted-foreground' : 'text-foreground')
                         }
                       >
-                        {cifras.principal.toLocaleString('es-PE')}
+                        {cifra(cifras.principal)}
                       </span>
                       {/* El tamaño real del montón, cuando el recorte lo achica. Sin
                           esto, «47» se leería como si la columna entera fueran 47. */}
                       {cifras.de != null && (
                         <span
-                          className="font-mono text-[11px] tabular-nums text-muted-foreground"
-                          title={`${cifras.principal.toLocaleString('es-PE')} de ${cifras.de.toLocaleString('es-PE')} en total`}
+                          // `nowrap`: con el título truncándose al lado, «de 7,505» se
+                          // partía en dos renglones y la cabecera crecía (lo mostró
+                          // la captura con «Verdes» puesto).
+                          className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground"
+                          title={`${cifra(cifras.principal)} de ${cifra(cifras.de)} en total`}
                         >
-                          de {cifras.de.toLocaleString('es-PE')}
+                          de {cifra(cifras.de)}
                         </span>
                       )}
+                      {/* `min-w-0 truncate`: con el (i) en las cinco columnas y la
+                          cifra «de N» de un recorte, «Nunca contestaron» no entra
+                          en los ~217 px de contenido de una columna a 1280. Se
+                          corta con puntos suspensivos y el `title` lo dice
+                          entero, en vez de empujar el botón de colapsar afuera. */}
                       <h3
+                        title={col.titulo}
                         className={
-                          'font-heading text-[13px] font-bold ' +
+                          'min-w-0 truncate font-heading text-[13px] font-bold ' +
                           (esCierre ? 'text-navy-ink' : esPerdidos ? 'text-muted-foreground' : 'text-foreground')
                         }
                       >
@@ -655,65 +1173,16 @@ export function VistaEmbudo({
                       {esCierre && enEtapa.length > 0 && (
                         <Check size={13} strokeWidth={3} className="self-center text-success" />
                       )}
-                      {/* Reemplaza al texto fijo que iba siempre debajo del
-                          título: la pista se cuenta al pasar el mouse.
-                          ⚠️ SIN `title`: ese atributo dispara el tooltip NATIVO
-                          del navegador encima del nuestro —dos burbujas a la
-                          vez, una sin ningún diseño—, así que la única fuente
-                          de texto accesible es `aria-label`.
-                          ⚠️ El fondo es `bg-navy` y no `bg-navy-ink`: `-ink` es
-                          TINTA y en oscuro se ACLARA (`#DCE7F7`, para que un
-                          TÍTULO se siga leyendo sobre una tarjeta oscura) — de
-                          fondo daba una burbuja casi blanca con letra blanca
-                          encima, ilegible. `navy` es SUPERFICIE y no se
-                          invierte: queda oscura en los dos temas (ver
-                          `index.css`). */}
-                      {esTeEsperan && (
-                        <span className="group/info relative inline-flex shrink-0 self-center">
-                          <button
-                            type="button"
-                            aria-label={PISTA_TE_ESPERAN}
-                            className="inline-flex h-4 w-4 items-center justify-center rounded-full text-primary transition-colors hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                          >
-                            <Info size={12} />
-                          </button>
-                          <span
-                            role="tooltip"
-                            aria-hidden="true"
-                            className="pointer-events-none absolute left-1/2 top-full z-10 mt-1.5 w-56 -translate-x-1/2 rounded-lg bg-navy px-2.5 py-1.5 text-[11px] font-normal leading-snug text-white opacity-0 shadow-xl transition-opacity duration-150 group-hover/info:opacity-100 group-focus-within/info:opacity-100"
-                          >
-                            {PISTA_TE_ESPERAN}
-                          </span>
-                        </span>
-                      )}
-                      {/* EL COLAPSO (ADR 0089): oculta la columna en una franja
-                          angosta con el título vertical, sin perder la tarjeta que
-                          se está arrastrando por encima — el `<section>` sigue
-                          siendo destino de drop igual colapsada.
-
-                          ⚠️ Con fondo y borde a propósito, y no solo un ícono
-                          gris: un chevron de 14px sin marco se perdía al lado del
-                          número y el título (pedido del dueño, «que se note
-                          más»). El círculo se resalta en navy al pasar el mouse,
-                          el mismo tratamiento que ya usan los chips activos del
-                          recorte — así se lee como un control, no como ruido. */}
-                      <button
-                        type="button"
-                        data-alternar-colapso={col.id}
-                        onClick={() => alternarColapso(col.id)}
-                        title={`Colapsar ${col.titulo}`}
-                        aria-label={`Colapsar ${col.titulo}`}
-                        className="ml-auto flex shrink-0 items-center justify-center self-center rounded-full border border-border bg-secondary p-1 text-muted-foreground transition-colors duration-200 ease-house hover:border-navy hover:bg-navy hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                      >
-                        <ChevronLeft size={15} strokeWidth={2.5} />
-                      </button>
+                      {pistaDeColumna}
+                      {botonColapsar}
                     </div>
-                    {esCierre && arrastrada != null && etapaArrastrada !== 'cierre' ? (
+                    {/* La pista ya no va en un renglón fijo: la cuenta el (i) de
+                        arriba, en las cinco columnas (10-sep-2026). Lo único que
+                        queda acá es lo que cambia MIENTRAS se arrastra. */}
+                    {esCierre && arrastrada != null && etapaArrastrada !== 'cierre' && (
                       <p className="mt-0.5 text-xs font-semibold leading-tight text-navy-ink">
                         Suelta para registrar la venta
                       </p>
-                    ) : esTeEsperan ? null : (
-                      <p className="mt-0.5 text-[11px] leading-tight text-muted-foreground">{col.pista}</p>
                     )}
 
                     {/*
@@ -726,69 +1195,47 @@ export function VistaEmbudo({
                       ⚠️ `hayDetalle` es false mientras el server no manda desglose
                       (entre N4 y N5): ahí calla en vez de decir dos ceros.
                     */}
-                    {esTeEsperan && bandeja.hayDetalle && bandeja.total > 0 && (
-                      <p className="mt-1 flex flex-wrap items-baseline gap-x-1.5 font-mono text-[11px] tabular-nums leading-tight text-muted-foreground">
-                        {bandeja.vivas > 0 && (
-                          <span className="font-semibold text-temp-fresco" title="Escribieron hace menos de 24 h">
-                            {bandeja.vivas.toLocaleString('es-PE')} ahora
-                          </span>
-                        )}
-                        <span title="Nadie les contestó nunca">
-                          {bandeja.nuevas.toLocaleString('es-PE')} sin abrir
-                        </span>
-                        <span aria-hidden className="text-muted-foreground/40">·</span>
-                        <span title="Ya les hablaste y volvieron a escribir">
-                          {bandeja.retomadas.toLocaleString('es-PE')} volvieron
-                        </span>
-                      </p>
+                    {(conHoy || conDesgloseDeBandeja) && (
+                        <p className="mt-1 flex flex-wrap items-baseline gap-x-1.5 font-mono text-[11px] tabular-nums leading-tight text-muted-foreground">
+                          {conHoy && (
+                            <span className="font-semibold text-foreground" title={TITULO_NUEVAS_HOY}>
+                              {cifra(hoy)} hoy
+                            </span>
+                          )}
+                          {conHoy && conDesgloseDeBandeja && (
+                            <span aria-hidden className="text-muted-foreground/40">·</span>
+                          )}
+                          {conDesgloseDeBandeja && (
+                            <>
+                              {bandeja.vivas > 0 && (
+                                <span className="font-semibold text-temp-fresco" title="Escribieron hace menos de 24 h">
+                                  {cifra(bandeja.vivas)} ahora
+                                </span>
+                              )}
+                              <span title="Nadie les contestó nunca">
+                                {cifra(bandeja.nuevas)} sin abrir
+                              </span>
+                              <span aria-hidden className="text-muted-foreground/40">·</span>
+                              <span title="Ya les hablaste y volvieron a escribir">
+                                {cifra(bandeja.retomadas)} volvieron
+                              </span>
+                            </>
+                          )}
+                        </p>
                     )}
 
-                    {/*
-                      EL RECORTE — ahora en CADA columna de trabajo, con su propio
-                      estado. Qué chips aparecen lo decide `recortesDeColumna`
-                      (puro): la regla del cero, y que Cierre y Perdidos no lleven
-                      ninguno, viven ahí con su porqué.
-
-                      Se dibuja solo si hay algo más que «Todas»: un eje solitario
-                      que no recorta nada es un botón que no hace nada.
-                    */}
-                    {(opciones.length > 1 || col.id === COLUMNA_CON_FRANJA) && (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                        {/* El filtro de tiempo va PRIMERO y en la misma fila: es un
-                            recorte más de esta columna, no un control aparte. */}
-                        {col.id === COLUMNA_CON_FRANJA && (
-                          <FiltroCuando franja={franja} onElegir={ponerFranja} ahora={new Date()} />
-                        )}
-                        {/* Un «Todas» solo —sin otro eje al lado— es un botón que
-                            no cambia nada: sigue escondido, como antes. */}
-                        {opciones.length > 1 && opciones.map((r) => {
-                          const activo = recorte === r.id;
-                          const Icono = ICONO_RECORTE[r.id];
-                          return (
-                            <button
-                              key={r.id}
-                              type="button"
-                              onClick={() => ponerRecorte(col.id, r.id)}
-                              aria-pressed={activo}
-                              title={r.ayuda}
-                              className={
-                                'inline-flex items-center gap-1 rounded-full border px-2 py-px text-[11px] font-semibold transition-colors ' +
-                                (activo
-                                  ? 'border-navy bg-navy text-white'
-                                  : 'border-border text-muted-foreground hover:text-foreground')
-                              }
-                            >
-                              {Icono && <Icono size={10} />}
-                              {r.label}
-                              {r.n != null && ` ${r.n.toLocaleString('es-PE')}`}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                    {/* Se dibuja solo si hay algo más que «Todas»: un eje solitario que
+                        no recorta nada es un botón que no hace nada. */}
+                    {chipsDeColumna}
                   </header>
+                  )}
 
-                  <div data-scroll-columna className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-0.5">
+                  {/* `--piso-movil`: la píldora de campaña del celular flota encima
+                      (ADR 0113); sin ella la variable no existe y esto es 0. */}
+                  <div
+                    data-scroll-columna
+                    className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-0.5 max-md:pb-[calc(var(--piso-movil,0px)+0.125rem)]"
+                  >
                     {enEtapa.map((c, i) => (
                       <TarjetaEmbudo
                         key={c.clave}
@@ -811,13 +1258,30 @@ export function VistaEmbudo({
                         cotizando={mover.isPending && mover.variables?.c.clave === c.clave}
                         columna={col.titulo}
                         lineas={lineas}
+                        conAsignacion={veTodo}
+                        esDeCampana={esDeCampana}
                       />
                     ))}
 
                     {enEtapa.length === 0 && !esDestino && (
-                      <div className="flex flex-1 items-center justify-center px-3 pb-10">
+                      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 pb-10">
+                        {/* En campaña, el ícono de la columna, grande y tenue (la maqueta del
+                            dueño). El texto sigue diciendo CÓMO se llena: una columna en cero
+                            que no lo explica es la mitad del problema de esta pantalla. */}
+                        {esDeCampana &&
+                          (() => {
+                            const IconoVacio = ICONO_DE_ETAPA[col.id];
+                            return IconoVacio ? (
+                              <span
+                                aria-hidden
+                                className="flex size-12 items-center justify-center rounded-full bg-card text-muted-foreground/60 shadow-[0_1px_2px_rgba(14,42,82,0.05)]"
+                              >
+                                <IconoVacio size={22} strokeWidth={1.5} />
+                              </span>
+                            ) : null;
+                          })()}
                         <p className="max-w-[24ch] text-center text-[11px] leading-relaxed text-muted-foreground">
-                          {vacioDeColumna(recorte, col.vacio, conFranja)}
+                          {vacioDeColumna(recorte, col.vacio, origenDelVacio(mesa, col.id), col.id)}
                         </p>
                       </div>
                     )}
@@ -838,7 +1302,7 @@ export function VistaEmbudo({
                         {columna.cargandoMas
                           ? 'Trayendo…'
                           : faltan > 0
-                            ? `Ver más · faltan ${faltan.toLocaleString('es-PE')}`
+                            ? `Ver más · faltan ${cifra(faltan)}`
                             : 'Ver más'}
                       </button>
                     )}

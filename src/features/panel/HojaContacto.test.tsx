@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { montar, reposar, teclear, tocar, type Montado } from '../../pruebas/dom';
+import { esperarA, montar, reposar, teclear, tocar, type Montado } from '../../pruebas/dom';
 import type { Conversacion } from '../../dominio/conversaciones';
 import { HojaContacto } from './HojaContacto';
 
@@ -146,7 +146,17 @@ describe('HojaContacto — el Escape', () => {
 
   it('muestra el selector de asignación cuando la línea tiene reparto', async () => {
     vista = montar(<HojaContacto conversacion={CONTACTO} onCerrar={vi.fn()} miVendedora="ana" />);
-    await reposar();
+    // ⚠️ `esperarA` y no un `reposar()` suelto: el chip aparece recién cuando
+    // resuelve `useRueda`, o sea después de un fetch, su escritura en el caché y
+    // el re-render. Un solo tick alcanzaba **de casualidad** — lo sostenía un
+    // `setState` de más que `PasarConversacion` hacía al montar (un `reset()`
+    // sobre una mutación que ya estaba `idle`). Al sacar ese render de más por
+    // rendimiento, este test empezó a fallar 1 de cada 3 corridas y tumbó `main`.
+    // Esperar la CONDICIÓN no depende de cuántos renders haya en el camino.
+    await esperarA(
+      () => vista!.contenedor.querySelector('button[title*="asignar"]') !== null,
+      'el chip de asignar de la hoja',
+    );
 
     const boton = vista.contenedor.querySelector('button[title*="asignar"]');
     expect(boton).not.toBeNull();
@@ -178,7 +188,10 @@ describe('HojaContacto — el Escape', () => {
   it('🔴 con dueña dice su NOMBRE, y si es tuya dice «Tú» — nunca «Asignar»', async () => {
     const deOtra = { ...CONTACTO, asignada_a: 'luz' };
     vista = montar(<HojaContacto conversacion={deOtra} onCerrar={vi.fn()} miVendedora="ana" />);
-    await reposar();
+    await esperarA(
+      () => vista!.contenedor.querySelector('button[title*="signada"]') !== null,
+      'el chip con la dueña de la conversación',
+    );
     let boton = vista.contenedor.querySelector('button[title*="signada"]');
     expect(boton, 'con dueña el chip tiene que existir').not.toBeNull();
     expect(boton?.textContent, 'el nombre de la rueda, no el username abreviado').toContain('Luz');
@@ -189,7 +202,10 @@ describe('HojaContacto — el Escape', () => {
     // `Luz` de Cerberus contra `luz` del login es un caso vivo en producción.
     const mia = { ...CONTACTO, asignada_a: 'Ana' };
     vista = montar(<HojaContacto conversacion={mia} onCerrar={vi.fn()} miVendedora="ana" />);
-    await reposar();
+    await esperarA(
+      () => vista!.contenedor.querySelector('button[title*="tuya"]') !== null,
+      'el chip que dice que la conversación es tuya',
+    );
     boton = vista.contenedor.querySelector('button[title*="tuya"]');
     expect(boton, 'asignada a mí: el chip lo tiene que decir, no volver al vacío').not.toBeNull();
     expect(boton?.textContent).toContain('Tú');

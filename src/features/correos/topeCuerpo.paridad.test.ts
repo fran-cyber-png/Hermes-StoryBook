@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { conMiles, motivoParaNoEnviar, TOPE_CUERPO } from './correos';
+import { cifra } from '../../lib/formato';
+import { motivoParaNoEnviar, TOPE_CUERPO } from './correos';
 import type { EstadoDeCorreos } from './tipos';
 
 /**
@@ -113,7 +114,7 @@ describe('TOPE_CUERPO — front y server dicen el mismo número', () => {
     );
 
     expect(veredicto.puede).toBe(false);
-    expect(veredicto.puede === false && veredicto.motivo).toContain(conMiles(delServer));
+    expect(veredicto.puede === false && veredicto.motivo).toContain(cifra(delServer));
   });
 
   /**

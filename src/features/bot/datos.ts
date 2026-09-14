@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ErrorApi } from '../../lib/datos/cliente';
 import { intervaloConStream, streamVivo } from '../../lib/datos/latido';
-import { porQueNoSeGuardo, verBot, type ModoBot, type RespuestaBotApi, type VistaBot } from './estado';
+import { CODIGO_OTRO_MODULO, porQueNoSeGuardo, verBot, type ModoBot, type RespuestaBotApi, type VistaBot } from './estado';
 
 /**
  * EL PUENTE con `/api/bot` — la ruta que estaba montada y **no la llamaba nadie**.
@@ -63,15 +63,26 @@ export function useBot(): {
   });
 
   const fallo = modo.error ?? freno.error;
-  const errorAlCambiar = fallo ? porQueNoSeGuardo(fallo instanceof ErrorApi ? fallo.status : null) : null;
+  // El `codigo` viaja con el status: detrás del guard, un 503 también es «no pudimos leer tus líneas».
+  const falloApi = fallo instanceof ErrorApi ? fallo : null;
+  const errorAlCambiar = fallo ? porQueNoSeGuardo(falloApi?.status ?? null, falloApi?.codigo) : null;
 
   // 404 = este server es anterior a la ruta (el front sale por N4 y el server por
   // N5: la ventana entre los dos es real). 400 = la ruta existe y no pudo decidir
   // sobre qué línea opera. Son dos cosas distintas y el chip las dice distinto.
   const status = consulta.error instanceof ErrorApi ? consulta.error.status : null;
+  // 403 CON el código = el candado `deVentas` (ADR 0077): quien mira trabaja en
+  // campaña y de ese lado el bot no existe. Se mira el CÓDIGO y no el 403, para
+  // que una sesión vencida en ventas no se lea como «no te toca» — ver el
+  // docblock de `Contexto.deOtroModulo`.
+  const codigo = consulta.error instanceof ErrorApi ? consulta.error.codigo : undefined;
 
   return {
-    vista: verBot(consulta.data, { sinRuta: status === 404, sinLinea: status === 400 }),
+    vista: verBot(consulta.data, {
+      sinRuta: status === 404,
+      sinLinea: status === 400,
+      deOtroModulo: codigo === CODIGO_OTRO_MODULO,
+    }),
     cargando: consulta.isPending,
     cambiando: modo.isPending || freno.isPending,
     errorAlCambiar,

@@ -190,6 +190,10 @@ export function ModalVentaCierre({
         personaNombre={c.persona_nombre}
         numeroPropio={c.numero_propio}
         paisNombre={data.pais}
+        // Sin esto, soltar en Cierre a alguien que YA compró nunca arrancaba en
+        // PostVenta: la ficha lo sabía y el formulario no (11-sep-2026). Misma
+        // lectura que `VentaDesdeElPanel`: `null` es «no cargó», no «no compró».
+        yaCompro={data.ventasCount != null && data.ventasCount > 0}
         onAgendarBienvenida={onAgendarBienvenida}
         onCerrar={onCerrar}
       />

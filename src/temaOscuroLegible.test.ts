@@ -212,11 +212,11 @@ describe('la jerarquía sólida del tema oscuro', () => {
    * escribe `text-muted-foreground/35` o `bg-muted/45`, la regla de arriba
    * sigue verde y en pantalla vuelve a aparecer una capa que depende del fondo.
    */
-  const FUENTES: Record<string, string> = import.meta.glob(['./**/*.tsx', './**/*.ts'], {
-    query: '?raw',
-    import: 'default',
-    eager: true,
-  });
+  // ⚠️ Se reusa el `FUENTES` del módulo en vez de repetir el glob. Eran DOS
+  // `import.meta.glob` idénticos con `eager` y `?raw`, o sea el árbol entero del
+  // front leído como texto **dos veces**: el archivo tardaba 7,75 s él solo y,
+  // bajo la carga de la suite completa, reventaba el `testTimeout` de 30 s y
+  // ponía `main` en rojo por azar, bloqueando los deploys de todos.
 
   /** Las utilities con alfa que el CSS traduce a sólido. */
   function traducidas(): Set<string> {

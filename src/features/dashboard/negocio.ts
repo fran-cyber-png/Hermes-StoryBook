@@ -14,7 +14,36 @@ import { api } from '../../lib/datos/cliente';
 export const CLAVES_PERIODO = ['hoy', '7d', '30d', '90d'] as const;
 export type ClavePeriodo = (typeof CLAVES_PERIODO)[number];
 
-export type Dimension = 'curso' | 'anuncio';
+/**
+ * Las tres lecturas de la misma mesa. Se DERIVA la lista, no se escribe dos
+ * veces: el segmentado de `PanelNegocio` sale de acá, así que agregar una cuarta
+ * es tocar este array y su rótulo, y nada más.
+ */
+export const DIMENSIONES = ['curso', 'anuncio', 'vendedora', 'campana', 'linea', 'canal'] as const;
+export type Dimension = (typeof DIMENSIONES)[number];
+
+/** De qué tabla salió el nombre de la campaña — ver el docblock del server (`dashboard/negocio.ts`). */
+export type FuenteCampana = 'ruteo' | 'resuelto' | 'formulario';
+
+/**
+ * UNA CELDA DEL CRUCE — la fila partida por la otra dimensión (el server la
+ * arma en `dashboard/negocio.ts`).
+ *
+ * `parte` es la vendedora cuando la tabla va por curso o por anuncio, y el curso
+ * cuando ya va por vendedora: siempre la dimensión que la fila no dice. Es lo
+ * que contesta «de este curso, ¿a quién le está yendo bien?» sin pedir nada
+ * nuevo — viaja con la respuesta y se despliega al abrir la fila.
+ */
+export interface CeldaDelDesglose {
+  fila: string | null;
+  parte: string | null;
+  llegaron: number;
+  esperan: number;
+  nunca_respondidos: number;
+  /** El tiempo de primera respuesta de esa persona en esa fila. Se recalcula por celda. */
+  demora_mediana_min: number | null;
+  cerrados: number;
+}
 
 export interface FilaNegocio {
   /** El curso o el título del anuncio. `null` = no se pudo atribuir. */
@@ -26,6 +55,8 @@ export interface FilaNegocio {
    */
   familia?: string | null;
   ad_id: string | null;
+  /** Sólo con `dimension === 'campana'`: de qué tabla salió el nombre. */
+  fuente_campana?: FuenteCampana | null;
   llegaron: number;
   respondidos: number;
   nunca_respondidos: number;
@@ -35,6 +66,13 @@ export interface FilaNegocio {
   cotizados: number;
   cerrados: number;
   precio_mencionado: number;
+  /**
+   * 🚧 Seam del semáforo de INTERÉS DE COMPRA (no urgencia) — sin implementar
+   * todavía. Ver el docblock de `server/src/dashboard/negocio.ts`. Ausente o
+   * `null` mientras el dueño no apruebe la regla (D1/D2 de «El semáforo del
+   * lead»); ninguna pantalla de S.4 lo lee.
+   */
+  semaforo?: { verdes: number; ambar: number; gris: number; rojos: number } | null;
 }
 
 export interface PuntoCobertura {
@@ -62,8 +100,17 @@ export interface DatosNegocio {
   dimension: Dimension;
   atencion: Atencion;
   filas: FilaNegocio[];
+  /** El cruce de cada fila con la otra dimensión. Ausente = server viejo (ver ADR 0007). */
+  desglose?: CeldaDelDesglose[];
   sin_atribuir: number;
   subregistro: { cotizados: number; precio_mencionado: number };
+  /**
+   * POR QUÉ SE PIERDEN (ADR 0107): de las que llegaron en el período, las que hoy están
+   * perdidas, por motivo (`motivo: null` = una perdida sin motivo, de antes de que se
+   * pidiera). Ausente = server viejo o respuesta rehidratada del caché (ADR 0007), y ahí
+   * el bloque no se dibuja.
+   */
+  perdidas?: { total: number; porMotivo: { motivo: string | null; n: number }[] };
 }
 
 /** El horario de atención, espejo del server (`dashboard/horarioAtencion.ts`). */
@@ -86,7 +133,20 @@ export function useNegocio(params: {
     // El panel no es la cola: se mira, se piensa y se cambia de período. Sin
     // refetchInterval a propósito — un número que se mueve solo mientras lo lees
     // es ruido, y el escaneo no es gratis.
-    staleTime: 60_000,
+    //
+    // 🔴 120 s, no 60 — y ATADO al TTL del server (`server/src/dashboard/
+    // cacheNegocio.ts`). Antes del hotfix «el negocio no tumba producción» el
+    // `staleTime` de acá (60 s) era MENOR que la caché del server no existía:
+    // con la caché puesta, un `staleTime` menor al TTL igual dispararía un
+    // refetch que la caché sirve gratis — inofensivo, pero un round-trip que no
+    // suma nada. Igualarlo al TTL es lo que hace que «recién pedido» y «recién
+    // cacheado» digan lo mismo.
+    staleTime: 120_000,
+    // Y sin refetch al volver a la pestaña: con 8 pestañas de Dashboard
+    // abiertas, un cambio de foco en cada una vuelve a ser la tormenta que este
+    // hotfix vino a apagar — el dato ya tiene su propia frescura garantizada
+    // por el `staleTime` de arriba.
+    refetchOnWindowFocus: false,
     // Regla del kit: al refrescar se sostiene el render anterior, no se vuelve a
     // un esqueleto. Sin esto, cambiar de período hace saltar todo el layout.
     placeholderData: (previo) => previo,

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Smartphone, Tags, X } from 'lucide-react';
-import type { LineaWhatsapp } from '../../dominio/lineas';
 import {
   CLASE_BORDE,
   CLASE_FONDO,
@@ -9,7 +8,8 @@ import {
   esColorCategoria,
 } from '../../dominio/paletaCategorias';
 import { categoriasDeLaBarra, CHIPS_EN_BARRA, FILTROS_SEC, type CategoriaEnBarra, type FiltroSec } from '../../dominio/cola';
-import { opcionesDeLinea, seDibujaElSelector, tagDeTransporte } from './alcance';
+import { seDibujaElSelector, tagDeTransporte, type OpcionDeLinea } from './alcance';
+import { useEfectoAlCambiar } from '../../lib/useEfectoAlCambiar';
 
 /**
  * LA BARRA DE FILTROS DE LA COLA — una sola fila que se corre de izquierda a
@@ -105,7 +105,7 @@ function Pista({
     setSombra((prev) => (prev.izq === nueva.izq && prev.der === nueva.der ? prev : nueva));
   }
 
-  useEffect(() => {
+  useEfectoAlCambiar([], () => {
     const el = pista.current;
     if (!el) return;
     medir();
@@ -132,8 +132,7 @@ function Pista({
       el.removeEventListener('wheel', rueda);
     };
     // Se cablea una vez sobre el nodo de la pista: no depende de nada del render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
   /**
    * LO ENCENDIDO SE TRAE A LA VISTA. A 360 px con cuatro líneas vivas, la línea
@@ -187,18 +186,23 @@ function Pista({
   }
 
   return (
-    /* `-mx-3` + `px-3` en la pista: la barra SANGRA hasta el borde del panel. Si
+    /* `-mx-2` + `px-2` en la pista: la barra SANGRA hasta el borde del panel. Si
        se quedara dentro del padding, el último chip se cortaría en seco contra
-       el borde y el degradado quedaría 12 px adentro, sin tapar el corte —que es
-       justo lo que tiene que disimular—. */
-    <div className="relative -mx-3">
+       el borde y el degradado quedaría 8 px adentro, sin tapar el corte —que es
+       justo lo que tiene que disimular—.
+       ⚠️ **Este número es el `px-2` del contenedor de `ColaUnificada.tsx`
+       (08-sep-2026, corrección del mismo día), no un `3` suelto**: son el
+       mismo padding, uno cancelándolo y el otro reponiéndolo — si alguno de
+       los dos cambia sin el otro, el sangrado se corre y el primer chip queda
+       desalineado del resto de la cabecera. */
+    <div className="relative -mx-2">
       <div
         ref={pista}
         role="toolbar"
         aria-label={etiqueta}
         onScroll={medir}
         onKeyDown={onTeclas}
-        className="sin-riel flex items-center gap-1.5 overflow-x-auto scroll-smooth px-3 py-0.5"
+        className="sin-riel flex items-center gap-1.5 overflow-x-auto scroll-smooth px-2 py-0.5"
       >
         {children}
       </div>
@@ -230,10 +234,9 @@ export function BarraFiltros({
   categoriaActiva,
   onCategoria,
   onListas,
-  lineas = [],
+  opciones = [],
   lineaActiva = '',
   onLinea,
-  hayMias = false,
 }: {
   filtroSec: FiltroSec;
   onFiltro: (f: FiltroSec) => void;
@@ -260,13 +263,24 @@ export function BarraFiltros({
   onCategoria: (c: { nombre: string; color: string } | null) => void;
   /** Abre el modo Listas, donde están TODAS las categorías y su edición. */
   onListas: () => void;
-  /** Las líneas de WhatsApp vivas (#50). Con menos de dos, el selector no se dibuja. */
-  lineas?: readonly LineaWhatsapp[];
+  /**
+   * QUÉ COLAS PUEDE MIRAR, **ya decidido** — `opcionesDeLinea` en `alcance.ts`.
+   *
+   * 🔴 **Llega armado y no se calcula acá, y eso ES el arreglo del 7-sep-2026.**
+   * Antes esta barra recibía `lineas` + `hayMias` y llamaba a `opcionesDeLinea`
+   * por su cuenta, mientras `ColaUnificada` la llamaba OTRA VEZ para resolver
+   * `lineaEfectiva`. Dos llamadas a la misma regla con dos juegos de argumentos:
+   * cuando la regla ganó un tercero (`veTodo`, el rol), había dos lugares donde
+   * olvidarlo y el olvido no tiene síntoma — el selector se dibuja igual, con la
+   * lista equivocada. Con la decisión hecha UNA vez arriba, no hay dónde
+   * divergir (#37).
+   *
+   * Con menos de dos opciones el selector no se dibuja (`seDibujaElSelector`).
+   */
+  opciones?: readonly OpcionDeLinea[];
   /** El número propio elegido; `''` = todas, `LINEA_MIAS` = las asignadas a quien mira. */
   lineaActiva?: string;
   onLinea?: (numero: string) => void;
-  /** `numero_vendedora` le asigna alguna línea viva: recién ahí se ofrece «Las mías». */
-  hayMias?: boolean;
 }) {
   const categorias = categoriasDeLaBarra(catalogo, categoriaActiva);
   /** Solo los dos del bot llegan a tener chip hoy (`CHIPS_EN_BARRA`). */
@@ -283,13 +297,6 @@ export function BarraFiltros({
   const visibles = FILTROS_SEC.filter(
     (f) => CHIPS_EN_BARRA.includes(f.valor) && (filtroSec === f.valor || (conteoDe(f.valor) ?? 0) > 0),
   );
-
-  /**
-   * Las opciones del segmentado, y **son las TUYAS cuando el mapa te asigna
-   * alguna**: la regla vive pura y con tests en `alcance.ts`. Con una sola línea
-   * propia queda una opción y el control no se dibuja — no hay elección que tomar.
-   */
-  const opciones = opcionesDeLinea(lineas, hayMias);
 
   return (
     <div className="flex flex-col gap-1">
@@ -332,7 +339,7 @@ export function BarraFiltros({
                     /* `max-w` + `truncate`: el rótulo lo escribe Cerberus y puede
                        venir largo («Escuela — línea principal»). El nombre entero
                        sigue en el `title`. */
-                    'max-w-[7.5rem] shrink-0 truncate rounded-full px-2.5 py-0.5 text-[11px] font-semibold ' +
+                    'max-w-[7.5rem] shrink-0 truncate rounded-full px-2.5 py-0.5 text-[11px] font-semibold max-md:py-1.5 max-md:text-xs ' +
                     'transition-[background-color,color] duration-200 ease-house active:scale-[0.97] ' +
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ' +
                     (activa
@@ -381,7 +388,10 @@ export function BarraFiltros({
               title={activo ? `Quitar el filtro «${f.label}»` : f.ayuda}
               onClick={() => onFiltro(activo ? '' : f.valor)}
               className={
-                'flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold ' +
+                /* `max-md:`: en el celular el chip se toca con el dedo, no con el
+                   puntero — sube a ~32 px de alto. La pista sigue scrolleando de
+                   costado con el pulgar, igual que en escritorio con la rueda. */
+                'flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold max-md:px-3 max-md:py-1.5 max-md:text-xs ' +
                 'transition-[background-color,border-color,color] duration-200 ease-house active:scale-[0.97] ' +
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ' +
                 (activo
@@ -414,7 +424,7 @@ export function BarraFiltros({
               title={activa ? `Salir de la lista «${c.nombre}»` : `Ver solo «${c.nombre}»`}
               onClick={() => onCategoria(activa ? null : { nombre: c.nombre, color: c.color })}
               className={
-                'flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold capitalize ' +
+                'flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold capitalize max-md:px-3 max-md:py-1.5 max-md:text-xs ' +
                 'transition-[background-color,border-color,color] duration-200 ease-house active:scale-[0.97] ' +
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ' +
                 CLASE_BORDE[color] +
@@ -438,7 +448,7 @@ export function BarraFiltros({
           type="button"
           onClick={onListas}
           title="Ver y administrar todas las listas"
-          className="flex shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors duration-200 ease-house hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors duration-200 ease-house hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 max-md:px-3 max-md:py-1.5 max-md:text-xs"
         >
           <Tags size={11} />
           {catalogo && catalogo.length > 0 ? 'Listas' : 'Crear listas'}

@@ -1,4 +1,5 @@
 import { ErrorApi } from '../../lib/datos/cliente';
+import { hace } from '../../lib/formato';
 import { LIMITE_TEXTO } from './notas';
 
 /**
@@ -39,17 +40,27 @@ export const QUIETO: EstadoGuardado = { tipo: 'quieto' };
 /**
  * QUÉ DICE EL RENGLÓN DE ESTADO.
  *
- * `yaSeEdito` es el `editadoAt` de la página: sirve para distinguir «todavía no
- * escribiste nada» de «está guardado». **Nunca puede tapar un fallo**, y eso es
- * lo único que este archivo tiene que garantizar.
+ * `editadoAt` es el de la página: sirve para distinguir «todavía no escribiste
+ * nada» de «está guardado», Y (03-sep-2026) para decir CUÁNDO — «Guardado ·
+ * hace 2 min», reusando `hace()` de `lib/formato.ts` en vez de inventar un
+ * segundo cálculo de tiempo relativo (#37). **Nunca puede tapar un fallo**, y
+ * eso es lo único que este archivo tiene que garantizar.
+ *
+ * ⚠️ El autoguardado que ACABA de terminar (`estado.tipo === 'guardado'`) dice
+ * «recién» y no `hace(editadoAt)`: son el mismo instante, pero `editadoAt`
+ * todavía puede no haber llegado al caché del front cuando este render
+ * corre (el `setQueryData` es un paso aparte de `useAutoguardado`), así que
+ * calcularlo desde ahí a veces daría "hace 0 min" y a veces "" — «recién» es
+ * la única respuesta que es SIEMPRE cierta en ese instante.
  */
 export function renglonDeEstado(
   estado: EstadoGuardado,
-  yaSeEdito: boolean,
+  editadoAt: string | null,
 ): { texto: string; hayFallo: boolean } {
   if (estado.tipo === 'fallo') return { texto: estado.motivo, hayFallo: true };
   if (estado.tipo === 'guardando') return { texto: 'Guardando…', hayFallo: false };
-  if (estado.tipo === 'guardado' || yaSeEdito) return { texto: 'Guardado', hayFallo: false };
+  if (estado.tipo === 'guardado') return { texto: 'Guardado · recién', hayFallo: false };
+  if (editadoAt) return { texto: `Guardado · ${hace(editadoAt)}`, hayFallo: false };
   return { texto: '', hayFallo: false };
 }
 

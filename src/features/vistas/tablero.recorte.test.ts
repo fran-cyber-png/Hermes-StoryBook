@@ -5,6 +5,8 @@ import {
   COLUMNAS_CON_RECORTE,
   recortesDeColumna,
   resumirColumna,
+  tarjetasVisibles,
+  totalServidoDe,
   vacioDeColumna,
   type FilaDesglose,
   type ResumenColumna,
@@ -25,8 +27,22 @@ const RESUMEN: ResumenColumna = {
   enVentana: 1,
   paraSeguir: 82,
   seCallo: 540,
+  verdes: 602,
+  ambar: 413,
+  grises: 1144,
+  rojos: 129,
 };
-const VACIO: ResumenColumna = { total: 0, conPrecio: 0, enVentana: 0, paraSeguir: 0, seCallo: 0 };
+const VACIO: ResumenColumna = {
+  total: 0,
+  conPrecio: 0,
+  enVentana: 0,
+  paraSeguir: 0,
+  seCallo: 0,
+  verdes: 0,
+  ambar: 0,
+  grises: 0,
+  rojos: 0,
+};
 
 describe('recortesDeColumna — qué chips se ofrecen', () => {
   test('«Todas» está siempre, y es el primero', () => {
@@ -61,7 +77,17 @@ describe('recortesDeColumna — qué chips se ofrecen', () => {
     // vacía la columna, y encima partía los chips en dos renglones.
     expect(recortesDeColumna('cotizado', RESUMEN, 'todas').map((o) => o.id)).not.toContain('precio');
     // Y en Contactados, donde SÍ recorta, sigue apareciendo.
-    const parcial = { total: 1389, conPrecio: 611, enVentana: 47, paraSeguir: 20, seCallo: 0 };
+    const parcial = {
+      total: 1389,
+      conPrecio: 611,
+      enVentana: 47,
+      paraSeguir: 20,
+      seCallo: 0,
+      verdes: 0,
+      ambar: 0,
+      grises: 0,
+      rojos: 0,
+    };
     expect(recortesDeColumna('contactado', parcial, 'todas').map((o) => o.id)).toContain('precio');
   });
 
@@ -136,6 +162,90 @@ describe('vacioDeColumna — el vacío tiene que decir de QUÉ', () => {
   });
 });
 
+/**
+ * LO QUE SE DIBUJA DE LO CARGADO — una sola regla para el Tablero y la Lista.
+ * El server todavía no filtra la página por luz (sólo la cuenta), así que la luz
+ * se recorta acá; los recortes del server ya vinieron filtrados.
+ */
+describe('tarjetasVisibles / totalServidoDe', () => {
+  const cargadas = [{ clave: 'v', luz: 'verde' as const }, { clave: 'g', luz: 'gris' as const }, { clave: 's' }];
+
+  test('sin recorte de luz se dibuja todo lo cargado', () => {
+    expect(tarjetasVisibles(cargadas, 'todas').map((c) => c.clave)).toEqual(['v', 'g', 's']);
+    expect(tarjetasVisibles(cargadas, 'seguir').map((c) => c.clave)).toEqual(['v', 'g', 's']);
+  });
+
+  test('🔴 con una luz, sólo esa — y una tarjeta sin `luz` cuenta como gris, nunca como verde', () => {
+    expect(tarjetasVisibles(cargadas, 'verde').map((c) => c.clave)).toEqual(['v']);
+    expect(tarjetasVisibles(cargadas, 'gris').map((c) => c.clave)).toEqual(['g', 's']);
+  });
+
+  test('con una luz, el total sale del desglose: el server no recortó nada', () => {
+    expect(totalServidoDe(RESUMEN, 'verde', 3051)).toBe(602);
+  });
+
+  test('con un recorte del server, el total de la columna ya es el recortado', () => {
+    expect(totalServidoDe(RESUMEN, 'seguir', 82)).toBe(82);
+    expect(totalServidoDe(RESUMEN, 'todas', 3051)).toBe(3051);
+  });
+});
+
+/**
+ * EL RECORTE DE LA MESA (la cabecera del Pipeline). Con él puesto, las columnas
+ * no ofrecen su chip «Todas» —un eje por vez—, así que el vacío que manda a
+ * tocarlo mandaría a un botón que no está en la pantalla.
+ */
+describe('vacioDeColumna — con el recorte puesto desde la cabecera', () => {
+  test('🔴 no manda a un «Todas» que la columna no muestra: manda arriba', () => {
+    for (const r of ['verde', 'ambar', 'gris', 'rojo'] as const) {
+      const texto = vacioDeColumna(r, 'Cuando alguien te conteste, aparece acá.', 'mesa');
+      expect(texto, `«${r}»`).not.toContain('Todas');
+      expect(texto, `«${r}»`).toMatch(/arriba/);
+    }
+  });
+
+  test('sin el recorte de la mesa, el vacío de siempre sigue diciendo «Todas»', () => {
+    expect(vacioDeColumna('verde', 'otro texto', 'columna')).toContain('Todas');
+  });
+});
+
+/**
+ * EL RANGO GLOBAL Y LOS RECORTES DEL DÍA. Con un rango puesto los chips de columna
+ * no se ofrecen, así que el vacío tiene que mandar al rango; y un recorte del día
+ * dice de QUÉ está vacía la columna, como todos los demás.
+ */
+describe('vacioDeColumna — el rango global y los recortes del día', () => {
+  test('🔴 con un rango puesto (Hoy · 7 d), el vacío manda al rango, no a un «Todas» escondido', () => {
+    const texto = vacioDeColumna('todas', 'Cuando alguien te conteste, aparece acá.', 'rango');
+    expect(texto).not.toContain('Todas');
+    expect(texto).not.toBe('Cuando alguien te conteste, aparece acá.');
+    expect(texto).toMatch(/30 d/);
+  });
+
+  test('los recortes del día dicen de qué está vacía la columna, y mandan arriba', () => {
+    expect(vacioDeColumna('escribioHoy', 'x', 'mesa')).toMatch(/primera vez hoy/);
+    expect(vacioDeColumna('sinRespuesta24h', 'x', 'mesa')).toMatch(/24 h/);
+    for (const r of ['escribioHoy', 'sinRespuesta24h'] as const) {
+      expect(vacioDeColumna(r, 'x', 'mesa'), r).toMatch(/arriba/);
+    }
+  });
+
+  /**
+   * «Nunca contestaron» es «le escribimos y nunca escribió» (`etapaEfectivaSql`), y
+   * los dos recortes del día piden a alguien que SÍ escribió: ahí dan 0 por
+   * definición. «Ninguna lleva más de 24 h sin respuesta» se leía como un dato del
+   * día (revisión cruzada de #956).
+   */
+  test('🔴 en «Nunca contestaron» un recorte del día da 0 por definición, y el vacío lo dice en vez de sonar a dato', () => {
+    for (const r of ['escribioHoy', 'sinRespuesta24h'] as const) {
+      const texto = vacioDeColumna(r, 'x', 'mesa', 'sin_respuesta');
+      expect(texto, r).toMatch(/nadie escribió/);
+      expect(texto, r).toMatch(/arriba/);
+    }
+    expect(vacioDeColumna('sinRespuesta24h', 'x', 'mesa', 'cotizado')).toMatch(/Ninguna lleva más de 24 h/);
+  });
+});
+
 describe('resumirColumna — la dimensión nueva del desglose', () => {
   const fila = (p: Partial<FilaDesglose>): FilaDesglose => ({
     etapa: 'cotizado',
@@ -168,7 +278,17 @@ describe('resumirColumna — la dimensión nueva del desglose', () => {
 
   test('sin desglose cae a los conteos de siempre y no inventa recortes', () => {
     const r = resumirColumna(undefined, 'cotizado', { cotizado: 3051 });
-    expect(r).toEqual({ total: 3051, conPrecio: 0, enVentana: 0, paraSeguir: 0, seCallo: 0 });
+    expect(r).toEqual({
+      total: 3051,
+      conPrecio: 0,
+      enVentana: 0,
+      paraSeguir: 0,
+      seCallo: 0,
+      verdes: 0,
+      ambar: 0,
+      grises: 0,
+      rojos: 0,
+    });
   });
 });
 
@@ -206,6 +326,10 @@ describe('la franja de «Nunca contestaron»', () => {
     enVentana: 0,
     paraSeguir: 1349,
     seCallo: 0,
+    verdes: 0,
+    ambar: 0,
+    grises: 4491,
+    rojos: 0,
   };
 
   test('la ofrece «Nunca contestaron», que es donde el tiempo es TODO el criterio', () => {
@@ -224,10 +348,10 @@ describe('la franja de «Nunca contestaron»', () => {
   });
 
   test('🔴 la columna vacía POR la franja no dice el vacío de la etapa', () => {
-    const conFranja = vacioDeColumna('todas', 'Acá caen las que abriste tú', true);
+    const conFranja = vacioDeColumna('todas', 'Acá caen las que abriste tú', 'franja');
     expect(conFranja).toMatch(/franja/i);
     expect(conFranja).not.toMatch(/Acá caen/);
     // Y sin franja, el vacío de la etapa sigue intacto.
-    expect(vacioDeColumna('todas', 'Acá caen las que abriste tú', false)).toBe('Acá caen las que abriste tú');
+    expect(vacioDeColumna('todas', 'Acá caen las que abriste tú', 'columna')).toBe('Acá caen las que abriste tú');
   });
 });

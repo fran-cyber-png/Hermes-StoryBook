@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { montar, reposar, type Montado } from '../../pruebas/dom';
+import { esperarA, montar, reposar, tocar, type Montado } from '../../pruebas/dom';
 import type { Conversacion } from '../../dominio/conversaciones';
 import { PanelDerecho } from './PanelDerecho';
 
@@ -82,13 +82,28 @@ describe('la señal del atajo `N` en el panel derecho', () => {
     vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="luz" />);
     await reposar();
 
+    // #887 — «Registrar actividad», el mismo rótulo en Resumen y en
+    // Actividad (antes decía «Registrar algo del contacto» acá abajo): el de
+    // Resumen es el que se ve primero, y clickearlo abre el MISMO popover.
     const boton = [...vista.contenedor.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'Registrar algo del contacto',
+      (b) => b.textContent?.trim() === 'Registrar actividad',
     );
-    expect(boton, 'el único botón que queda para anotar un hecho').toBeTruthy();
+    expect(boton, 'un botón para anotar un hecho, alcanzable con el mouse').toBeTruthy();
 
-    boton!.click();
-    await reposar();
+    // `tocar()` y no `boton.click()` a secas: el resto del repo dispara así
+    // los clics de verdad (envuelto en `act()`), y un DOM nativo afuera de
+    // `act()` no tiene ninguna garantía de cuándo React decide procesar la
+    // actualización.
+    //
+    // 🔴 El intermitente de fondo (rojo en el CI de `main` el 9-sep-2026, y de
+    // nuevo después de subirle el presupuesto de turnos a `esperarA`) NO era
+    // esto: era una carrera real en `RegistrarEvento` (ver su docblock de
+    // `useLayoutEffect`), reproducida en local 1 de cada 5-7 corridas con el
+    // clic ya envuelto en `act()`. `esperarA` queda igual —esperar al DOM en
+    // vez de mirarlo tras un solo `reposar()` sigue siendo lo correcto,
+    // aunque el fix de fondo ya no dependa de eso para ser determinístico.
+    tocar(boton!);
+    await esperarA(() => popoverAbierto(vista!), 'el popover de registrar, abierto por el clic');
     expect(popoverAbierto(vista)).toBe(true);
   });
 });

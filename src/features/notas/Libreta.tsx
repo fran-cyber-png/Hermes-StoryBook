@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { EditorLibreta } from './editor';
 import {
   AlertTriangle,
   ChevronLeft,
+  ChevronRight,
   Link2,
   Notebook,
   Paperclip,
-  Pencil,
   Pin,
-  PinOff,
   Plus,
   Search,
-  Settings2,
-  Trash2,
+  Star,
   Undo2,
 } from 'lucide-react';
 import { BarraDeDibujo, GROSORES, PALETA, type Herramienta } from './dibujo/BarraDeDibujo';
@@ -35,27 +34,42 @@ import { ModalDePlantillas } from './ModalDePlantillas';
 import { ModalDeRespuestasRapidas } from './ModalDeRespuestasRapidas';
 import { PantallaHechos } from '../hechos/PantallaHechos';
 import { AccionesDePagina } from './AccionesDePagina';
-import { ColumnaDeEscritura, DiagramaPerezoso, EditorPerezoso, precargarDiagrama, precargarEditor } from './perezosos';
+import { MenuDeFila, type AccionDeFila } from './MenuDeFila';
+import { ModalDeLink } from './ModalDeLink';
+import { AuditoriaDeLink } from './AuditoriaDeLink';
+import { ColumnaDeEscritura, EditorPerezoso, precargarEditor } from './perezosos';
 import { PantallaDividida } from './PantallaDividida';
 import { NuevaPagina } from './NuevaPagina';
 import { PaginaDocumento } from './PaginaDocumento';
-import { ErrorDeDocumento, subirDocumento } from './documentos';
+import { ErrorDeDocumento, descargarDocumento, subirDocumento } from './documentos';
 import { TituloEditable } from './TituloEditable';
 import { BarraDePestanas } from './BarraDePestanas';
 import { usePestanas, siguienteAlCerrar, type RefPestana } from './pestanas';
-import { mismoUsuario, nombreCorto, useEspacios, type DondeEstoy } from './espacios';
+import { dondeDeVista, mismaVista, mismoUsuario, nombreCorto, useEspacios, type VistaLibreta } from './espacios';
 import { SelectorDeEspacio } from './SelectorDeEspacio';
+import { ModalDeEspacios } from './ModalDeEspacios';
+import { MenuDeConfiguracion } from './MenuDeConfiguracion';
+import { ModalDeConfirmacion } from './ModalDeConfirmacion';
+import { FiltroDeTipoDeArchivo, type AlcanceDeFiltro } from './FiltroDeTipoDeArchivo';
 import { tokenDeLaUrl, usePaginaPorLink } from './porLink';
 import { renglonDeEstado } from './guardado';
 import { useAutoguardado, type ContenidoDePagina } from './useAutoguardado';
+import { ErrorApi } from '../../lib/datos/cliente';
 import {
+  ETIQUETA_DE_CLASE,
+  MAX_FIJADAS_POR_APARTADO,
+  type ClaseDeArchivo,
   type Nota,
+  claseDeArchivo,
   docParaEditor,
   resumenDeNota,
   tituloDeNota,
   useBuscarNotas,
+  useFavoritas,
   useMutacionesNotas,
+  useNotaPorId,
   useNotas,
+  usePapelera,
 } from './notas';
 
 /**
@@ -136,6 +150,9 @@ function Hoja({
   pedirImagen,
   onSubiendo,
   onSalirDelDibujo,
+  editor,
+  hojaA4,
+  contenedorArchivo,
 }: {
   children: React.ReactNode;
   anotaciones: ReturnType<typeof useAnotaciones> | null;
@@ -148,8 +165,18 @@ function Hoja({
   pedirImagen(abrir: (() => void) | null): void;
   onSubiendo(subiendo: boolean): void;
   onSalirDelDibujo(): void;
+  /** La instancia viva de BlockNote, para anclar las figuras al párrafo. Ver `CapaDeAnotaciones`. */
+  editor: EditorLibreta | null;
+  /** El nodo de `.hoja-a4` donde `CapaDeAnotaciones` porta su canvas. Ver `perezosos.tsx`. */
+  hojaA4: HTMLDivElement | null;
+  /** El gemelo de `hojaA4` para una página-archivo (Word/txt). Ver `PaginaDocumento.tsx`. */
+  contenedorArchivo: HTMLElement | null;
 }) {
   return (
+    // ⚠️ Ya NO es el contenedor del canvas (08-sep-2026): `CapaDeAnotaciones`
+    // porta todo su contenido dentro de `.hoja-a4` — es la única caja que de
+    // verdad scrollea el texto. Este `div` queda como quedó, sin tocarlo más
+    // de lo necesario para este arreglo.
     <div className="relative px-6 py-8">
       {children}
       {anotaciones && (
@@ -164,6 +191,9 @@ function Hoja({
           pedirImagen={pedirImagen}
           onSubiendo={onSubiendo}
           onSalirDelDibujo={onSalirDelDibujo}
+          editor={editor}
+          hojaA4={hojaA4}
+          contenedorArchivo={contenedorArchivo}
         />
       )}
     </div>
@@ -187,15 +217,31 @@ function Hoja({
  */
 function ZonaDeTrabajo({
   hoja,
+  editor,
+  hojaA4,
+  contenedorArchivo,
   onGuardarAnotaciones,
+  onPedirConfirmacion,
   children,
 }: {
+  /** Abre el modal de confirmación compartido de `Libreta` — ver su docblock. */
+  onPedirConfirmacion: (v: { titulo: string; mensaje: string; textoConfirmar: string; onConfirmar: () => void }) => void;
   /**
    * La página abierta, o `null` cuando lo que se muestra no es un documento
    * (la bienvenida, «elige una página», un link roto). Con `null` esto es un
    * contenedor con scroll y nada más: ni capa, ni barra.
    */
   hoja: { anotacionesIniciales: unknown; soloLectura: boolean } | null;
+  /**
+   * La instancia viva del editor de la página principal, o `null` sin una
+   * todavía montada (o sin editor — una página-archivo, una histórica). Viaja
+   * hasta `CapaDeAnotaciones` para anclar las figuras al párrafo.
+   */
+  editor: EditorLibreta | null;
+  /** El nodo de `.hoja-a4` donde `CapaDeAnotaciones` porta su canvas. Ver `perezosos.tsx`. */
+  hojaA4: HTMLDivElement | null;
+  /** El gemelo de `hojaA4` para una página-archivo (Word/txt). Ver `PaginaDocumento.tsx`. */
+  contenedorArchivo: HTMLElement | null;
   onGuardarAnotaciones(figuras: Figura[]): void;
   children: React.ReactNode;
 }) {
@@ -311,6 +357,9 @@ function ZonaDeTrabajo({
             pedirImagen={registrarAbridor}
             onSubiendo={setSubiendo}
             onSalirDelDibujo={() => setHerramienta('puntero')}
+            editor={editor}
+            hojaA4={hojaA4}
+            contenedorArchivo={contenedorArchivo}
           >
             {children}
           </Hoja>
@@ -340,6 +389,10 @@ function ZonaDeTrabajo({
                 setCapas(r.capas);
                 // La nueva queda activa: es lo que se espera al apretar «+».
                 setCapaActiva(r.nueva.id);
+                // Y si había algo elegido en el lienzo, se muda con ella: crear
+                // una capa para lo que ya se tiene a mano no debería obligar a
+                // volver a elegirlo después para recién ahí poder mandarlo.
+                if (anotaciones.seleccionadas.length > 0) anotaciones.moverSeleccionACapa(r.nueva.id);
               }}
               onDuplicar={(id) => {
                 const r = duplicarCapa(capasVivas, anotaciones.figuras, id);
@@ -353,28 +406,35 @@ function ZonaDeTrabajo({
               onBorrar={(id) => {
                 const r = borrarCapa(capasVivas, anotaciones.figuras, id);
                 if (!r) return;
+                const borrar = () => {
+                  setCapas(r.capas);
+                  if (capaActiva === id) setCapaActiva(r.activaNueva);
+                  anotaciones.reemplazar(
+                    anotaciones.figuras.filter((f) => f.capaId !== id),
+                    [],
+                  );
+                };
                 /**
-                 * 🔴 SE PREGUNTA SOLO SI SE LLEVA ALGO. Un `confirm` sobre una
-                 * capa vacía es una fricción que enseña a apretar «Aceptar» sin
+                 * 🔴 SE PREGUNTA SOLO SI SE LLEVA ALGO. Un modal sobre una capa
+                 * vacía es una fricción que enseña a apretar «Eliminar» sin
                  * leer — y entonces el día que la capa tenga ocho objetos, la
                  * confirmación tampoco se lee.
                  */
                 if (r.seLleva.length > 0) {
                   const cuantos = r.seLleva.length;
-                  const ok = window.confirm(
-                    `¿Eliminar esta capa?\n\nTambién se eliminan los ${cuantos} ${cuantos === 1 ? 'elemento' : 'elementos'} que contiene.`,
-                  );
-                  if (!ok) return;
+                  onPedirConfirmacion({
+                    titulo: '¿Eliminar esta capa?',
+                    mensaje: `También se eliminan los ${cuantos} ${cuantos === 1 ? 'elemento' : 'elementos'} que contiene.`,
+                    textoConfirmar: 'Eliminar',
+                    onConfirmar: borrar,
+                  });
+                  return;
                 }
-                setCapas(r.capas);
-                if (capaActiva === id) setCapaActiva(r.activaNueva);
-                anotaciones.reemplazar(
-                  anotaciones.figuras.filter((f) => f.capaId !== id),
-                  [],
-                );
+                borrar();
               }}
               onMover={(id, hacia) => setCapas(moverCapa(capasVivas, id, hacia))}
               onOrdenar={anotaciones.ordenarSeleccion}
+              onMoverSeleccionA={anotaciones.moverSeleccionACapa}
             />
           </div>
         </div>
@@ -434,15 +494,29 @@ function ZonaDeTrabajo({
   );
 }
 
+/**
+ * QUÉ ACCIÓN OFRECE `FilaPagina` — el tipo vive en `MenuDeFila.tsx` (04-sep-2026)
+ * junto con el menú `⋮` que las dibuja todas: dos formas mutuamente excluyentes,
+ * nunca las dos juntas.
+ *
+ *   · **`normal`**: fijar/desfijar (favoritas), mover, compartir y archivar. Es
+ *     lo de siempre, para cualquier vista que no sea la Papelera — «mover» y
+ *     «compartir» se sumaron acá el 04-sep-2026, ver ADR 0093 (antes solo
+ *     existían en `AccionesDePagina.tsx`, viendo la página ya ABIERTA).
+ *   · **`papelera`**: restaurar (desarchivar) + eliminar para siempre. Una
+ *     página ya archivada no se puede volver a fijar, mover ni compartir desde
+ *     acá — esas son acciones de una página VIVA.
+ */
+
 /** Un renglón de la lista de páginas. */
 function FilaPagina({
   nota,
   activa,
   autora,
   onAbrir,
-  onFijar,
-  onArchivar,
+  accion,
   onRenombrar,
+  deEspacio = null,
 }: {
   nota: Nota;
   activa: boolean;
@@ -456,30 +530,37 @@ function FilaPagina({
    */
   autora: string | null;
   onAbrir: () => void;
-  onFijar: () => void;
-  onArchivar: () => void;
+  accion: AccionDeFila;
   /**
    * Renombrar SIN abrir la página primero (26-ago-2026, botón «Editar» en el
-   * hover). Solo se ofrece para `'diagrama'`/`'archivo'` — ver el porqué en
-   * el `if` de más abajo.
+   * hover). Solo se ofrece para `'archivo'` — ver el porqué en el `if` de
+   * más abajo.
    */
   onRenombrar: (texto: string) => void;
+  /**
+   * DE QUÉ ESPACIO VINO (04-sep-2026) — solo se pasa en la Papelera, que desde
+   * ADR 0093 también trae lo archivado de tus espacios (antes solo mostraba tu
+   * libreta privada). Sin esto, una página de «Oximoron» archivada se vería
+   * IGUAL que una privada en la misma lista — y «restaurar» la devuelve a un
+   * espacio que la fila ni menciona.
+   */
+  deEspacio?: string | null;
 }) {
   const titulo = tituloDeNota(nota);
   const resumen = resumenDeNota(nota);
   const historica = nota.origen === 'gestion';
   /**
-   * ⚠️ **SOLO diagrama/archivo, y no es una limitación de la UI — es del
-   * MODELO.** El título de una página de texto no es un campo propio: es la
-   * primera línea de `doc`, y el server lo REDERIVA de ahí en cada
-   * autoguardado (`prepararContenido`, `server/src/notas/notas.ts`). Un botón
-   * que solo mandara `texto` sin `doc` renombraría la fila en el acto, pero
-   * el próximo carácter que se escriba en el editor —en cualquier parte de
-   * la página, no solo el título— lo pisaría en silencio con la primera
-   * línea de siempre. Diagrama y archivo no tienen ese problema: su `texto`
-   * NO se deriva de nada, es el único lugar donde vive el nombre.
+   * ⚠️ **SOLO archivo, y no es una limitación de la UI — es del MODELO.** El
+   * título de una página de texto no es un campo propio: es la primera línea
+   * de `doc`, y el server lo REDERIVA de ahí en cada autoguardado
+   * (`prepararContenido`, `server/src/notas/notas.ts`). Un botón que solo
+   * mandara `texto` sin `doc` renombraría la fila en el acto, pero el
+   * próximo carácter que se escriba en el editor —en cualquier parte de la
+   * página, no solo el título— lo pisaría en silencio con la primera línea
+   * de siempre. Un archivo no tiene ese problema: su `texto` NO se deriva de
+   * nada, es el único lugar donde vive el nombre.
    */
-  const puedeRenombrar = nota.tipo === 'diagrama' || nota.tipo === 'archivo';
+  const puedeRenombrar = nota.tipo === 'archivo';
   const [editando, setEditando] = useState(false);
 
   return (
@@ -492,49 +573,76 @@ function FilaPagina({
           bloque de acciones de la derecha tiene que arrancar arriba, alineado
           con el título — centrado se veía descolgado hacia el medio de la fila. */}
       <div className="flex items-start gap-1">
-        <button type="button" onClick={onAbrir} className="block min-w-0 flex-1 text-left">
-          <div className="flex items-center gap-1.5">
-            {nota.fijada && <Pin className="size-3 shrink-0 text-muted-foreground" aria-label="fijada" />}
-            {editando ? (
-              <TituloEditable
-                valor={nota.texto}
-                placeholder="Nombra la página"
-                autoFocus
-                onGuardar={onRenombrar}
-                onTerminar={() => setEditando(false)}
-                className="h-6 min-w-0 flex-1 rounded border border-input bg-card px-1.5 text-sm font-medium text-foreground outline-none focus:border-ring"
-              />
-            ) : (
-              <span className="truncate text-sm font-medium text-foreground">{titulo || 'Sin título'}</span>
-            )}
-            {/* 🔴 QUE ESTÁ AFUERA SE DICE EN LA LISTA, no solo al abrirla. Es la
-                única forma de contestar «¿qué tengo publicado?» de un vistazo — sin
-                esto, compartir sería una acción sin inventario. */}
-            {nota.token && (
-              <Link2 className="size-3 shrink-0 text-muted-foreground" aria-label="tiene link público" />
-            )}
-          </div>
-          {resumen && <p className="mt-0.5 truncate text-xs text-muted-foreground">{resumen}</p>}
-          <p className="mt-1 flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
-            {/* QUIÉN LA ESCRIBIÓ va PRIMERO, antes de la fecha: en un espacio del
-                equipo, «de quién es esto» se pregunta antes que «de cuándo es».
-                Sin oro — acá no se acaba ningún tiempo. */}
-            {autora && <span className="font-medium text-foreground/70">{autora}</span>}
-            <span>{new Date(nota.creadoAt).toLocaleDateString('es-PE', { day: 'numeric', month: 'short' })}</span>
-            {/* EL CLIP VA DESPUÉS DE LA FECHA — a pedido: antes competía con el
-                título por el mismo renglón angosto; acá es un dato más del pie,
-                junto con «editada» y la etiqueta de gestión. */}
-            {nota.tipo === 'archivo' && (
-              <Paperclip className="size-3 shrink-0" aria-label="documento adjuntado" />
-            )}
-            {nota.editadoAt && <span>· editada</span>}
-            {historica && (
-              <span className="rounded border border-dashed border-border px-1 py-px" title="Quedó de una gestión: se lee, no se edita">
-                de gestión
-              </span>
-            )}
-          </p>
-        </button>
+        {(() => {
+          const contenido = (
+            <>
+              <div className="flex items-center gap-1.5">
+                {nota.fijada && <Pin className="size-3 shrink-0 text-muted-foreground" aria-label="fijada" />}
+                {/* Igual que el Pin de arriba: se ve SIEMPRE, no solo al hover —
+                    es la única forma de reconocer, de un vistazo por la lista,
+                    cuál está en Favoritos (04-sep-2026, ADR 0093). */}
+                {nota.favorita && <Star className="size-3 shrink-0 fill-amber-400 text-amber-500" aria-label="favorita" />}
+                {editando ? (
+                  <TituloEditable
+                    valor={nota.texto}
+                    placeholder="Nombra la página"
+                    autoFocus
+                    onGuardar={onRenombrar}
+                    onTerminar={() => setEditando(false)}
+                    className="h-6 min-w-0 flex-1 rounded border border-input bg-card px-1.5 text-sm font-medium text-foreground outline-none focus:border-ring"
+                  />
+                ) : (
+                  <span className="truncate text-sm font-medium text-foreground">{titulo || 'Sin título'}</span>
+                )}
+                {/* 🔴 QUE ESTÁ AFUERA SE DICE EN LA LISTA, no solo al abrirla. Es la
+                    única forma de contestar «¿qué tengo publicado?» de un vistazo — sin
+                    esto, compartir sería una acción sin inventario. */}
+                {nota.token && (
+                  <Link2 className="size-3 shrink-0 text-muted-foreground" aria-label="tiene link público" />
+                )}
+              </div>
+              {resumen && <p className="mt-0.5 truncate text-xs text-muted-foreground">{resumen}</p>}
+              <p className="mt-1 flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                {/* QUIÉN LA ESCRIBIÓ va PRIMERO, antes de la fecha: en un espacio del
+                    equipo, «de quién es esto» se pregunta antes que «de cuándo es».
+                    Sin oro — acá no se acaba ningún tiempo. */}
+                {autora && <span className="font-medium text-foreground/70">{autora}</span>}
+                <span>{new Date(nota.creadoAt).toLocaleDateString('es-PE', { day: 'numeric', month: 'short' })}</span>
+                {/* EL CLIP VA DESPUÉS DE LA FECHA — a pedido: antes competía con el
+                    título por el mismo renglón angosto; acá es un dato más del pie,
+                    junto con la etiqueta de tipo y la de gestión. */}
+                {nota.tipo === 'archivo' && (
+                  <Paperclip className="size-3 shrink-0" aria-label="documento adjuntado" />
+                )}
+                {/* 🔴 QUÉ ES, NO SI SE TOCÓ (04-sep-2026, a pedido explícito) — antes
+                    acá decía «· editada» cuando `editadoAt` existía. Reemplazado por
+                    la clase de la página (Página/PDF/Word/Bloc, `claseDeArchivo`):
+                    de un vistazo por la lista, sin abrir nada. */}
+                {!historica && <span>{ETIQUETA_DE_CLASE[claseDeArchivo(nota)]}</span>}
+                {historica && (
+                  <span className="rounded border border-dashed border-border px-1 py-px" title="Quedó de una gestión: se lee, no se edita">
+                    de gestión
+                  </span>
+                )}
+                {deEspacio && (
+                  <span className="rounded border border-dashed border-border px-1 py-px" title="Restaurarla la devuelve a este espacio">
+                    de {deEspacio}
+                  </span>
+                )}
+              </p>
+            </>
+          );
+          // 🔴 EN LA PAPELERA NO SE ABRE: una página archivada no se edita
+          // desde acá (restaurar o eliminar para siempre, nada más), así que
+          // el título no es un botón — sería prometer un clic que no hace nada.
+          return accion.tipo === 'papelera' ? (
+            <div className="block min-w-0 flex-1 text-left">{contenido}</div>
+          ) : (
+            <button type="button" onClick={onAbrir} className="block min-w-0 flex-1 text-left">
+              {contenido}
+            </button>
+          );
+        })()}
 
         {/*
           🔴 EN EL FLUJO NORMAL, NO `absolute` — antes se superponía al título
@@ -546,32 +654,32 @@ function FilaPagina({
         */}
         {!historica && (
           <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            {puedeRenombrar && !editando && (
+            {/*
+              LA ESTRELLA (04-sep-2026, ADR 0093) — ocupa el lugar donde antes
+              estaba el lápiz de "Renombrar" (que se mudó adentro del menú `⋮`,
+              ver `MenuDeFila`). A diferencia del lápiz, no es solo para
+              `'archivo'`: cualquier página se puede favoritear, y solo desde
+              una vista VIVA (`accion.tipo === 'normal'`) — una de la Papelera
+              no se toca desde acá.
+            */}
+            {accion.tipo === 'normal' && (
               <button
                 type="button"
-                onClick={() => setEditando(true)}
-                aria-label="Renombrar"
-                className="rounded p-1 text-muted-foreground hover:bg-card hover:text-foreground"
+                onClick={accion.onFavorito}
+                aria-label={nota.favorita ? 'Quitar de Favoritos' : 'Marcar como favorita'}
+                aria-pressed={nota.favorita}
+                className={`rounded p-1 hover:bg-card ${
+                  nota.favorita ? 'text-amber-500 hover:text-amber-600' : 'text-muted-foreground hover:text-foreground'
+                }`}
               >
-                <Pencil className="size-3.5" />
+                <Star className={`size-3.5 ${nota.favorita ? 'fill-current' : ''}`} />
               </button>
             )}
-            <button
-              type="button"
-              onClick={onFijar}
-              aria-label={nota.fijada ? 'Desfijar' : 'Fijar'}
-              className="rounded p-1 text-muted-foreground hover:bg-card hover:text-foreground"
-            >
-              {nota.fijada ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
-            </button>
-            <button
-              type="button"
-              onClick={onArchivar}
-              aria-label="Archivar"
-              className="rounded p-1 text-muted-foreground hover:bg-card hover:text-destructive"
-            >
-              <Trash2 className="size-3.5" />
-            </button>
+            <MenuDeFila
+              fijada={nota.fijada}
+              accion={accion}
+              onRenombrar={puedeRenombrar ? () => setEditando(true) : undefined}
+            />
           </div>
         )}
       </div>
@@ -580,18 +688,67 @@ function FilaPagina({
 }
 
 export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
-  const [busqueda, setBusqueda] = useState('');
+  /**
+   * EL FILTRO LIVIANO (03-sep-2026) — recorta, al instante y sin ir al
+   * server, la lista de la vista actual por título/resumen. Reemplaza a la
+   * caja de búsqueda global que había acá (`useBuscarNotas`, que seguía
+   * viva para `PantallaDividida`/`PanelNotas` — no se tocó, solo dejó de
+   * usarse en este lugar puntual, a pedido explícito).
+   */
+  const [filtro, setFiltro] = useState('');
+  /** El filtro por tipo de archivo (03-sep-2026), vacío = sin filtro — ver `FiltroDeTipoDeArchivo.tsx`. */
+  const [tiposElegidos, setTiposElegidos] = useState<Set<ClaseDeArchivo>>(new Set());
+  /**
+   * EL ALCANCE (03-sep-2026) — dónde buscar: `'todas'` (mi libreta entera),
+   * `'favoritas'` (mi libreta, solo fijadas) o el id de un espacio puntual.
+   * Vacío = sin restricción (busca en TODO: mi libreta + cada espacio).
+   */
+  const [alcanceElegido, setAlcanceElegido] = useState<Set<AlcanceDeFiltro>>(new Set());
+  /** La página de la LISTA (03-sep-2026), 1-indexada — ver el docblock de `notasVisibles`, más abajo. */
+  const [paginaDeLista, setPaginaDeLista] = useState(1);
   const [seleccion, setSeleccion] = useState<Seleccion>(null);
   /** Lo recién archivado, para poder deshacerlo. Se limpia solo. */
   const [archivada, setArchivada] = useState<{ id: number; titulo: string } | null>(null);
   /**
-   * DÓNDE ESTOY ESCRIBIENDO (ADR 0046). `null` = mi libreta privada.
-   *
-   * Arranca en `null` y el efecto de más abajo la corre al primer espacio en
-   * cuanto hay alguno — ver ese efecto para el porqué. Quien no tenga ni un
-   * espacio se queda acá, y ve exactamente la Libreta de antes.
+   * EL AVISO DEL TOPE DE "FIJAR" (04-sep-2026, ADR 0093) — el 409
+   * `apartado-lleno` que el server manda cuando ya hay `MAX_FIJADAS_POR_APARTADO`
+   * en este mismo apartado (la libreta privada, o ESTE espacio puntual). Se
+   * limpia sola en el próximo intento — no hace falta un botón de cerrar para
+   * un aviso que dura lo que dura un vistazo.
    */
-  const [donde, setDonde] = useState<DondeEstoy>(null);
+  const [avisoFijar, setAvisoFijar] = useState<string | null>(null);
+  /**
+   * QUÉ SE ESTÁ MIRANDO EN EL RIEL (03-sep-2026) — reemplaza a `donde`: son
+   * CUATRO vistas posibles, no dos (ver `VistaLibreta` en `espacios.ts`).
+   * Arranca en `'todas'`, que es —carácter por carácter— lo que antes se
+   * llamaba "Mi libreta". El efecto de más abajo la corre al primer espacio
+   * en cuanto hay alguno, igual que antes.
+   */
+  const [vista, setVista] = useState<VistaLibreta>({ tipo: 'todas' });
+  /**
+   * EL PANEL DE "PÁGINAS" — flotante, superpuesto sobre el contenido (no lo
+   * empuja). Un clic en el riel sobre una fila NUEVA cambia `vista` y ABRE
+   * este panel; sobre la MISMA fila que ya estaba elegida, solo hace toggle
+   * — ver `alElegirVista`, más abajo.
+   */
+  const [panelAbierto, setPanelAbierto] = useState(false);
+  /**
+   * EL RIEL + EL PANEL, juntos — para poder cerrar el panel al tocar afuera de
+   * los DOS, mismo patrón que `NuevaPagina.tsx` (`caja`, ahí). Tiene que
+   * envolver también al riel: si solo envolviera el panel, tocar una fila del
+   * riel para ABRIR una vista distinta contaría como "afuera" y este mismo
+   * efecto la cerraría en el mismo gesto que `alElegirVista` la abre.
+   */
+  const rielYPanelRef = useRef<HTMLDivElement>(null);
+  /**
+   * EL BUSCADOR + EL FILTRO DE TIPO (03-sep-2026) — desde que se mudaron a la
+   * fila de "Nueva página", viven AFUERA de `rielYPanelRef` (esa fila no es
+   * ni el riel ni el panel). Sin este segundo `ref`, tocar adentro del
+   * buscador contaba como "afuera" para el efecto de más abajo, y cerraba
+   * el panel EN EL MISMO CLIC con el que se lo quería usar — reportado como
+   * que el buscador "no era fijo".
+   */
+  const filtrosRef = useRef<HTMLDivElement>(null);
   /**
    * SI LLEGAMOS POR UN LINK INTERNO, la página que ese link señala.
    *
@@ -617,6 +774,37 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
     pegarPlantillaRef.current = fn;
   }, []);
   /**
+   * LA INSTANCIA VIVA DEL EDITOR DE LA PÁGINA PRINCIPAL (no la mitad derecha de
+   * la pantalla dividida, que es OTRA página con su propia `PantallaDividida`,
+   * fuera de esta capa de anotaciones). A diferencia de `pegarPlantillaRef`,
+   * esto SÍ tiene que ser estado: `CapaDeAnotaciones` la necesita como prop
+   * para re-suscribirse cuando cambia (`dibujo/anclaje.ts`), y un `ref` no
+   * dispara ese re-render.
+   */
+  const [editorListo, setEditorListo] = useState<EditorLibreta | null>(null);
+  const registrarEditor = useCallback((editor: EditorLibreta | null) => setEditorListo(editor), []);
+  /**
+   * EL NODO DOM DE `.hoja-a4` — donde `CapaDeAnotaciones` porta su canvas
+   * (08-sep-2026). Mismo ciclo de vida que `editorListo`: se resetea solo al
+   * desmontar `ColumnaDeEscritura` (cambio de página, remonte por `key` de
+   * `ZonaDeTrabajo`).
+   */
+  const [hojaA4Lista, setHojaA4Lista] = useState<HTMLDivElement | null>(null);
+  const registrarHojaA4 = useCallback((el: HTMLDivElement | null) => setHojaA4Lista(el), []);
+  /**
+   * EL GEMELO DE `hojaA4Lista`, PARA UNA PÁGINA-ARCHIVO (08-sep-2026): el
+   * `<div>`/`<pre>` que scrollea de verdad un Word o un .txt subido
+   * (`PaginaDocumento.tsx` → `VisorDocx`/`VisorTxt`). Un PDF no tiene
+   * equivalente —el visor nativo del navegador no presta su DOM— así que ahí
+   * esto se queda en `null` y `CapaDeAnotaciones` cae al camino de siempre
+   * (sin portar, medido contra `Hoja`).
+   */
+  const [contenedorArchivoListo, setContenedorArchivoListo] = useState<HTMLElement | null>(null);
+  const registrarContenedorDeArchivo = useCallback(
+    (el: HTMLElement | null) => setContenedorArchivoListo(el),
+    [],
+  );
+  /**
    * RESPUESTAS RÁPIDAS — mismo molde que el modal de arriba, mismo `ref` de
    * pegado (pegar es genérico: no le importa si el texto vino de una
    * plantilla propia o del catálogo de `hechos`). Dos estados aparte porque
@@ -628,23 +816,73 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
    * pantalla de administración que ya usa el composer de WhatsApp — no hay
    * una segunda forma de crear o editar una respuesta (#37). */
   const [configurarRespuestasAbierto, setConfigurarRespuestasAbierto] = useState(false);
+  /**
+   * ADMINISTRAR ESPACIOS (03-sep-2026) — el estado vivía en `SelectorDeEspacio.tsx`
+   * con su propio botón fijo; se mudó acá al fusionarse con "Configurar
+   * Respuestas Rápidas" en un solo menú de "Configuración" al pie del riel.
+   */
+  const [administrandoEspacios, setAdministrandoEspacios] = useState(false);
+  /**
+   * UNA CONFIRMACIÓN PENDIENTE (03-sep-2026) — reemplaza los dos
+   * `window.confirm` nativos de este archivo (reportado con una captura: el
+   * diálogo del navegador no se lee como parte de Hermes). Un solo estado
+   * compartido y no dos, porque las dos confirmaciones son la misma FORMA
+   * («¿hacer esto? — no se puede deshacer») con distinto texto: borrar una
+   * capa de dibujo y eliminar una página para siempre de la Papelera.
+   * `onConfirmar` guarda lo que `window.confirm` hacía DESPUÉS de la
+   * pregunta — acá no puede ser código que sigue de largo porque el modal
+   * responde en otro render, no en la misma llamada.
+   */
+  const [confirmacion, setConfirmacion] = useState<{ titulo: string; mensaje: string; textoConfirmar: string; onConfirmar: () => void } | null>(
+    null,
+  );
 
-  const termino = busqueda.trim();
-  const lista = useNotas(CLAVE_LIBRETA, donde);
-  const encontradas = useBuscarNotas(termino);
+  /**
+   * COMPARTIR DESDE LA FILA (04-sep-2026, ADR 0093) — guarda solo el `id`, no
+   * una foto de la `Nota`: se busca en `notas` (más abajo, la lista VIVA de la
+   * vista actual) en cada render, igual que `paginaAbierta`. Con una foto
+   * fija, «Generar el link» habría dejado el modal mostrando el token de
+   * ANTES de la mutación hasta que algo más forzara un refetch — justo lo que
+   * el propio `ModalDeLink` promete no hacer.
+   */
+  const [compartiendoId, setCompartiendoId] = useState<number | null>(null);
+  /** `link` es el modal de configuración, `registro` el Audit Log — mismo par que `AccionesDePagina.tsx` tenía antes de este cambio. */
+  const [vistaCompartir, setVistaCompartir] = useState<'link' | 'registro'>('link');
+
+  /** Las tres vistas de "MI LIBRETA" son SIEMPRE la libreta privada — ver `VistaLibreta`. */
+  const donde = dondeDeVista(vista);
+  const enPapelera = vista.tipo === 'papelera';
+  const termino = filtro.trim();
+  /**
+   * TRES FUENTES, no una — para que el riel pueda mostrar los contadores de
+   * "Todas las páginas"/"Favoritas"/"Papelera" SIEMPRE, sin importar qué vista
+   * esté mirando ahora mismo: si estoy parada en "Personal", el riel igual
+   * tiene que poder decir "Papelera 3". `privadas` y `papelera` se piden
+   * SIEMPRE; `delEspacio` solo cuando la vista es un espacio puntual.
+   */
+  const privadas = useNotas(CLAVE_LIBRETA, null);
+  const delEspacio = useNotas(CLAVE_LIBRETA, donde, vista.tipo === 'espacio');
+  const papelera = usePapelera(CLAVE_LIBRETA);
+  /**
+   * FAVORITOS (04-sep-2026, ADR 0093) — SIEMPRE se pide, igual que `papelera`:
+   * el contador del riel ("Favoritas 3") tiene que verse sin importar qué
+   * vista esté activa. Cruza TODOS los apartados (la libreta privada + cada
+   * espacio del que la vendedora es miembro) — decisión explícita del dueño,
+   * mismo criterio que ya tiene la Papelera.
+   */
+  const favoritas = useFavoritas(CLAVE_LIBRETA);
   const {
     crear,
     editar,
     archivar,
     desarchivar,
+    eliminarParaSiempre,
     autoguardar,
     mover,
     abrirLink,
     cortarLink,
     dividir,
     cortarDivision,
-    crearDiagrama,
-    autoguardarDiagrama,
     crearDocumento,
   } = useMutacionesNotas(CLAVE_LIBRETA, donde);
 
@@ -657,8 +895,12 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
    */
   const pestanas = usePestanas();
   function activarPestana(ref: RefPestana) {
+    // Saltar de pestaña NO toca `panelAbierto`: es un salto directo a una
+    // página, no un "voy a elegir algo" — abrir el panel encima sería un
+    // popup que nadie pidió. Solo mueve `vista` si hace falta (la pestaña
+    // es de otro lugar), y ahí sí se limpia el "Deshacer" del lugar anterior.
     if (ref.espacioId !== donde) {
-      setDonde(ref.espacioId);
+      setVista(ref.espacioId === null ? { tipo: 'todas' } : { tipo: 'espacio', id: ref.espacioId });
       setArchivada(null);
     }
     setSeleccion({ tipo: 'nota', id: ref.id, origen: 'nota' });
@@ -674,10 +916,10 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
 
   /**
    * ADJUNTAR UN DOCUMENTO (26-ago-2026): sube el archivo y crea la página en un
-   * solo gesto, como «Nuevo Diagrama». `subiendoDocumento` deshabilita el menú
-   * de `NuevaPagina` mientras tanto —dos subidas pisadas del mismo archivo
-   * crearían dos páginas—, y `errorDocumento` vive acá y no adentro del menú
-   * para que el aviso no desaparezca si el menú ya se cerró solo.
+   * solo gesto. `subiendoDocumento` deshabilita el menú de `NuevaPagina`
+   * mientras tanto —dos subidas pisadas del mismo archivo crearían dos
+   * páginas—, y `errorDocumento` vive acá y no adentro del menú para que el
+   * aviso no desaparezca si el menú ya se cerró solo.
    */
   const [subiendoDocumento, setSubiendoDocumento] = useState(false);
   const [errorDocumento, setErrorDocumento] = useState<string | null>(null);
@@ -690,6 +932,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
         const r = await crearDocumento.mutateAsync(subido);
         setSeleccion({ tipo: 'nota', id: r.nota.id, origen: 'nota' });
         pestanas.abrir({ id: r.nota.id, espacioId: donde, tipo: 'archivo' });
+        setPanelAbierto(false);
       } catch (e) {
         setErrorDocumento(e instanceof ErrorDeDocumento ? e.message : 'No se pudo adjuntar el documento.');
       } finally {
@@ -698,11 +941,6 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
     },
     [crearDocumento, donde, pestanas],
   );
-  const crearNuevoDiagrama = useCallback(async () => {
-    const r = await crearDiagrama.mutateAsync({ diagrama: { nodes: [], edges: [] } });
-    setSeleccion({ tipo: 'nota', id: r.nota.id, origen: 'nota' });
-    pestanas.abrir({ id: r.nota.id, espacioId: donde, tipo: 'diagrama' });
-  }, [crearDiagrama, donde, pestanas]);
   /**
    * DIVIDIR PANTALLA (17-ago-2026): «estoy eligiendo con qué otra página se
    * divide ésta». Local y ajeno a la base — lo persistido es
@@ -732,34 +970,154 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
   useEffect(() => {
     if (yaEntro.current || !espacios.data) return;
     yaEntro.current = true;
-    if (espacios.data.length > 0) setDonde(espacios.data[0].id);
+    if (espacios.data.length > 0) setVista({ tipo: 'espacio', id: espacios.data[0].id });
   }, [espacios.data]);
 
-  const notas = termino ? (encontradas.data ?? []) : (lista.data ?? []);
-  const paginaAbierta =
-    seleccion?.tipo === 'nota' ? notas.find((n) => n.id === seleccion.id && n.origen === seleccion.origen) : undefined;
-  /** `null`/ausente = pantalla simple. Viene de la nota, así que sobrevive a un reload. */
-  const divididaId = paginaAbierta?.paginaDivididaId ?? null;
+  /**
+   * LA LISTA DE LA VISTA ACTUAL, ya recortada. Tres pasos, cada uno opcional:
+   *
+   *   1. la fuente — privadas, un espacio puntual, o archivadas (`papelera`);
+   *   2. "Favoritas" filtra `fijada` EN EL CLIENTE — ya llegó todo en memoria
+   *      con el paso 1 (es la misma consulta que "Todas"), así que no hace
+   *      falta pedirle nada nuevo al server;
+   *   3. el filtro liviano de texto, también en el cliente — sin el `q` que
+   *      antes armaba `useBuscarNotas`.
+   */
+  const notasDeVista = enPapelera
+    ? (papelera.data ?? [])
+    : vista.tipo === 'espacio'
+      ? (delEspacio.data ?? [])
+      : (privadas.data ?? []);
+  /**
+   * 🔴 «FAVORITAS» YA NO FILTRA `notasDeVista` EN EL CLIENTE (04-sep-2026,
+   * ADR 0093) — antes leía `fijada` sobre lo que ya había llegado con el paso
+   * 1 (la libreta privada), porque las dos cosas coincidían: fijar era
+   * favoritear. Ahora son campos independientes y Favoritos CRUZA espacios
+   * (decisión explícita del dueño), así que necesita su PROPIA consulta
+   * (`useFavoritas`, arriba) — filtrar `notasDeVista` nunca podría traer lo
+   * favorito de un espacio que la vista actual ni está mirando.
+   */
+  const notasDeFavoritas = vista.tipo === 'favoritas' ? (favoritas.data ?? []) : notasDeVista;
+  /**
+   * LOS CONTADORES DEL RIEL — de `privadas`/`papelera`/`favoritas` directo,
+   * NUNCA de `notasDeVista`: tienen que verse siempre, sin importar qué vista
+   * esté activa (parada en "Personal", el riel igual dice "Papelera 3").
+   */
+  const totalCount = privadas.data?.length ?? 0;
+  const favoritasCount = favoritas.data?.length ?? 0;
+  const papeleraCount = papelera.data?.length ?? 0;
 
   /**
-   * PRECARGAR LO QUE SE VA A ABRIR (ver `perezosos.tsx`).
+   * EL MODO FILTRO (03-sep-2026) — con texto, tipo o alcance activos, la
+   * BASE deja de ser "la vista que el riel eligió" y pasa a ser una
+   * búsqueda GLOBAL (mi libreta + CADA espacio, server-side vía
+   * `useBuscarNotas`, la misma ruta que ya usan `PantallaDividida`/
+   * `PanelNotas`, acotada acá a `CLAVE_LIBRETA`): es lo que "el filtro
+   * busca en mi libreta y tus espacios al mismo tiempo" pide. La Papelera
+   * queda AFUERA a propósito — `buscarNotas` ya excluye lo archivado, así
+   * que buscar ahí adentro nunca podría devolver nada; sigue con su propio
+   * filtro de texto local, como antes.
+   */
+  const enModoFiltroGlobal = !enPapelera && (termino.length > 0 || tiposElegidos.size > 0 || alcanceElegido.size > 0);
+  const busquedaGlobal = useBuscarNotas(filtro, { clave: CLAVE_LIBRETA, activo: enModoFiltroGlobal });
+  const baseDeNotas = enModoFiltroGlobal ? (busquedaGlobal.data ?? []) : notasDeFavoritas;
+
+  // El texto: `buscarNotas` ya lo aplicó server-side en modo filtro — acá
+  // solo hace falta el filtro local de la Papelera (que nunca entra a ese modo).
+  const notasDelTermino =
+    !enModoFiltroGlobal && termino
+      ? baseDeNotas.filter((n) => {
+          const enTitulo = tituloDeNota(n).toLowerCase().includes(termino.toLowerCase());
+          const enResumen = (resumenDeNota(n) ?? '').toLowerCase().includes(termino.toLowerCase());
+          return enTitulo || enResumen;
+        })
+      : baseDeNotas;
+
+  /**
+   * EL ALCANCE — "todas" y "favoritas" son de mi libreta privada
+   * (`espacioId === null`); cualquier otra clave es el id de un espacio
+   * puntual. Vacío = sin restricción (ya viene de mi libreta + todos los
+   * espacios, así que no hace falta filtrar más).
+   */
+  const notasDeAlcance =
+    alcanceElegido.size > 0
+      ? notasDelTermino.filter((n) => {
+          const espacioId = n.espacioId ?? null;
+          // 🔴 `n.favorita`, no `n.fijada` (04-sep-2026, ADR 0093): con «fijar»
+          // convertido en un tope de orden y «favorita» cruzando espacios, este
+          // checkbox tiene que reconocer TODA página favorita, esté donde esté —
+          // no solo la privada, como cuando las dos cosas eran una sola.
+          return espacioId === null
+            ? alcanceElegido.has('todas') || (alcanceElegido.has('favoritas') && n.favorita)
+            : alcanceElegido.has(espacioId) || (alcanceElegido.has('favoritas') && n.favorita);
+        })
+      : notasDelTermino;
+
+  /** El filtro por tipo de archivo, sobre lo que ya recortó todo lo demás — los tres a la vez, no uno u otro. */
+  const notas =
+    tiposElegidos.size > 0 ? notasDeAlcance.filter((n) => tiposElegidos.has(claseDeArchivo(n))) : notasDeAlcance;
+  /**
+   * LA PAGINACIÓN DEL PANEL (03-sep-2026) — `notas` sigue siendo la lista
+   * ENTERA (la busca `paginaAbierta`, más abajo, y son los contadores del
+   * riel): lo que se recorta es solo `notasVisibles`, la porción que
+   * `.map()` dibuja. Se llama «de lista» y no «página» a secas porque acá
+   * mismo «página» ya significa otra cosa (un documento de la Libreta).
+   */
+  const POR_PAGINA_DE_LISTA = 20;
+  const totalPaginasDeLista = Math.max(1, Math.ceil(notas.length / POR_PAGINA_DE_LISTA));
+  const paginaDeListaSegura = Math.min(paginaDeLista, totalPaginasDeLista);
+  const notasVisibles = notas.slice(
+    (paginaDeListaSegura - 1) * POR_PAGINA_DE_LISTA,
+    paginaDeListaSegura * POR_PAGINA_DE_LISTA,
+  );
+  // Cambiar de lugar o de filtro vuelve a la página 1 — sin esto, entrar a la
+  // Papelera parada en la página 3 de "Todas las páginas" se ve como que
+  // faltan las primeras filas, cuando en realidad es una lista distinta.
+  useEffect(() => {
+    setPaginaDeLista(1);
+    setAvisoFijar(null);
+  }, [donde, enPapelera, vista.tipo, termino, tiposElegidos, alcanceElegido]);
+  const enListaActual =
+    seleccion?.tipo === 'nota' ? notas.find((n) => n.id === seleccion.id && n.origen === seleccion.origen) : undefined;
+  /**
+   * 🔴 SI YA NO ESTÁ EN LA LISTA DE ESTA VISTA, SE TRAE APARTE (04-sep-2026) —
+   * el otro lado de sacar `setSeleccion(null)` de `alElegirVista`. Tocar un
+   * espacio del riel para mirar su lista cambia `donde`, y `notas` (de acá
+   * arriba) queda acotada a ESE lugar — una página abierta de OTRO lugar
+   * (la libreta privada, u otro espacio) deja de aparecer ahí, aunque
+   * `seleccion` la siga señalando. `useNotaPorId` la trae por su cuenta,
+   * sin importar qué vista esté mirando el riel — mismo seam que ya usan
+   * `PantallaDividida.tsx` y la barra de pestañas.
    *
-   * El editor se pide SIEMPRE y sin esperar: entrar a la Libreta es entrar a
-   * escribir, así que el chunk viaja mientras la vendedora todavía está
-   * eligiendo la página. El diagrama sólo si en la lista hay alguno — son 82 KB
-   * gzip, y quien no usa diagramas no tiene por qué bajarlos.
+   * ⚠️ **Solo cuando hace falta** (`enListaActual` es `undefined`): mientras
+   * la página abierta siga siendo de la vista actual —el caso de SIEMPRE—,
+   * sale de la lista que ya está en memoria, sin una consulta de más ni el
+   * parpadeo de abrir en blanco mientras esa consulta vuelve.
    *
-   * ⚠️ El primer diagrama de una libreta que no tiene ninguno SÍ ve el
-   * esqueleto: se crea desde «Nuevo Diagrama» de la pantalla dividida, y
-   * adivinar eso desde acá sería precargarlo para todos.
+   * ⚠️ **Solo `origen: 'nota'`**: una histórica de `gestiones` no tiene
+   * `GET /api/notas/:id` que la resuelva (viven en otra tabla, de solo
+   * lectura) — si se abre una y se cambia de espacio, se pierde, como
+   * pasaba antes. Es un camino angosto: las históricas solo aparecen en la
+   * libreta privada, así que hace falta cruzar A un espacio con una de
+   * ésas abierta, un cruce que además no tiene nada que guardar del otro
+   * lado.
+   */
+  const necesitaPorId = seleccion?.tipo === 'nota' && seleccion.origen === 'nota' && !enListaActual;
+  const porId = useNotaPorId(necesitaPorId && seleccion ? seleccion.id : null);
+  const paginaAbierta = enListaActual ?? (necesitaPorId ? porId.data : undefined);
+  /** `null`/ausente = pantalla simple. Viene de la nota, así que sobrevive a un reload. */
+  const divididaId = paginaAbierta?.paginaDivididaId ?? null;
+  /** Misma receta que `paginaAbierta`: se busca en la lista VIVA, nunca una foto. */
+  const notaCompartiendo = compartiendoId !== null ? (notas.find((n) => n.id === compartiendoId) ?? null) : null;
+
+  /**
+   * PRECARGAR EL EDITOR (ver `perezosos.tsx`): se pide SIEMPRE y sin esperar
+   * — entrar a la Libreta es entrar a escribir, así que el chunk viaja
+   * mientras la vendedora todavía está eligiendo la página.
    */
   useEffect(() => {
     precargarEditor();
   }, []);
-  const hayDiagramas = notas.some((n) => n.tipo === 'diagrama');
-  useEffect(() => {
-    if (hayDiagramas) precargarDiagrama();
-  }, [hayDiagramas]);
 
   // Cambiar de página apaga el selector de división de la anterior — si no,
   // «Dividir pantalla» quedaría abierto encima de una página que no lo pidió.
@@ -789,13 +1147,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
             ? { tipo: 'nota' as const, id: seleccion.id }
             : null,
     puertas: {
-      // 🔴 UNA PÁGINA DE DIAGRAMA NUNCA MANDA `doc`: no hay BlockNote de por
-      // medio. La izquierda no tiene forma de CREAR una (ese camino es
-      // exclusivo de «Nuevo Diagrama», a la derecha), así que `crear` no
-      // necesita la rama — solo `actualizar`, para cuando se abre acá una que
-      // ya existía como diagrama (por búsqueda, por «Mover», o al reabrirla).
-      actualizar: (v) =>
-        paginaAbierta?.tipo === 'diagrama' ? autoguardarDiagrama.mutateAsync({ id: v.id, diagrama: v.diagrama }) : autoguardar.mutateAsync(v),
+      actualizar: (v) => autoguardar.mutateAsync(v),
       crear: (v) => crear.mutateAsync(v),
     },
     alCrear: (id) => {
@@ -877,17 +1229,6 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
     alCambiar({ ...contenido.current });
   };
 
-  /**
-   * EL DIAGRAMA va por su propia clave del sobre y NO por `doc`: una página de
-   * diagrama no tiene BlockNote, y mandarlo como `doc` haría que `aTextoPlano`
-   * lo lea como `""` y `validarTexto` rechace el guardado entero. Ver el
-   * docblock de `notas.diagrama` en el schema.
-   */
-  const alCambiarDiagrama = (diagrama: unknown) => {
-    contenido.current.diagrama = diagrama;
-    alCambiar({ ...contenido.current });
-  };
-
   const alCambiarAnotaciones = (figuras: Figura[]) => {
     // `paraGuardar` redondea las coordenadas: es lo que baja el JSON a la mitad
     // y decide si una página muy anotada entra en el tope.
@@ -895,14 +1236,17 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
     alCambiar({ ...contenido.current });
   };
 
-  const cargando = termino ? encontradas.isPending : lista.isPending;
-  const fallo = termino ? encontradas.isError : lista.isError;
+  // El filtro es client-side (ver `notas`, más arriba): la fuente que carga
+  // o falla es SIEMPRE la consulta de base, nunca el filtro.
+  const cargando = enPapelera ? papelera.isPending : vista.tipo === 'espacio' ? delEspacio.isPending : privadas.isPending;
+  const fallo = enPapelera ? papelera.isError : vista.tipo === 'espacio' ? delEspacio.isError : privadas.isError;
   /**
-   * ¿Es la PRIMERA vez? Solo cuando la consulta terminó bien y no trajo nada, y
-   * sin término de búsqueda — «nada con ese término» no es una libreta vacía.
-   * De eso depende que la pantalla enseñe qué poner en vez de quedarse muda.
+   * ¿Es la PRIMERA vez? Solo en "Todas las páginas": una Papelera o unas
+   * Favoritas vacías son el estado normal de un día cualquiera, no «todavía
+   * no escribiste nada» — y sin término de filtro, porque «nada con ese
+   * filtro» no es una libreta vacía.
    */
-  const recienEmpieza = !termino && !cargando && !fallo && notas.length === 0;
+  const recienEmpieza = vista.tipo === 'todas' && !termino && !cargando && !fallo && notas.length === 0;
   /**
    * 🔴 LA BIENVENIDA ES SOLO DE LA LIBRETA PRIVADA — y esto no es estética.
    *
@@ -929,6 +1273,50 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
    */
   const enBienvenida = recienEmpieza && seleccion === null && enSuLibretaPrivada;
 
+  /**
+   * UN CLIC EN EL RIEL — cambia de vista y abre, o hace toggle si ya estabas
+   * ahí. La única lógica de "abrir/cerrar el panel" del componente entero:
+   * vive acá y no en `SelectorDeEspacio` (que solo reporta qué fila se tocó)
+   * para que no haya dos lugares decidiendo lo mismo (#37).
+   */
+  const alElegirVista = useCallback(
+    (v: VistaLibreta) => {
+      if (mismaVista(vista, v)) {
+        setPanelAbierto((abierto) => !abierto);
+        return;
+      }
+      setVista(v);
+      setPanelAbierto(true);
+      // 🔴 YA NO `setSeleccion(null)` (04-sep-2026, a pedido explícito): esto
+      // cerraba la página abierta con solo tocar un espacio del riel para
+      // MIRAR su lista — ni siquiera hacía falta elegir una página nueva. El
+      // panel de "Páginas" ya se superpone sin empujar nada (`absolute`, ver
+      // más abajo); ahora tampoco tapa la página abierta, que sigue viéndose
+      // y autoguardándose atrás — igual que un `Ctrl+Tab` que no cierra la
+      // pestaña de la que salís. `paginaAbierta` (más abajo) sabe resolverla
+      // aunque ya no esté en la lista de ESTA vista.
+      // `setArchivada(null)` sigue: el «Deshacer» es del LISTADO que se deja
+      // de mirar, no de la página abierta.
+      setArchivada(null);
+    },
+    [vista],
+  );
+
+  // CERRAR EL PANEL AL TOCAR AFUERA — mismo patrón que `NuevaPagina.tsx`
+  // (`pointerdown` en `document`, capturando, con un `ref` que envuelve TODO
+  // lo interactivo: riel + panel). Tocar el contenido principal (el editor,
+  // la cabecera) es lo único que cuenta como "afuera".
+  useEffect(() => {
+    if (!panelAbierto) return;
+    const afuera = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (rielYPanelRef.current?.contains(t) || filtrosRef.current?.contains(t)) return;
+      setPanelAbierto(false);
+    };
+    document.addEventListener('pointerdown', afuera, true);
+    return () => document.removeEventListener('pointerdown', afuera, true);
+  }, [panelAbierto]);
+
   return (
     // Una VISTA, no una hoja: sin `fixed`, sin `z-50` y sin `role="dialog"` —
     // ocupa la columna de contenido igual que Dashboard o Pipeline, y la
@@ -944,205 +1332,415 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
         onActivar={activarPestana}
         onCerrar={cerrarPestana}
       />
-      {/* LA BARRA: buscar y el estado del guardado. El título NO se repite —
-          lo pone la cabecera de la app, y dos veces sería una franja de más.
-
-          🔴 `pl-2`, NO `px-4` en el izquierdo (26-ago-2026, reportado como
-          «no alinea con Mi libreta»): el aside arma su propio margen en dos
-          pasos —`px-2` de `SelectorDeEspacio` + `px-2.5` de cada fila— así
-          que el ícono de «Mi libreta» arranca a 18px del borde. Esta barra
-          span el ANCHO ENTERO (aside + main), así que su propio padding es
-          la única forma de que el buscador, que está justo arriba de la
-          lista, arranque en el mismo punto — `px-4` quedaba 8px más adentro
-          y se leía como una fila que no está alineada con la de abajo. El
-          lado derecho no cambia: nada se queja de «Guardado». */}
-      <div
-        className={`h-11 shrink-0 items-center gap-3 border-b border-border pl-2 pr-4 ${
-          enBienvenida ? 'hidden' : 'flex'
-        }`}
-      >
-        <div className="relative w-full min-w-0 max-w-sm">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Buscar en tus páginas…"
-            aria-label="Buscar en tus páginas"
-            className="h-8 w-full rounded-lg border border-input bg-card pl-8 pr-2 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
-          />
-        </div>
-
-
-        {/* EL RENGLÓN DE ESTADO. Quién decide qué dice es una función pura
-            (`renglonDeEstado`), porque el defecto no estaba en el `catch` sino
-            en el ternario que sólo sabía decir «Guardando…» o «Guardado» — y
-            volvía a decir «Guardado» DESPUÉS de un 400. */}
-        {(() => {
-          const r = renglonDeEstado(estadoGuardado, Boolean(paginaAbierta?.editadoAt));
-          if (!r.texto) return <span className="ml-auto" />;
-          return (
-            <span
-              className={
-                'ml-auto flex items-center gap-1 text-xs ' +
-                (r.hayFallo ? 'font-medium text-destructive' : 'text-muted-foreground')
-              }
-              aria-live="polite"
-              role={r.hayFallo ? 'alert' : undefined}
-            >
-              {r.hayFallo && <AlertTriangle className="size-3 shrink-0" />}
-              {r.texto}
-            </span>
-          );
-        })()}
-      </div>
-
-      <div className="flex min-h-0 flex-1">
-        {/*
-          LA LISTA DE PÁGINAS. En ancho de teléfono es MAESTRO-DETALLE: o la
-          lista o la página, nunca las dos. Con las dos, el aside de 19rem le
-          deja ~85 px al editor y el título sale una letra por renglón.
-        */}
-        <aside
-          className={
-            'w-full shrink-0 flex-col border-r border-border md:w-[19rem] ' +
-            (enBienvenida ? 'hidden' : seleccion === null ? 'flex md:flex' : 'hidden md:flex')
-          }
-        >
-          {/* DÓNDE ESTOY ESCRIBIENDO. Va ARRIBA del botón de página nueva, y en
-              ese orden: la pregunta «¿esto lo ve alguien más?» se contesta antes
-              de escribir, no después. */}
-          <SelectorDeEspacio
-            donde={donde}
-            onIr={(destino) => {
-              setDonde(destino);
-              // 🔴 CAMBIAR DE LUGAR CIERRA LA PÁGINA ABIERTA. El id de una página
-              // es de la tabla entera, así que sin esto la selección sobrevive al
-              // salto y el editor sigue mostrando —y AUTOGUARDANDO— una página del
-              // espacio anterior, con el nombre del nuevo en el selector.
-              setSeleccion(null);
-              // Y el «Deshacer» tampoco cruza: apunta a una página que ya no está
-              // en la lista que se ve.
-              setArchivada(null);
-            }}
-          />
-
+      {/* «NUEVA PÁGINA» + LA BARRA DE ESTADO, DEBAJO DE PESTAÑAS (03-sep-2026)
+          — pedido con una captura del botón: se muda de la punta del riel a
+          esta fila, y «Mi libreta» pasa a ocupar el lugar que el botón
+          tenía ARRIBA del riel (ver `<aside>`, más abajo). La fila ya NO se
+          esconde en la bienvenida (antes sí) porque el botón tiene que
+          seguir ahí para poder crear la primera página; lo que se esconde
+          es solo el texto de «Guardado», que no tiene nada que decir
+          todavía. El título no se repite acá — lo pone la cabecera de la
+          app. El buscador que vivía acá se fue (03-sep-2026): lo reemplaza
+          el filtro liviano del panel de "Páginas". */}
+      <div className="flex shrink-0 border-b border-border">
+        {/* `ml-3` — EL MISMO margen izquierdo que `m-3` le da a `<aside>` más
+            abajo (03-sep-2026, a pedido explícito: el botón quedaba 12px más
+            a la izquierda que "Mi libreta" y "Todas las páginas", dos
+            insets distintos para lo que se lee como la misma columna). */}
+        <div className="ml-3 w-56 shrink-0 border-r border-border">
           <NuevaPagina
-            onNueva={() => setSeleccion({ tipo: 'nueva' })}
-            onDiagrama={crearNuevoDiagrama}
+            onNueva={() => {
+              setSeleccion({ tipo: 'nueva' });
+              setPanelAbierto(false);
+            }}
             onDocumento={adjuntarDocumento}
             subiendoDocumento={subiendoDocumento}
             errorDocumento={errorDocumento}
           />
-
-          <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
-            {!deLink && seleccion?.tipo === 'nueva' && (
-              <div className="rounded-lg border border-primary bg-secondary px-3 py-2">
-                <span className="text-sm font-medium text-foreground">Página nueva</span>
-                <p className="mt-0.5 text-xs text-muted-foreground">Se guarda sola al escribir</p>
+        </div>
+        <div className="flex flex-1 items-center px-4">
+          {/* EL BUSCADOR + EL FILTRO, FIJO ARRIBA (03-sep-2026, a pedido
+              explícito) — antes vivía adentro del panel de "Páginas" (y
+              después, solo mientras el panel estaba abierto); ahora está
+              SIEMPRE acá, sin depender de ningún clic previo. Escribir o
+              tocar el filtro ABRE el panel solo — es lo que lo deja ver, ver
+              `abrirPanelConFiltro` más abajo. "Guardado" se mudó a la
+              cabecera de la página abierta (junto a Mover/Compartir), que
+              es de donde ya no competía por este lugar.
+              🔴 `ref={filtrosRef}` — este bloque vive AFUERA de
+              `rielYPanelRef` (no es ni el riel ni el panel), así que el
+              "clic afuera cierra" de más abajo necesita saber que ACÁ
+              adentro también cuenta como "adentro" — si no, tocar el
+              buscador para escribir cerraba el panel en el mismo gesto.
+              `w-80` — el MISMO ancho que el panel de "Páginas" (`w-80`, más
+              abajo): sin este tope se estiraba con `flex-1` hasta el borde
+              de la pantalla, mucho más ancho que la lista que filtra. */}
+          {/* `ml-2` — el panel de "Páginas" (más abajo) arranca 8px más a la
+              derecha que esta fila sin este ajuste: el panel hereda su
+              posición del margen del riel (`m-3`) y ESTA fila la suya de
+              `px-4` del contenedor, dos cálculos que no daban el mismo
+              número. Medido con Playwright y no a ojo — reportado con una
+              captura como que "no está alineado con este contenedor". */}
+          {/* `px-2` en un div INTERNO, no en éste (04-sep-2026, a pedido
+              explícito) — este `w-80` sigue siendo el mismo ancho que el
+              panel de "Páginas" (así el cálculo de arriba no se toca), pero
+              antes el buscador+filtro llenaba ese ancho de punta a punta,
+              CERO inset, mientras "Nueva página" —el otro control de esta
+              misma fila— vive metida 8px para adentro de SU columna
+              (`NuevaPagina.tsx`, el wrapper `px-2 py-2`). Con el inset acá
+              adentro, esta fila queda proporcionalmente más chica que el
+              panel de abajo, igual que "Nueva página" lo es de "Mi
+              libreta" — antes se leía más ancha/grande que su propio molde. */}
+          <div ref={filtrosRef} className="ml-2 w-80 max-w-full px-2">
+            <div className="flex items-center gap-1.5">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={filtro}
+                  onChange={(e) => setFiltro(e.target.value)}
+                  onFocus={() => setPanelAbierto(true)}
+                  placeholder="Filtrar páginas…"
+                  aria-label="Filtrar páginas"
+                  // `h-[42px]` — EL MISMO alto que la caja de "Nueva página"
+                  // (`NuevaPagina.tsx`, medido con Playwright: 42px), no el
+                  // `h-8` genérico de un input suelto — a pedido explícito de
+                  // que el filtro tome esa altura.
+                  className="h-[42px] w-full rounded-lg border border-input bg-card pl-8 pr-2 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
+                />
               </div>
-            )}
-
-            {cargando && <p className="px-2 py-3 text-sm text-muted-foreground">Cargando…</p>}
-            {fallo && <p className="px-2 py-3 text-sm text-destructive">No se pudieron traer tus páginas.</p>}
-            {!cargando && !fallo && notas.length === 0 && (
-              <p className="px-2 py-3 text-sm text-muted-foreground">
-                {termino
-                  ? 'Nada con ese término.'
-                  : enSuLibretaPrivada
-                    ? 'Todavía no escribiste nada acá.'
-                    : // En un espacio, «no escribiste» sería falso: puede haber
-                      // escrito cualquiera de los miembros, y no lo hizo nadie.
-                      'Nadie escribió nada acá todavía.'}
-              </p>
-            )}
-
-            {notas.map((n) => (
-              <FilaPagina
-                key={`${n.origen}-${n.id}`}
-                nota={n}
-                // En un espacio, quién la escribió — salvo si eres tú: «Tú» en
-                // cada renglón propio sería el mismo ruido que en la libreta.
-                // Es la misma regla que `canales/dueno.ts` en la fila de la cola.
-                autora={
-                  enSuLibretaPrivada || mismoUsuario(n.vendedoraId, vendedoraId) ? null : nombreCorto(n.vendedoraId)
-                }
-                activa={mismaSeleccion(seleccion, { tipo: 'nota', id: n.id, origen: n.origen })}
-                onAbrir={() => {
-                  setSeleccion({ tipo: 'nota', id: n.id, origen: n.origen });
-                  // Solo `origen: 'nota'` se abre en pestaña — ver el porqué en
-                  // `pestanas.ts`: una histórica de `gestiones` no tiene
-                  // `GET /api/notas/:id` que la resuelva.
-                  if (n.origen === 'nota') pestanas.abrir({ id: n.id, espacioId: donde, tipo: n.tipo ?? 'texto' });
-                }}
-                onFijar={() => editar.mutate({ id: n.id, fijada: !n.fijada })}
-                onRenombrar={(texto) => editar.mutate({ id: n.id, texto })}
-                onArchivar={() => {
-                  archivar.mutate(n.id);
-                  // El camino de VUELTA. Lo pidió el review del PR #47 y el
-                  // arreglo quedó en `PanelNotas`, el componente que ya no se
-                  // monta: al pasar la Libreta al riel volvió a ser un clic sin
-                  // retorno sobre algo que la vendedora escribió.
-                  setArchivada({ id: n.id, titulo: tituloDeNota(n) || 'Sin título' });
-                  // Una página archivada no se puede seguir mirando. `cerrarPestana`
-                  // hace las dos cosas: si tenía pestaña, la saca; y si ERA la
-                  // página abierta, elige a cuál pasar (o vuelve a la lista) —
-                  // reemplaza el `setSeleccion(null)` que había acá antes, que
-                  // se pisaba con esto mismo cuando las dos condiciones daban a
-                  // la vez.
-                  cerrarPestana(n.id);
-                }}
+              <FiltroDeTipoDeArchivo
+                elegidos={tiposElegidos}
+                onCambiar={setTiposElegidos}
+                espacios={espacios.data ?? []}
+                alcance={alcanceElegido}
+                onCambiarAlcance={setAlcanceElegido}
+                onAbrir={() => setPanelAbierto(true)}
               />
-            ))}
-          </div>
-
-          {/* DESHACER — al pie de la lista y no como toast flotante: la lista es
-              donde la página desapareció, así que es donde se la busca. Se va
-              sola en cuanto se archiva otra o se toca «Deshacer». */}
-          {archivada && (
-            <div className="m-2 flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-              <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                Archivaste «{archivada.titulo}»
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  desarchivar.mutate(archivada.id);
-                  setArchivada(null);
-                }}
-                className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
-              >
-                <Undo2 className="size-3.5" />
-                Deshacer
-              </button>
             </div>
-          )}
-
-          {/* CONFIGURAR RESPUESTAS RÁPIDAS — al final del todo, como una acción
-              de la libreta y no de una página puntual: no depende de haber
-              elegido ninguna. Abre la MISMA pantalla que ya administra el
-              catálogo de `hechos` desde el composer de WhatsApp (#37: un
-              catálogo, no dos formularios que puedan divergir). */}
-          <div className="shrink-0 border-t border-border p-2">
-            <button
-              type="button"
-              onClick={() => setConfigurarRespuestasAbierto(true)}
-              // El azul es el de `FilaPagina` cuando está activa (`border-primary
-              // bg-secondary`, el mismo `--secondary` celeste de la marca): acá no
-              // hay estado activo que marcar, así que el hover toma esos DOS
-              // colores para que quede reconocible como el mismo azul de la
-              // Libreta y no como el gris genérico de una fila cualquiera.
-              className="group flex w-full items-center gap-2 rounded-lg border border-transparent px-2 py-2 text-left transition-colors hover:border-primary/30 hover:bg-secondary"
-            >
-              <Settings2 className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium text-foreground transition-colors group-hover:text-navy-ink">
-                  Configurar Respuestas Rápidas
-                </span>
-                <span className="block text-xs text-muted-foreground">Crea o edita tus respuestas</span>
-              </span>
-            </button>
           </div>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        {/*
+          EL RIEL + EL PANEL DE "PÁGINAS" (03-sep-2026) — el riel es angosto y
+          SIEMPRE visible; el panel es un flotante que se abre/cierra ENCIMA
+          del editor, sin correrlo ni achicarlo (`position: absolute`, no un
+          hermano flex más). Ya no hace falta el maestro-detalle de teléfono
+          que tenía el aside viejo (ocultarse cuando hay una página abierta):
+          el panel flotando resuelve solo el mismo problema — nunca compite
+          por el ancho del editor, esté abierto o cerrado.
+
+          🔴 UNA TARJETA FLOTANTE, no una columna pegada al borde (03-sep-2026)
+          — mismo molde que `ColaUnificada.tsx` (`rounded-2xl bg-card
+          shadow-panel`, con el margen que la separa del resto en vez de un
+          `border-r` pegado). Pedido con una captura de esa cola como
+          referencia: «desde Nueva página hasta Configuración» es literal —
+          el margen y el redondeo envuelven TODO el riel, de punta a punta,
+          nada de lo de adentro cambió.
+        */}
+        {/* 🔴 EL PANEL VA AFUERA DEL `<aside>`, COMO HERMANO — no como hijo
+            (03-sep-2026). El riel necesita su propio `overflow-hidden` para
+            que las esquinas redondeadas recorten lo de adentro (el mismo
+            motivo que `ColaUnificada.tsx`); pero el panel se posiciona
+            AFUERA de la caja del riel (`left-full`), y ese MISMO
+            `overflow-hidden` se lo comía en silencio — quedaba en el DOM,
+            con su `getBoundingClientRect()` perfecto, pero invisible: lo
+            recortaba su propio padre. `rielYPanelRef` se mudó a este
+            envoltorio para que el "clic afuera cierra" siga contando como
+            "adentro" tanto al riel como al panel. */}
+        <div ref={rielYPanelRef} className="relative flex">
+        <aside className="m-3 flex w-56 shrink-0 flex-col overflow-hidden rounded-2xl bg-card shadow-panel">
+          {/* "NUEVA PÁGINA" se mudó a la fila debajo de pestañas (03-sep-2026):
+              "MI LIBRETA" pasa a ser lo primero del riel. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <SelectorDeEspacio
+              vista={vista}
+              onElegir={alElegirVista}
+              totalCount={totalCount}
+              favoritasCount={favoritasCount}
+              papeleraCount={papeleraCount}
+            />
+          </div>
+
+          {/* «CONFIGURACIÓN» — al pie del RIEL, no del panel: no depende de qué
+              vista esté abierta ni de tener el panel visible. Fusiona
+              "Administrar espacios" (mudado desde `SelectorDeEspacio.tsx`) y
+              "Configurar Respuestas Rápidas", que antes competían por este
+              mismo lugar fijo (03-sep-2026). */}
+          <MenuDeConfiguracion
+            onAdministrarEspacios={() => setAdministrandoEspacios(true)}
+            onConfigurarRespuestas={() => setConfigurarRespuestasAbierto(true)}
+          />
         </aside>
+
+        {/* EL PANEL DE "PÁGINAS" — `absolute`, anclado al borde derecho del
+            riel (el envoltorio de arriba es `relative`). MISMA tarjeta que
+            el riel (`rounded-2xl bg-card shadow-panel`, 03-sep-2026: pedido
+            con el riel ya así, para que las dos se lean como el mismo
+            lenguaje) en vez del rectángulo recto de antes — `ml-3`/
+            `inset-y-3` calcan el `m-3` del riel, así quedan a la misma
+            distancia del borde de arriba/abajo y con el mismo aire de
+            separación entre las dos. No empuja nada, se superpone al
+            editor. */}
+        {panelAbierto && (
+          <div className="absolute left-full inset-y-3 z-20 ml-3 flex w-80 max-w-[85vw] flex-col overflow-hidden rounded-2xl bg-card shadow-panel">
+              {/* El buscador + el filtro de tipo se mudaron arriba, a la fila
+                  de "Nueva página" (03-sep-2026, a pedido explícito) — acá ya
+                  no hay más encabezado que la lista misma.
+                  `py-2` (antes `pt-3 pb-3`, a pedido explícito de alinear
+                  esto con "Mi libreta") — EL MISMO padding que el
+                  envoltorio de `SelectorDeEspacio.tsx` en el riel de al
+                  lado, para que las dos columnas arranquen a la misma
+                  distancia del borde de arriba. */}
+              <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 py-2">
+                {!deLink && !enPapelera && seleccion?.tipo === 'nueva' && (
+                  <div className="rounded-lg border border-primary bg-secondary px-3 py-2">
+                    <span className="text-sm font-medium text-foreground">Página nueva</span>
+                    <p className="mt-0.5 text-xs text-muted-foreground">Se guarda sola al escribir</p>
+                  </div>
+                )}
+
+                {avisoFijar && (
+                  <p className="flex items-start gap-1.5 rounded-lg bg-secondary px-2 py-1.5 text-xs text-foreground">
+                    <Pin className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                    {avisoFijar}
+                  </p>
+                )}
+
+                {cargando && <p className="px-2 py-3 text-sm text-muted-foreground">Cargando…</p>}
+                {fallo && <p className="px-2 py-3 text-sm text-destructive">No se pudieron traer tus páginas.</p>}
+                {!cargando && !fallo && notas.length === 0 && (
+                  <p className="px-2 py-3 text-sm text-muted-foreground">
+                    {termino
+                      ? 'Nada con ese filtro.'
+                      : enPapelera
+                        ? 'La Papelera está vacía.'
+                        : vista.tipo === 'favoritas'
+                          ? 'Todavía no marcaste ninguna página como favorita.'
+                          : enSuLibretaPrivada
+                            ? 'Todavía no escribiste nada acá.'
+                            : // En un espacio, «no escribiste» sería falso: puede haber
+                              // escrito cualquiera de los miembros, y no lo hizo nadie.
+                              'Nadie escribió nada acá todavía.'}
+                  </p>
+                )}
+
+                {notasVisibles.map((n) => (
+                  <FilaPagina
+                    key={`${n.origen}-${n.id}`}
+                    nota={n}
+                    // En un espacio, quién la escribió — salvo si eres tú: «Tú» en
+                    // cada renglón propio sería el mismo ruido que en la libreta.
+                    // Es la misma regla que `canales/dueno.ts` en la fila de la cola.
+                    autora={
+                      enSuLibretaPrivada || mismoUsuario(n.vendedoraId, vendedoraId) ? null : nombreCorto(n.vendedoraId)
+                    }
+                    deEspacio={
+                      enPapelera && n.espacioId != null
+                        ? (espacios.data ?? []).find((e) => e.id === n.espacioId)?.nombre ?? null
+                        : null
+                    }
+                    activa={mismaSeleccion(seleccion, { tipo: 'nota', id: n.id, origen: n.origen })}
+                    onAbrir={() => {
+                      setSeleccion({ tipo: 'nota', id: n.id, origen: n.origen });
+                      // Solo `origen: 'nota'` se abre en pestaña — ver el porqué en
+                      // `pestanas.ts`: una histórica de `gestiones` no tiene
+                      // `GET /api/notas/:id` que la resuelva.
+                      if (n.origen === 'nota') pestanas.abrir({ id: n.id, espacioId: donde, tipo: n.tipo ?? 'texto' });
+                      // Elegir una página CIERRA el panel — es lo que la deja
+                      // ver: un panel que se queda abierto encima taparía la
+                      // página que se acaba de abrir.
+                      setPanelAbierto(false);
+                    }}
+                    onRenombrar={(texto) => editar.mutate({ id: n.id, texto })}
+                    accion={
+                      enPapelera
+                        ? {
+                            tipo: 'papelera',
+                            onRestaurar: () => desarchivar.mutate(n.id),
+                            onEliminarParaSiempre: () => {
+                              const titulo = tituloDeNota(n) || 'Sin título';
+                              // 🔴 IRREVERSIBLE, Y NO HAY «DESHACER» POSIBLE ACÁ —
+                              // a diferencia de archivar (que sí lo tiene, más
+                              // abajo), esto borra la fila de la base de verdad.
+                              // Mismo patrón que ya usa este archivo para "borrar
+                              // esta capa" (`PanelDeCapas.onBorrar`, más arriba).
+                              setConfirmacion({
+                                titulo: `¿Eliminar «${titulo}» para siempre?`,
+                                mensaje: 'No se puede deshacer.',
+                                textoConfirmar: 'Eliminar para siempre',
+                                onConfirmar: () => eliminarParaSiempre.mutate(n.id),
+                              });
+                            },
+                            onDescargar: n.tipo === 'archivo' && n.archivo ? () => void descargarDocumento(n.archivo!) : undefined,
+                          }
+                        : {
+                            tipo: 'normal',
+                            onFijar: () => {
+                              setAvisoFijar(null);
+                              editar.mutate(
+                                { id: n.id, fijada: !n.fijada },
+                                {
+                                  // 🔴 SOLO el 409 `apartado-lleno` es un aviso — cualquier
+                                  // otro fallo (red, 403…) no tiene nada nuevo que decir acá,
+                                  // así que no se silencia con un mensaje que no le
+                                  // corresponde.
+                                  onError: (e) => {
+                                    if (e instanceof ErrorApi && e.status === 409) {
+                                      setAvisoFijar(
+                                        `Ya tienes ${MAX_FIJADAS_POR_APARTADO} páginas fijadas acá — desfija una antes de fijar otra.`,
+                                      );
+                                    }
+                                  },
+                                },
+                              );
+                            },
+                            onFavorito: () => editar.mutate({ id: n.id, favorita: !n.favorita }),
+                            onArchivar: () => {
+                              archivar.mutate(n.id);
+                              // El camino de VUELTA. Lo pidió el review del PR #47 y el
+                              // arreglo quedó en `PanelNotas`, el componente que ya no se
+                              // monta: al pasar la Libreta al riel volvió a ser un clic sin
+                              // retorno sobre algo que la vendedora escribió.
+                              setArchivada({ id: n.id, titulo: tituloDeNota(n) || 'Sin título' });
+                              // Una página archivada no se puede seguir mirando. `cerrarPestana`
+                              // hace las dos cosas: si tenía pestaña, la saca; y si ERA la
+                              // página abierta, elige a cuál pasar (o vuelve a la lista) —
+                              // reemplaza el `setSeleccion(null)` que había acá antes, que
+                              // se pisaba con esto mismo cuando las dos condiciones daban a
+                              // la vez.
+                              cerrarPestana(n.id);
+                            },
+                            // MOVER Y COMPARTIR (04-sep-2026, ADR 0093) — se sumaron acá al
+                            // consolidarse en el menú `⋮` de la fila; antes solo existían en
+                            // `AccionesDePagina.tsx`, viendo la página ya abierta.
+                            onMover: (destino) => {
+                              mover.mutate({ id: n.id, destino });
+                              // Si ESTA fila es la página abierta, se fue de esta lista: igual
+                              // que el camino viejo (`AccionesDePagina` → `onMover`, más abajo).
+                              // Si no es la abierta, no hay nada más que tocar — la lista se
+                              // refresca sola con la invalidación de la mutación.
+                              if (mismaSeleccion(seleccion, { tipo: 'nota', id: n.id, origen: n.origen })) {
+                                setSeleccion(null);
+                              }
+                            },
+                            onCompartir: () => {
+                              setCompartiendoId(n.id);
+                              setVistaCompartir('link');
+                            },
+                            // 🔴 `n.espacioId`, NO el `donde` de la vista actual
+                            // (04-sep-2026) — con Favoritos cruzando espacios, una fila
+                            // de acá puede vivir en un espacio distinto al que el riel
+                            // tiene elegido; `donde` seguiría diciendo `null` (las tres
+                            // vistas de "MI LIBRETA" son siempre privadas para
+                            // `dondeDeVista`) y "Mover" mostraría mal cuál es su lugar
+                            // actual — sin marcar "Mi libreta" como destino ya elegido,
+                            // y sin preguntar «esto se lo saca a tu equipo» al moverla a
+                            // la libreta privada.
+                            donde: n.espacioId ?? null,
+                            espacios: espacios.data ?? [],
+                            vendedoraId,
+                            onDescargar: n.tipo === 'archivo' && n.archivo ? () => void descargarDocumento(n.archivo!) : undefined,
+                          }
+                    }
+                  />
+                ))}
+              </div>
+
+              {/* DESHACER — al pie de la lista y no como toast flotante: la lista es
+                  donde la página desapareció, así que es donde se la busca. Se va
+                  sola en cuanto se archiva otra o se toca «Deshacer». No aplica
+                  DENTRO de la Papelera: ahí lo que se deshace es archivar, y
+                  archivar ya no está entre las acciones que se ofrecen. */}
+              {archivada && !enPapelera && (
+                <div className="m-2 flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+                  <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                    Archivaste «{archivada.titulo}»
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      desarchivar.mutate(archivada.id);
+                      setArchivada(null);
+                    }}
+                    className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+                  >
+                    <Undo2 className="size-3.5" />
+                    Deshacer
+                  </button>
+                </div>
+              )}
+
+              {/* PAGINACIÓN (03-sep-2026) — al pie del panel, FUERA del
+                  `overflow-y-auto` de la lista: fija, no se va con el
+                  scroll, justo donde termina la última página de la lista.
+                  Las flechas son solo el ícono, sin «Anterior»/«Siguiente»
+                  al lado — a pedido explícito. SIEMPRE visible, aunque haya
+                  una sola página (con las flechas deshabilitadas): a
+                  pedido, después de que escondida con pocas filas se leyera
+                  como que la paginación no se había hecho.
+                  🔴 `h-14` FIJO, el MISMO alto exacto que
+                  `MenuDeConfiguracion.tsx` usa para "Configuración": los dos
+                  pies sacaban su alto de su propio contenido (íconos acá,
+                  texto ahí) y salía un número distinto en cada uno — la
+                  línea divisoria entre panel y riel quedaba a distinta
+                  altura, reportado con una captura. Con el mismo alto FIJO
+                  en los dos, ya no depende de calcarle el padding a mano. */}
+              <div className="flex h-14 shrink-0 items-center justify-center border-t border-border px-2">
+                  {/* UN SOLO CHIP, no tres piezas sueltas flotando en la fila
+                      (03-sep-2026, a pedido explícito — "luce raro" con una
+                      captura mostrando huecos grandes entre flecha y número).
+                      El borde y el fondo ahora envuelven a las TRES partes
+                      juntas, así se leen como un único control de paginación
+                      en vez de un botón + una caja + texto suelto + otro
+                      botón, cada uno con su propio aire alrededor. */}
+                  <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/50 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setPaginaDeLista((p) => Math.max(1, p - 1))}
+                      disabled={paginaDeListaSegura <= 1}
+                      aria-label="Página anterior"
+                      className="flex items-center justify-center rounded-md p-1.5 text-muted-foreground transition hover:bg-card hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <ChevronLeft className="size-3.5" />
+                    </button>
+                    <div className="flex items-center gap-1 px-0.5 text-xs text-muted-foreground">
+                      <input
+                        type="number"
+                        min={1}
+                        max={totalPaginasDeLista}
+                        value={paginaDeListaSegura}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (Number.isInteger(n)) setPaginaDeLista(Math.min(Math.max(1, n), totalPaginasDeLista));
+                        }}
+                        aria-label="Ir a la página"
+                        // `[appearance:textfield]` + ocultar los spinners nativos
+                        // (WebKit): un `<input type="number">` de fábrica trae
+                        // flechitas propias que compiten visualmente con las
+                        // de acá al lado — dos pares de flechas para lo mismo.
+                        // Sin borde ni fondo propio (antes `border border-input
+                        // bg-card`): adentro del chip ya tiene el suyo, uno
+                        // más acá volvía a partir el control en pedazos.
+                        className="h-6 w-6 rounded-md text-center text-sm font-medium text-foreground outline-none [appearance:textfield] focus:bg-card [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      />
+                      <span className="font-medium">/ {totalPaginasDeLista}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPaginaDeLista((p) => Math.min(totalPaginasDeLista, p + 1))}
+                      disabled={paginaDeListaSegura >= totalPaginasDeLista}
+                      aria-label="Página siguiente"
+                      className="flex items-center justify-center rounded-md p-1.5 text-muted-foreground transition hover:bg-card hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <ChevronRight className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+            </div>
+        )}
+        </div>
 
         {/* EL EDITOR */}
         <main
@@ -1178,7 +1776,15 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
 
             La `key` es lo que remonta las anotaciones al cambiar de página.
           */}
-          <ZonaDeTrabajo key={claveDePagina} hoja={hoja} onGuardarAnotaciones={alCambiarAnotaciones}>
+          <ZonaDeTrabajo
+            key={claveDePagina}
+            hoja={hoja}
+            editor={editorListo}
+            hojaA4={hojaA4Lista}
+            contenedorArchivo={contenedorArchivoListo}
+            onGuardarAnotaciones={alCambiarAnotaciones}
+            onPedirConfirmacion={setConfirmacion}
+          >
           {/*
             LA PRIMERA VEZ ENSEÑA QUÉ PONER.
 
@@ -1206,7 +1812,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
                     : 'Se lee, no se edita.'}
                 </div>
               </div>
-              <ColumnaDeEscritura>
+              <ColumnaDeEscritura registrarHojaA4={registrarHojaA4}>
                 <EditorPerezoso
                   key={`link-${deLink.id}`}
                   contenidoInicial={docParaEditor(deLink)}
@@ -1215,6 +1821,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
                   onAbrirPlantillas={abrirPlantillas}
                   onAbrirRespuestasRapidas={abrirRespuestasRapidas}
                   registrarPegado={registrarPegado}
+                  registrarEditor={registrarEditor}
                 />
               </ColumnaDeEscritura>
             </>
@@ -1279,7 +1886,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
           )}
 
           {!deLink && seleccion?.tipo === 'nueva' && (
-            <ColumnaDeEscritura>
+            <ColumnaDeEscritura registrarHojaA4={registrarHojaA4}>
               <EditorPerezoso
                 key="nueva"
                 contenidoInicial={undefined}
@@ -1288,6 +1895,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
                 onAbrirPlantillas={abrirPlantillas}
                 onAbrirRespuestasRapidas={abrirRespuestasRapidas}
                 registrarPegado={registrarPegado}
+                registrarEditor={registrarEditor}
               />
             </ColumnaDeEscritura>
           )}
@@ -1298,17 +1906,11 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
             // solo se abre por elección propia o porque ya venía persistida.
             const dividiendo =
               paginaAbierta.origen === 'nota' && (mostrarSelectorDivision || divididaId !== null);
-            // Un diagrama arma su PROPIA barra de herramientas y necesita todo
-            // el ancho, igual que en la pantalla dividida — el molde es el
-            // mismo, y no es casualidad: es la MISMA regla, aplicada del otro
-            // lado, para cuando un diagrama se abre acá directo (por
-            // búsqueda, por «Mover», o al reabrirlo) y no solo desde el panel.
-            const esDiagrama = paginaAbierta.origen === 'nota' && paginaAbierta.tipo === 'diagrama';
             /**
-             * UNA PÁGINA-DOCUMENTO (26-ago-2026): mismo criterio que `esDiagrama`,
-             * tercera clase de página aparte del BlockNote de siempre. Nunca pasa
-             * por el editor ni por el autoguardado — es un archivo que ya está
-             * subido entero, no algo que se escribe.
+             * UNA PÁGINA-DOCUMENTO (26-ago-2026): segunda clase de página aparte
+             * del BlockNote de siempre. Nunca pasa por el editor ni por el
+             * autoguardado — es un archivo que ya está subido entero, no algo
+             * que se escribe.
              */
             const esArchivo = paginaAbierta.origen === 'nota' && paginaAbierta.tipo === 'archivo';
             /**
@@ -1327,10 +1929,18 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
              *
              * ⚠️ `pb-4`, NO EL `mb-4` QUE TENÍA `AccionesDePagina` (19-ago-2026): con
              * el margen puesto ACÁ, en el wrapper, la cabecera de la mitad derecha
-             * (`PantallaDividida.tsx`) puede usar EXACTO el mismo par `pt-8 pb-4` y
+             * (`PantallaDividida.tsx`) puede usar EXACTO el mismo par `pt-4 pb-4` y
              * las dos hojas A4 arrancan a la misma altura — antes cada lado medía
              * el espacio de arriba a su manera y no coincidían (issue reportado
              * 19-ago-2026).
+             *
+             * 🔴 `pt-4` (antes `pt-8`, 03-sep-2026 a pedido explícito) — "mucho
+             * espacio en blanco por encima" con una captura mostrando la hoja
+             * A4 empezando muy abajo, tanto con una sola página como
+             * dividiendo. Medido con Playwright: de `<main>` a la fila de
+             * Mover/Compartir había 108px con `pt-8`; con `pt-4` baja a 74px.
+             * Sigue siendo el MISMO valor en `PantallaDividida.tsx` — si
+             * cambia acá, cambia ahí.
              *
              * ⚠️ MISMO `w-[21cm]` DIVIDIENDO O NO. Hubo un `w-[15cm]` acá para
              * dividiendo, el mismo día que se sacó: dividir ya angosta el panel a
@@ -1341,10 +1951,11 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
              * pedido): acompaña al margen angosto de `.hoja-a4--dividida`
              * (`ColumnaDeEscritura`, más abajo) — la barra tiene que alinearse con
              * el borde del texto, y ese borde se corrió al achicarse el margen.
+             *
              */
             const anchoDeAcciones = dividiendo
-              ? 'mx-auto box-border w-[21cm] max-w-full px-[1.27cm] pt-8 pb-4'
-              : 'mx-auto box-border w-[21cm] max-w-full px-[2.5cm] pt-8 pb-4';
+              ? 'mx-auto box-border w-[21cm] max-w-full px-[1.27cm] pt-4 pb-4'
+              : 'mx-auto box-border w-[21cm] max-w-full px-[2.5cm] pt-4 pb-4';
             // Cierra la pantalla dividida — eligiendo o ya persistida, las dos, y
             // desde CUALQUIER disparador: el botón de arriba (`AccionesDePagina`)
             // o la ✕ de adentro del panel (`PantallaDividida`). Antes la ✕ llamaba
@@ -1364,26 +1975,36 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
                       en otra tabla) ni compartir, y una página en blanco todavía no
                       tiene id. */}
                   {paginaAbierta.origen === 'nota' && (
-                    <div className={esDiagrama ? 'px-3 py-3' : anchoDeAcciones}>
+                    <div className={anchoDeAcciones + ' flex flex-wrap items-center justify-between gap-2'}>
+                      {/* «GUARDADO» SE MUDÓ ACÁ (03-sep-2026) — el buscador
+                          ahora vive fijo arriba, sin depender de si hay una
+                          página abierta, así que ya no tenía un lugar fijo
+                          para compartir con él. Este renglón sí depende de
+                          que haya una página GUARDADA (mismo `if` de arriba
+                          que ya exige `origen === 'nota'`), que es
+                          justamente de lo único que "Guardado" puede hablar. */}
+                      {(() => {
+                        const r = renglonDeEstado(estadoGuardado, paginaAbierta.editadoAt ?? null);
+                        if (!r.texto) return null;
+                        return (
+                          <span
+                            className={'flex shrink-0 items-center gap-1 text-xs ' + (r.hayFallo ? 'font-medium text-destructive' : 'text-muted-foreground')}
+                            aria-live="polite"
+                            role={r.hayFallo ? 'alert' : undefined}
+                          >
+                            {r.hayFallo && <AlertTriangle className="size-3 shrink-0" />}
+                            {r.texto}
+                          </span>
+                        );
+                      })()}
                       <AccionesDePagina
                         nota={paginaAbierta}
-                        donde={donde}
-                        espacios={espacios.data ?? []}
-                        vendedoraId={vendedoraId}
                         // El botón se apoya en ESTO, no en `nota.paginaDivididaId` a
                         // secas: recién apretado «Dividir pantalla» ya está
                         // dividiendo (eligiendo, todavía sin persistir), y un
                         // segundo toque tiene que volver a una sola pantalla desde
                         // ahí también — no solo después de que el server confirme.
                         dividiendo={dividiendo}
-                        onMover={(destino) => {
-                          mover.mutate({ id: paginaAbierta.id, destino });
-                          // La página se fue de esta lista: dejarla abierta mostraría —y
-                          // autoguardaría— algo que ya no está acá.
-                          setSeleccion(null);
-                        }}
-                        onAbrirLink={(v) => abrirLink.mutate({ id: paginaAbierta.id, ...v })}
-                        onCortarLink={() => cortarLink.mutate(paginaAbierta.id)}
                         onTocarDividir={() => setMostrarSelectorDivision(true)}
                         onCortarDivision={cerrarDivision}
                         onRenombrar={(texto) => editar.mutate({ id: paginaAbierta.id, texto })}
@@ -1397,24 +2018,54 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
                       </p>
                     </div>
                   )}
-                  {esDiagrama ? (
-                    <DiagramaPerezoso
-                      key={`${paginaAbierta.origen}-${paginaAbierta.id}`}
-                      contenidoInicial={paginaAbierta.diagrama ?? undefined}
-                      onCambio={alCambiarDiagrama}
-                    />
-                  ) : esArchivo ? (
-                    // 🔴 SIN `ColumnaDeEscritura` A PROPÓSITO (26-ago-2026): esa
-                    // hoja A4 (21cm, pensada para un párrafo de prosa) es lo que
-                    // dejaba «muy comprimido» un PDF o un Word en pantalla simple
-                    // — reportado contra la pantalla DIVIDIDA, que nunca pasó por
-                    // ahí y por eso se veía bien. Mismo trato que el diagrama:
-                    // usa el ancho real que el panel tiene.
-                    <div className="px-3 py-3">
-                      <PaginaDocumento key={`${paginaAbierta.origen}-${paginaAbierta.id}`} nota={paginaAbierta} />
+                  {esArchivo ? (
+                    // 🔴 SIN el tope de 21cm EN PANTALLA DIVIDIDA, a propósito
+                    // (26-ago-2026): esa hoja A4 (pensada para un párrafo de
+                    // prosa) dejaba «muy comprimido» un PDF o un Word ahí — el
+                    // panel de una mitad ya es angosto de por sí, y capar
+                    // encima de eso dejaba MENOS ancho del que el panel
+                    // realmente tenía. Usa el ancho real del panel.
+                    //
+                    // 🔴 Y CON el tope, centrada, en pantalla SIMPLE
+                    // (04-sep-2026, a pedido explícito: «que se abra centrada
+                    // y con la dimensión horizontal y vertical de las hojas de
+                    // página»). Es la reversa de la decisión de arriba, pero
+                    // para el caso contrario: sin pantalla dividida de por
+                    // medio, un documento a lo ancho de TODO el panel se leía
+                    // desproporcionado al lado de una hoja de texto, que
+                    // siempre está centrada y topeada a 21cm
+                    // (`ColumnaDeEscritura`/`.hoja-a4`). `mx-auto max-w-[21cm]`
+                    // es el MISMO par ancho+centrado que usa `.hoja-a4` — el
+                    // alto YA coincidía de antes (`ALTO_VISOR` en
+                    // `PaginaDocumento.tsx` es la misma fórmula que la altura
+                    // de `.hoja-a4`), así que esto completa las dos
+                    // dimensiones, no solo el alto.
+                    //
+                    // ⚠️ SIN `pt-3` (04-sep-2026, reportado con captura: el borde
+                    // del documento arrancaba más abajo que la hoja de al lado).
+                    // `.hoja-a4` (`ColumnaDeEscritura`) arranca INMEDIATAMENTE
+                    // después de su cabecera, sin relleno propio — un `pt-3` acá
+                    // sumaba 12px que el otro lado no tenía, y las dos cabeceras
+                    // ya miden EXACTO lo mismo (medido: 60px, `pt-4 pb-4` +
+                    // `min-h-7` en las dos, ver `PantallaDividida.tsx`). `pb-3`
+                    // se queda: es espacio DESPUÉS del visor, no antes, y ahí no
+                    // hay nada de al lado con qué desalinearse.
+                    //
+                    // ⚠️ Y SIN `px-3` EN LA RAMA SIN DIVIDIR (04-sep-2026): con
+                    // el tope de arriba, un padding horizontal acá dejaba el
+                    // visor 24px más angosto que `.hoja-a4` — medido con
+                    // Playwright: 793,7px la hoja, 769,7px el visor, mismo
+                    // centro pero DISTINTO ancho. El pedido explícito era la
+                    // MISMA dimensión horizontal, no una parecida.
+                    <div className={dividiendo ? 'px-3 pb-3' : 'mx-auto w-full max-w-[21cm] pb-3'}>
+                      <PaginaDocumento
+                        key={`${paginaAbierta.origen}-${paginaAbierta.id}`}
+                        nota={paginaAbierta}
+                        registrarContenedorDeArchivo={registrarContenedorDeArchivo}
+                      />
                     </div>
                   ) : (
-                    <ColumnaDeEscritura dividida={dividiendo}>
+                    <ColumnaDeEscritura dividida={dividiendo} registrarHojaA4={registrarHojaA4}>
                       <EditorPerezoso
                         key={`${paginaAbierta.origen}-${paginaAbierta.id}`}
                         contenidoInicial={docParaEditor(paginaAbierta)}
@@ -1423,6 +2074,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
                         onAbrirPlantillas={abrirPlantillas}
                         onAbrirRespuestasRapidas={abrirRespuestasRapidas}
                         registrarPegado={registrarPegado}
+                        registrarEditor={registrarEditor}
                       />
                     </ColumnaDeEscritura>
                   )}
@@ -1435,7 +2087,7 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
                       paginaIzquierdaId={paginaAbierta.id}
                       divididaId={divididaId}
                       notasDisponibles={notas}
-                      mutaciones={{ crear, editar, dividir, crearDiagrama, autoguardarDiagrama, crearDocumento }}
+                      mutaciones={{ crear, editar, dividir, crearDocumento }}
                       onCerrar={cerrarDivision}
                     />
                   </div>
@@ -1471,9 +2123,45 @@ export function Libreta({ vendedoraId }: { vendedoraId?: string | null }) {
         />
       )}
 
-      {/* «Configurar Respuestas Rápidas», al pie de la lista de páginas. */}
+      {/* «Configurar Respuestas Rápidas», desde el menú de Configuración. */}
       {configurarRespuestasAbierto && (
         <PantallaHechos enModal onCerrar={() => setConfigurarRespuestasAbierto(false)} />
+      )}
+
+      {/* «Administrar espacios», desde el mismo menú — mudado desde
+          `SelectorDeEspacio.tsx` (03-sep-2026). */}
+      {administrandoEspacios && <ModalDeEspacios onCerrar={() => setAdministrandoEspacios(false)} />}
+
+      {/* La confirmación compartida — ver el docblock de `confirmacion`. */}
+      {confirmacion && (
+        <ModalDeConfirmacion
+          titulo={confirmacion.titulo}
+          mensaje={confirmacion.mensaje}
+          textoConfirmar={confirmacion.textoConfirmar}
+          peligroso
+          onConfirmar={() => {
+            confirmacion.onConfirmar();
+            setConfirmacion(null);
+          }}
+          onCancelar={() => setConfirmacion(null)}
+        />
+      )}
+
+      {/* COMPARTIR DESDE LA FILA — ver el docblock de `compartiendoId`. Si la
+          nota se fue de la lista VIVA en el medio (se archivó, se movió a
+          donde ya no se busca), `notaCompartiendo` da `null` y el modal
+          simplemente no se dibuja — no hay nada más viejo que mostrar. */}
+      {notaCompartiendo && vistaCompartir === 'link' && (
+        <ModalDeLink
+          nota={notaCompartiendo}
+          onCerrar={() => setCompartiendoId(null)}
+          onGuardar={(v) => abrirLink.mutate({ id: notaCompartiendo.id, ...v })}
+          onCortar={() => cortarLink.mutate(notaCompartiendo.id)}
+          onVerRegistro={() => setVistaCompartir('registro')}
+        />
+      )}
+      {notaCompartiendo && vistaCompartir === 'registro' && (
+        <AuditoriaDeLink notaId={notaCompartiendo.id} onCerrar={() => setVistaCompartir('link')} />
       )}
     </section>
   );

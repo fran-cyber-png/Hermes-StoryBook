@@ -1,5 +1,20 @@
 /**
- * QUÉ SE SUGIERE EN LA RESPUESTA PÚBLICA — la elección, pura.
+ * QUÉ SE SUGIERE EN LA RESPUESTA PÚBLICA — de quién es cada texto, y la elección, pura.
+ *
+ * ══ 🔴 CADA TEXTO ES DE UN CLIENTE, Y SÓLO SE LE SUGIERE A ESE CLIENTE ═══════
+ *
+ * Medido en producción el 11-sep-2026, en la Página de Américo (22:45 a 23:07
+ * UTC): de 27 respuestas públicas que salieron desde Hermes, 13 llevaban el texto
+ * de la Escuela y 14 las frases escritas para Betto, 6 de ellas con «…por un solo
+ * Áncash». Ninguna era de Américo. Hasta ese día el panel elegía la sugerencia
+ * mirando sólo si se podía el privado: con privado, las frases de Betto para
+ * todos; sin privado, el texto de la Escuela para todos.
+ *
+ * Ahora la lista sale del cliente de la Página del comentario
+ * (`paginas_meta.cliente_id`) y del módulo de quien responde, los dos como los
+ * contesta `/puede-privado`. **Un cliente sin textos propios —hoy `americo`—
+ * abre la caja vacía**: acá no se inventa un texto para nadie. Y si no se sabe de
+ * quién es la Página, tampoco se sugiere nada.
  *
  * ══ POR QUÉ SORTEADA Y NO SIEMPRE LA MISMA ══════════════════════════════════
  *
@@ -14,27 +29,25 @@
  *   de señal que termina limitando el alcance de la Página — el costo no lo
  *   paga el comentario, lo paga la publicación entera.
  *
- * ══ 🔴 NINGUNA PROMETE UN PRIVADO, Y ESO ES UNA GARANTÍA, NO UNA CASUALIDAD ══
+ * ══ 🔴 NINGUNA DE CAMPAÑA PROMETE UN PRIVADO, Y ESO ES UNA GARANTÍA ═════════
  *
  * Esa promesa es la que ADR 0033 existe para custodiar: si el público dice «te
- * escribimos por privado» y el privado falla, queda una mentira publicada bajo
- * la marca del cliente. El server tiene su red para eso —publica
- * `mensajePublicoSinPrivado` en lugar del texto que lo prometía
- * (`server/src/responder/textoPublico.ts`)— pero acá el problema **ni siquiera
- * llega a plantearse**: las tres frases agradecen y no dan por hecho nada, así
- * que son honestas salga o no salga el privado.
+ * escribimos por privado» y el privado no sale, queda una mentira publicada bajo
+ * la marca del cliente. Desde el 11-sep-2026 el server ya no publica el público
+ * cuando el privado falla (`server/src/responder/enviarRespuesta.ts`), pero el
+ * botón de enviar se habilita con sólo el público: un prefill que prometiera,
+ * con la caja privada en blanco, publicaría la promesa igual.
  *
- * ⚠️ **«Te acabamos de escribir por mensaje privado» estaba en esta lista y se
+ * ⚠️ **«Te acabamos de escribir por mensaje privado» estaba en la lista y se
  * sacó** (25-ago-2026, a pedido del dueño). Era la sugerencia por defecto desde
- * siempre, y su costo estaba a la vista: el botón de enviar se habilita con
- * sólo el público, así que el camino de MENOR esfuerzo —prefill que promete +
- * privado en blanco + enviar— publicaba la promesa sin que saliera ningún
- * privado. Ahora ese camino no existe.
+ * siempre, y su costo estaba a la vista: el camino de MENOR esfuerzo —prefill
+ * que promete + privado en blanco + enviar— publicaba la promesa sin que saliera
+ * ningún privado. Ahora ese camino no existe.
  *
- * 🔴 **Corolario, y hay que decirlo**: ya no hay una sugerencia para el
+ * 🔴 **Corolario, y hay que decirlo**: la campaña no tiene una sugerencia para el
  * comentario que PIDE INFORMACIÓN. Quien responda a un «¿cuánto cuesta?» tiene
  * que escribir el público a mano — el sorteo le va a ofrecer un agradecimiento,
- * que para ese caso no sirve. Es deliberado: la cola de esta campaña es de
+ * que para ese caso no sirve. Es deliberado: la cola de la campaña de Betto es de
  * respaldo, no de consultas.
  *
  * ⚠️ **Esto es una SUGERENCIA en una caja editable, no un envío.** Quien
@@ -43,24 +56,73 @@
  * criterio lo pone la persona, no el azar.
  */
 
-/**
- * Las frases que pueden salir prefilleadas cuando el privado SÍ se puede.
- *
- * ⚠️ No es la lista de cuando no se puede: ésa (`PLANTILLA_PUBLICA_SOLA`, en el
- * panel) invita a escribir por privado y además es el texto de repuesto que se
- * publica si el privado falla. Sortearla rompería las dos funciones a la vez.
- *
- * 🔴 **Ninguna entrada de acá puede prometer un mensaje privado.** Hay un test
- * que lo fija; léelo antes de agregar una.
- */
-export const PLANTILLAS_PUBLICAS = [
-  '¡Gracias por el respaldo! 🤝 Seguimos trabajando con la convicción de que sí podemos hacer las cosas bien por nuestra región.',
-  '¡Un abrazo grande! 🙌 Gracias por acompañarnos en este camino. ¡Sí podemos! 💪',
-  '¡Muchas gracias por tus palabras y tu confianza! 💙 Seguimos firmes, trabajando por un solo Áncash.',
-] as const;
+/** De quién es la Página del comentario, tal como lo contesta `/puede-privado`. */
+export interface DeQuienEsLaPagina {
+  /** Desde dónde responde quien pregunta: `ventas` es la Escuela. */
+  modulo?: 'ventas' | 'campana';
+  /** El `paginas_meta.cliente_id` de la Página, o `null` si no está registrada. */
+  cliente?: string | null;
+}
 
 /**
- * Sortea una frase, **evitando la que se usó recién**.
+ * LOS TEXTOS DE CADA CLIENTE, por su `cliente_id` (el slug de `clientes_meta`).
+ *
+ * 🔴 **Un cliente que no está acá no recibe ninguna sugerencia**, y es a
+ * propósito: los textos de un cliente los decide ese cliente, nunca se toman
+ * prestados de otro.
+ */
+export const PLANTILLAS_PUBLICAS_POR_CLIENTE = {
+  /**
+   * La Escuela: invita a escribir por privado, sin dar por hecho ningún mensaje.
+   * ⚠️ Hasta el 11-sep-2026 era además el texto que el server publicaba si el
+   * privado fallaba, y por eso salió en la Página de Américo. Esa sustitución ya
+   * no existe.
+   */
+  escuela: [
+    'Hola — con gusto. Escríbenos por mensaje privado y te mandamos el programa completo con fechas y precios.',
+  ],
+  /**
+   * La campaña de Betto. 🔴 **Ninguna puede prometer un mensaje privado**: hay un
+   * test que lo fija, léelo antes de agregar una.
+   */
+  betto: [
+    '¡Gracias por el respaldo! 🤝 Seguimos trabajando con la convicción de que sí podemos hacer las cosas bien por nuestra región.',
+    '¡Un abrazo grande! 🙌 Gracias por acompañarnos en este camino. ¡Sí podemos! 💪',
+    '¡Muchas gracias por tus palabras y tu confianza! 💙 Seguimos firmes, trabajando por un solo Áncash.',
+  ],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * EL CLIENTE CUYOS TEXTOS SE SUGIEREN, o `null` si no corresponde ninguno.
+ *
+ * · **La Escuela** responde desde `ventas`. Las Páginas de Goberna casi nunca
+ *   están registradas en `paginas_meta` (14 de 15, `server/src/meta/clientes.ts`)
+ *   y la frontera las da por de la Escuela, porque «la frontera es de lo
+ *   declarado». En `ventas`, una Página sin cliente es de la Escuela.
+ * · **Una campaña** responde desde `campana` y sólo sobre las Páginas de su
+ *   cliente. Ahí manda el cliente de la Página, y una Página sin cliente no es de
+ *   nadie.
+ * · **Si falta cualquiera de los dos datos**, `null`: no se sabe, así que no se
+ *   sugiere.
+ */
+export function clienteDeLasPlantillas({ modulo, cliente }: DeQuienEsLaPagina): string | null {
+  if (cliente === undefined) return null;
+  if (modulo === 'ventas') return cliente ?? 'escuela';
+  if (modulo === 'campana') return cliente;
+  return null;
+}
+
+/** Las frases que se pueden sugerir sobre esa Página. Vacía = la caja arranca vacía. */
+export function plantillasPublicasPara(pagina: DeQuienEsLaPagina): readonly string[] {
+  const cliente = clienteDeLasPlantillas(pagina);
+  // `Object.hasOwn` y no un índice con `?? []`: un `cliente_id` que se llamara
+  // `constructor` encontraría una función heredada de `Object`.
+  if (cliente === null || !Object.hasOwn(PLANTILLAS_PUBLICAS_POR_CLIENTE, cliente)) return [];
+  return PLANTILLAS_PUBLICAS_POR_CLIENTE[cliente as keyof typeof PLANTILLAS_PUBLICAS_POR_CLIENTE];
+}
+
+/**
+ * Sortea una frase de `lista`, **evitando la que se usó recién**.
  *
  * 🔴 **Lo de «evitando» no es un lujo, y con tres opciones importa MÁS que con
  * cuatro.** Un sorteo uniforme sobre tres repite la anterior **una de cada
@@ -70,21 +132,26 @@ export const PLANTILLAS_PUBLICAS = [
  * predecible — con tres frases quedan dos candidatas, o sea que sigue habiendo
  * moneda al aire en cada apertura.
  *
+ * @param lista las frases del cliente (`plantillasPublicasPara`). Vacía = `''`.
  * @param anterior la última que se sugirió, o `null` en el primer comentario.
  * @param azar seam para los tests: devuelve [0, 1). En producción es
  *   `Math.random`, y se inyecta porque una regla que no se puede fijar no se
  *   puede poner en rojo a propósito.
  */
 export function elegirPlantillaPublica(
+  lista: readonly string[],
   anterior: string | null = null,
   azar: () => number = Math.random,
 ): string {
-  // Si `anterior` no está en la lista (la editaron a mano, o cambió la lista),
-  // `candidatas` queda entera y el sorteo es el normal. No hace falta un `if`:
-  // el filtro ya se encarga, y un `length` de 0 sólo pasaría con una lista de
-  // un solo elemento — de ahí el respaldo.
-  const candidatas = PLANTILLAS_PUBLICAS.filter((p) => p !== anterior);
-  if (candidatas.length === 0) return PLANTILLAS_PUBLICAS[0];
+  // Sin frases para este cliente, la caja arranca vacía. `''` y no `undefined`:
+  // la caja es controlada, y un `undefined` la volvería no controlada.
+  if (lista.length === 0) return '';
+
+  // Si `anterior` no está en la lista (la editaron a mano, o es de otro cliente),
+  // `candidatas` queda entera y el sorteo es el normal. Un `length` de 0 sólo
+  // pasa con una lista de un solo elemento — de ahí el respaldo.
+  const candidatas = lista.filter((p) => p !== anterior);
+  if (candidatas.length === 0) return lista[0];
 
   // `Math.min` acota el caso de borde de un `azar()` que devuelva 1: sin él el
   // índice se sale del array y la sugerencia llega `undefined` — una caja
@@ -113,10 +180,12 @@ export function elegirPlantillaPublica(
  */
 let ultimaSugerida: string | null = null;
 
-/** Sortea la próxima y la recuerda. Es lo que llama el panel. */
-export function siguientePlantillaPublica(azar: () => number = Math.random): string {
-  ultimaSugerida = elegirPlantillaPublica(ultimaSugerida, azar);
-  return ultimaSugerida;
+/** Sortea la próxima para esa Página y la recuerda. Es lo que llama el panel. */
+export function siguientePlantillaPublica(pagina: DeQuienEsLaPagina, azar: () => number = Math.random): string {
+  const elegida = elegirPlantillaPublica(plantillasPublicasPara(pagina), ultimaSugerida, azar);
+  // Una caja vacía no es una sugerencia: no pisa la última de verdad.
+  if (elegida) ultimaSugerida = elegida;
+  return elegida;
 }
 
 /**

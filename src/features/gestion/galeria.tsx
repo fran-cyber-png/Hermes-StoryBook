@@ -114,7 +114,15 @@ globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
         : [],
     });
   }
-  if (u.includes('/api/gestiones/de/')) return responder({ etapa: registrado ? 'cotizado' : 'interesado' });
+  // `?perdido=1`: la conversación ya está en «Dijo que no», con un motivo SEMBRADO (ADR 0107): en ventas
+  // no hay un solo perdido real. Sirve para fotografiar la corrección; sin el param se declara desde cero.
+  if (u.includes('/api/gestiones/de/')) {
+    return responder(
+      params.has('perdido')
+        ? { etapa: 'perdido', perdida: { motivo: 'precio', detalle: 'Le pareció caro; lo vuelve a ver en marzo' } }
+        : { etapa: registrado ? 'cotizado' : 'interesado' },
+    );
+  }
   if (u.includes('/api/gestiones/etiquetas')) {
     return responder({ etiquetas: registrado ? { [CLAVE]: ['VIP', 'Consultor Político'] } : {} });
   }
@@ -139,6 +147,10 @@ globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
         'Dijo que lo consulta con su socio y responde',
       ],
     });
+  }
+  // #1033 — el panel lee UNA consulta de perfil: el mismo lead nuevo, sin formulario ni padrón.
+  if (u.includes('/api/contactos/perfil')) {
+    return responder({ ficha: { estado: 'nuevo' }, lead: null, padron: null, errores: [] });
   }
   if (u.includes('/api/contactos/ficha')) return responder({ estado: 'nuevo' });
   if (u.includes('/api/contactos/lead')) return responder({ lead: null });

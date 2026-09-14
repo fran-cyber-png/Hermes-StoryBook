@@ -24,6 +24,10 @@ import '../../index.css';
  *                   66.33). El centavo va a la PRIMERA, igual que en Cerberus.
  *   `?descuento=1`  un precio pactado por debajo del catálogo, y dos cursos
  *   `?sinlocal=1`   Cerberus mudo: `locales: null` y se cae a la lista completa
+ *   `?yacompro=1`   la persona ya le compró antes: el Medio arranca en PostVenta
+ *   `?anuncio=0`    no vino de un anuncio y Hermes no sabe que compró: arranca en
+ *                   Orgánico — 🔴 EL CASO DEL REPORTE del 11-sep-2026, el que se
+ *                   corrige eligiendo PostVenta en el select
  */
 
 const CLIENTE = 'Julio Patricio Quijano Villaorduña';
@@ -33,6 +37,8 @@ const q = new URLSearchParams(location.search);
 const CUOTAS = Number(q.get('cuotas') ?? '1');
 const CON_DESCUENTO = q.has('descuento');
 const SIN_LOCAL = q.has('sinlocal');
+const YA_COMPRO = q.has('yacompro');
+const DE_ANUNCIO = q.get('anuncio') !== '0';
 
 /** Los almacenes que Cerberus tiene activos, con su país — por eso el filtro. */
 const LOCALES_PE = [
@@ -68,14 +74,23 @@ window.fetch = (async (entrada: RequestInfo | URL) => {
         { id: '3', nombre: 'Ecuador' },
       ],
       locales: LOCALES_TODOS,
-      medios: [],
+      // Los cinco que publica `server/src/cerberus/venta.ts`, que son los que
+      // Cerberus guarda (medido en producción el 11-sep-2026). Esto decía `[]`,
+      // y con eso el Medio no se podía ver elegible.
+      medios: [
+        { id: 'organico', nombre: 'Orgánico' },
+        { id: 'pagado', nombre: 'Pagado' },
+        { id: 'referente', nombre: 'Referente' },
+        { id: 'remarketing', nombre: 'Remarketing' },
+        { id: 'postventa', nombre: 'PostVenta' },
+      ],
       origenes: [],
     });
   // `locales: null` es «no se pudo preguntar», no «no hay»: la pantalla degrada
   // a la lista completa del formulario en vez de dejar la venta imposible.
   if (url.includes('/api/venta/locales')) return json({ locales: SIN_LOCAL ? null : LOCALES_PE });
   if (url.includes('/api/venta/productos')) return json({ productos: PRODUCTOS });
-  if (url.includes('/api/whatsapp/conversacion/')) return json({ origen: { fuente: 'anuncio' } });
+  if (url.includes('/api/whatsapp/conversacion/')) return json({ origen: DE_ANUNCIO ? { fuente: 'anuncio' } : null });
   if (url.includes('/api/dashboard'))
     return json({ embudo: { interesado: 377, sin_respuesta: 2576, contactado: 217, cotizado: 790, cierre: 13 } });
   return json({}, 404);
@@ -149,6 +164,7 @@ createRoot(document.getElementById('galeria')!).render(
         clave={`conv:whatsapp:${TELEFONO}:51984429504`}
         personaNombre={CLIENTE}
         numeroPropio="51984429504"
+        yaCompro={YA_COMPRO}
         onCerrar={() => {}}
       />
     </QueryClientProvider>

@@ -59,7 +59,14 @@ describe('el conteo del distrito de esta conversación', () => {
   it('lo resuelve contra los conteos, por el distrito que matcheó solo', () => {
     const r = respuesta({
       conteos: { '2': 5 },
-      actual: { distritoId: 2, direccion: 'Jr. Lima 123, Comas', lat: -11.9, lon: -77.05, anotadoPor: 'x' },
+      actual: {
+        distritoId: 2,
+        direccion: 'Jr. Lima 123, Comas',
+        ubicacion: 'Comas, Lima',
+        lat: -11.9,
+        lon: -77.05,
+        anotadoPor: 'x',
+      },
     });
     expect(conteoDelDistritoActual(r)).toBe(5);
   });
@@ -71,7 +78,14 @@ describe('el conteo del distrito de esta conversación', () => {
 
   it('una dirección anotada que no matcheó ningún distrito es null, no un error', () => {
     const r = respuesta({
-      actual: { distritoId: null, direccion: 'Un lugar fuera del catálogo', lat: 0, lon: 0, anotadoPor: 'x' },
+      actual: {
+        distritoId: null,
+        direccion: 'Un lugar fuera del catálogo',
+        ubicacion: null,
+        lat: 0,
+        lon: 0,
+        anotadoPor: 'x',
+      },
     });
     expect(conteoDelDistritoActual(r)).toBeNull();
   });
@@ -79,7 +93,14 @@ describe('el conteo del distrito de esta conversación', () => {
   it('un distrito matcheado sin entrada en conteos cuenta 0, no null', () => {
     const r = respuesta({
       conteos: {},
-      actual: { distritoId: 1, direccion: 'Jr. Ate 1', lat: -12, lon: -76.9, anotadoPor: 'x' },
+      actual: {
+        distritoId: 1,
+        direccion: 'Jr. Ate 1',
+        ubicacion: 'Comas, Lima',
+        lat: -12,
+        lon: -76.9,
+        anotadoPor: 'x',
+      },
     });
     expect(conteoDelDistritoActual(r)).toBe(0);
   });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { useLayoutEffect } from 'react';
-import { montar, tocar, type Montado } from '../pruebas/dom';
+import { montar, reposar, tocar, type Montado } from '../pruebas/dom';
 import { BotonDeTema } from '../components/BotonDeTema';
 import { CLAVE_TEMA, arrancarTema, temaGuardado, useTema, type Tema } from './tema';
 import { useLocalStorage } from './useLocalStorage';
@@ -159,4 +159,103 @@ it('el tema se estampa antes de pintar, no un cuadro después', () => {
     enLayout[1],
     'en la fase de layout el tema todavía era el viejo: `tema.ts` volvió a `useEffect`',
   ).toBe('dark');
+});
+
+/**
+ * 🔴 EL OTRO PARPADEO — el que el `useLayoutEffect` no podía ver.
+ *
+ * El atributo llegaba a tiempo y la app parpadeaba igual, porque ~470 elementos
+ * tienen `transition-colors` para el hover y una transición de color no
+ * distingue de dónde salió el color nuevo: también agarra el cambio de las
+ * variables CSS. Medido en Chromium, 100 ms después de dar vuelta el tema, el
+ * riel iba por `rgb(166, 172, 181)` —un gris de ningún tema— con el borde del
+ * mismo elemento ya en el color nuevo.
+ *
+ * ⚠️ **Lo que se afirma acá es el INSTANTE, no el resultado.** Preguntar por los
+ * colores no sirve: jsdom no corre transiciones, así que el final es idéntico
+ * con y sin el arreglo. Lo observable es que la hoja que las apaga esté puesta
+ * en el MISMO commit en que se estampa el atributo, y que se vaya después.
+ */
+it('el cambio de tema apaga las transiciones mientras dura, y las devuelve', async () => {
+  const apagador = () => document.querySelectorAll('style[data-sin-transicion-de-tema]');
+
+  arrancarTema();
+  montado = montar(<BotonDeTema />);
+  await reposar();
+  expect(apagador(), 'en reposo no puede quedar ninguna hoja apagando transiciones').toHaveLength(
+    0,
+  );
+
+  tocar(montado.contenedor.querySelector('button')!);
+
+  // Todavía sin pintar: el atributo ya está puesto y la hoja tiene que seguir
+  // encima. Si no está, cada elemento se toma sus 200 ms para llegar al color
+  // nuevo y en el medio se ven los dos temas mezclados.
+  expect(puesto()).toBe('dark');
+  expect(
+    apagador(),
+    'el tema cambió sin apagar las transiciones: vuelve el cross-fade de 200 ms',
+  ).toHaveLength(1);
+
+  // Y se va sola: si quedara, el hover de todos los botones dejaría de
+  // transicionar — arreglar el tema rompiendo el resto no es arreglarlo.
+  await reposar();
+  expect(apagador(), 'la hoja quedó pegada y mató las transiciones de hover').toHaveLength(0);
+});
+
+/**
+ * 🔴 LA REGLA VIVE EN DOS IDIOMAS, ASÍ QUE HAY QUE CRUZARLOS.
+ *
+ * El fogonazo al recargar sólo lo evita un script clásico en el `<head>` de
+ * `index.html`: `arrancarTema()` viaja en un módulo diferido, detrás de los
+ * 822 KB del chunk de entrada, y para cuando corre el `<body>` ya se pintó
+ * (700 ms medidos con el fondo equivocado). Pero eso obliga a que la regla
+ * —la clave, qué valores son válidos, y el mapa a `dark`/`light`— esté escrita
+ * DOS veces: una en HTML y otra en TypeScript.
+ *
+ * Este test no compara texto: **ejecuta el script del HTML de verdad** y exige
+ * que termine en el mismo atributo que `arrancarTema()`. Si alguien cambia la
+ * clave, agrega un tema o invierte el mapa de un solo lado, se pone rojo acá en
+ * vez de descubrirse como un fogonazo en la máquina de una vendedora.
+ */
+it('el arranque del HTML dice lo mismo que tema.ts', () => {
+  // ⚠️ `import.meta.glob` y NUNCA `node:fs`: con `fs` el test pasa en vitest y
+  // **falla el typecheck** de `tsconfig.app.json`, que no lleva los tipos de
+  // node (la cicatriz es `etapas.test.ts`, ADR 0049).
+  const HTML = import.meta.glob('../../index.html', {
+    eager: true,
+    query: '?raw',
+    import: 'default',
+  }) as Record<string, string>;
+  const html = Object.values(HTML)[0];
+  expect(html, 'no se pudo leer index.html').toBeTruthy();
+
+  const guion = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  expect(guion, 'no hay script de arranque en index.html: vuelve el fogonazo al recargar').toBeTruthy();
+
+  const correrElHtml = () => {
+    delete document.documentElement.dataset.theme;
+    new Function(guion!)();
+    return puesto();
+  };
+
+  const casos: Array<{ guardado: string | null; que: string }> = [
+    { guardado: JSON.stringify('oscuro'), que: 'la elección oscura' },
+    { guardado: JSON.stringify('claro'), que: 'la elección clara' },
+    { guardado: 'true', que: 'la basura de la clave vieja' },
+    { guardado: 'no-es-json', que: 'un valor ilegible' },
+    { guardado: null, que: 'sin elección' },
+  ];
+
+  for (const { guardado, que } of casos) {
+    if (guardado === null) window.localStorage.removeItem(CLAVE_TEMA);
+    else window.localStorage.setItem(CLAVE_TEMA, guardado);
+    window.dispatchEvent(new StorageEvent('storage', { key: CLAVE_TEMA, newValue: guardado }));
+
+    const porElHtml = correrElHtml();
+    delete document.documentElement.dataset.theme;
+    arrancarTema();
+
+    expect(porElHtml, `con ${que}, el HTML y tema.ts eligieron temas distintos`).toBe(puesto());
+  }
 });

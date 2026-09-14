@@ -1,5 +1,7 @@
 import { ETAPA_ROTULO, type Etapa } from '../../lib/etapas';
 import type { FilaDesglose } from '../../dominio/desglose';
+import { esRecorteDelDia, type RecorteDelDia } from '../../dominio/recortesDelDia';
+import { DIAS_DE_LA_COLA } from './franja';
 
 /**
  * EL TABLERO HONESTO (#90) — la lógica pura del Pipeline, sin DOM.
@@ -51,13 +53,12 @@ export const COLUMNAS_TRABAJO = [
    *
    * ⚠️ **La tira de arriba se fue con esto** (`BandejaDeuda` se borró). Lo que
    * ella mostraba no se pierde: el desglose «sin abrir · volvieron a escribir»
-   * sigue en la `pista` que ven las demás columnas —`resumirBandeja` sigue
-   * calculándolo—, pero esta columna ya no la pinta como texto fijo (por eso
-   * queda vacía acá abajo). El botón «Responder en Mensajes» que vivió en su
-   * cabecera se sacó el 27-ago-2026 (pedido del dueño, para todas las
-   * vendedoras y campaña): en su lugar hay un ícono de información que cuenta
-   * al pasar el mouse (`PISTA_TE_ESPERAN` en `VistaEmbudo.tsx`, porque acá no
-   * hay texto que mostrar).
+   * vive en la cabecera de esta columna —`resumirBandeja` sigue calculándolo—.
+   * El botón «Responder en Mensajes» que vivió en su cabecera se sacó el
+   * 27-ago-2026 (pedido del dueño, para todas las vendedoras y campaña): en su
+   * lugar hay un ícono de información que cuenta la `pista` al pasar el mouse.
+   * Desde el 10-sep-2026 las cinco columnas la cuentan igual, y ninguna la
+   * repite en un renglón fijo.
    *
    * ⚠️ **No se puede arrastrar acá**, por lo mismo que a «Nunca contestaron»
    * (`compuertas.ts`): se deriva de un hecho —escribieron y no les contestamos—
@@ -66,7 +67,7 @@ export const COLUMNAS_TRABAJO = [
   {
     id: 'interesado',
     titulo: ETAPA_ROTULO.interesado.varios,
-    pista: '',
+    pista: 'Escribieron y nadie les contestó todavía. La pelota es tuya.',
     vacio: 'Nadie esperando respuesta. Cuando alguien escriba, aparece acá.',
   },
   /**
@@ -149,11 +150,22 @@ export const COLUMNAS_CAMPANA = [
     pista: 'Escribieron y nadie les contestó todavía. La pelota es tuya.',
     vacio: 'Nadie esperando respuesta. Cuando alguien escriba, aparece acá.',
   },
+  /**
+   * «RESPONDIDOS» Y NO «CONTESTARON» (pedido del dueño, 13-sep-2026). La etapa es
+   * la misma —`contactado`: ya le respondiste y la pelota volvió a ser suya—, pero
+   * en campaña la columna se nombra por lo que hizo quien atiende, que es lo que
+   * la card de «Te esperan» cuenta al lado («N respondidos»).
+   *
+   * ⚠️ **Es un título de COLUMNA, no el rótulo de la etapa**: `ETAPA_ROTULO` no se
+   * toca, porque lo leen ventas, la ficha y la Lista, y `etapas.test.ts` fija que
+   * dos etapas no compartan nombre. Lo que fija `tablero.test.ts` es que este
+   * título tampoco pise el nombre de otra etapa.
+   */
   {
     id: 'contactado',
-    titulo: ETAPA_ROTULO.contactado.varios,
-    pista: 'Te contestaron. Todavía no sabes si te apoyan.',
-    vacio: 'Cuando alguien te conteste, aparece acá.',
+    titulo: 'Respondidos',
+    pista: 'Ya les respondiste y no volvieron a escribir.',
+    vacio: 'Cuando le respondas a alguien, aparece acá hasta que vuelva a escribir.',
   },
   {
     id: 'simpatiza',
@@ -256,13 +268,103 @@ export type EtapaTrabajo =
   | (typeof COLUMNAS_TRABAJO)[number]['id']
   | (typeof COLUMNAS_CAMPANA)[number]['id'];
 
-const ETAPAS_TRABAJO: readonly string[] = COLUMNAS_TRABAJO.map((c) => c.id);
-
 /** Lo mínimo que el tablero necesita saber de una tarjeta. */
 export interface TarjetaTablero {
   clave: string;
   /** La etapa dicha por el server (ADR 0013). Sin ella no se inventa nada. */
   etapa_efectiva?: string | null;
+  /** EL SEMÁFORO (#826, S.2). Ausente = gris (server sin S.1, o todavía sin señal). */
+  luz?: 'gris' | 'verde' | 'ambar' | 'rojo' | null;
+  /** De quién es la pelota — «espera» es `!respondida` (`tarjeta.ts#turnoDeTarjeta`). */
+  respondida?: boolean;
+  /** Para desempatar dentro de los verdes que esperan: el más antiguo primero. */
+  referencia?: string;
+}
+
+/**
+ * EL ORDEN DENTRO DE LA COLUMNA, POR LUZ (#826, S.2) — verde que espera
+ * primero (el más antiguo primero, es la misma pregunta que responde
+ * «Atender siguiente», S.3), después ámbar, después gris, rojo siempre al
+ * fondo. Un `luz` ausente cuenta como gris — nunca se asume verde ni rojo de
+ * un dato que no vino.
+ *
+ * `Array.prototype.sort` es estable (spec desde ES2019, y V8 lo cumple): dos
+ * tarjetas con el mismo rango de luz —y que no sean verdes esperando, donde sí
+ * desempata la antigüedad— conservan el orden cronológico que ya trae la cola.
+ * No hace falta un segundo criterio para todo lo demás.
+ */
+const RANGO_LUZ: Record<'verde' | 'ambar' | 'gris' | 'rojo', number> = {
+  verde: 0,
+  ambar: 1,
+  gris: 2,
+  rojo: 3,
+};
+
+/**
+ * El lugar de una luz en el orden del semáforo. Sin `luz` cuenta como gris. Lo
+ * usa también la Lista para ordenar por luz: con dos órdenes, «Luz» en la Lista
+ * pondría primero lo que el tablero pone al fondo.
+ */
+export function rangoDeLuz(luz: TarjetaTablero['luz']): number {
+  return RANGO_LUZ[luzDeTarjeta({ luz })];
+}
+
+/**
+ * LA LUZ DE UNA TARJETA, con la regla de siempre dicha UNA vez: sin `luz` es
+ * gris, nunca verde ni rojo — un dato que no vino no se asume. La leen el orden
+ * de la columna, «Atender siguiente», lo que se dibuja con una luz puesta y la
+ * Lista; estaba escrita a mano en cada uno.
+ */
+export function luzDeTarjeta(t: Pick<TarjetaTablero, 'luz'>): 'verde' | 'ambar' | 'gris' | 'rojo' {
+  return t.luz ?? 'gris';
+}
+
+export function ordenarPorSemaforo<T extends TarjetaTablero>(items: readonly T[]): T[] {
+  return [...items].sort((a, b) => {
+    const ra = rangoDeLuz(a.luz);
+    const rb = rangoDeLuz(b.luz);
+    if (ra !== rb) return ra - rb;
+    if (ra !== RANGO_LUZ.verde) return 0; // estable: no toca el resto
+    const esperaA = a.respondida === false;
+    const esperaB = b.respondida === false;
+    if (esperaA !== esperaB) return esperaA ? -1 : 1;
+    if (!esperaA) return 0;
+    const ta = a.referencia ? new Date(a.referencia).getTime() : Number.POSITIVE_INFINITY;
+    const tb = b.referencia ? new Date(b.referencia).getTime() : Number.POSITIVE_INFINITY;
+    return ta - tb;
+  });
+}
+
+/**
+ * «ATENDER SIGUIENTE» (#807, S.3) — la precedencia, dicha una sola vez: verde
+ * que espera (el más antiguo primero) → ámbar que espera → gris que espera →
+ * NUNCA rojo. Es la misma pregunta que decide el orden dentro de la columna
+ * (`ordenarPorSemaforo`), pero acotada a quien te está esperando de verdad
+ * (`respondida === false`) y con el rojo excluido del todo — a un rojo se le
+ * dejó de invertir tiempo, así que el botón nunca lo abre aunque sea lo único
+ * que quede.
+ *
+ * `null` = no hay a quién atender (nadie espera en verde, ámbar ni gris).
+ *
+ * ⚠️ La dueña vigente (ADR 0083) y la frontera por cliente NO se deciden acá:
+ * este función opera sobre lo que el LLAMADOR ya cargó, y ese universo ya
+ * viene acotado por el mismo reparto/frontera que filtra cualquier otra
+ * lista del Pipeline (`cola/asignadaSql.ts`, `cola/lineas.ts`). Pasarle una
+ * lista sin acotar sería la misma clase de fuga que ya se cerró ahí — no una
+ * nueva regla que escribir acá.
+ */
+export function primeraParaAtender<T extends TarjetaTablero>(items: readonly T[]): T | null {
+  const PRIORIDAD_ATENDER: readonly ('verde' | 'ambar' | 'gris')[] = ['verde', 'ambar', 'gris'];
+  for (const luz of PRIORIDAD_ATENDER) {
+    const esperando = items.filter((i) => luzDeTarjeta(i) === luz && i.respondida === false);
+    if (!esperando.length) continue;
+    return [...esperando].sort((a, b) => {
+      const ta = a.referencia ? new Date(a.referencia).getTime() : Number.POSITIVE_INFINITY;
+      const tb = b.referencia ? new Date(b.referencia).getTime() : Number.POSITIVE_INFINITY;
+      return ta - tb;
+    })[0];
+  }
+  return null;
 }
 
 /**
@@ -289,25 +391,59 @@ export function etapaDeTarjeta(
 export function repartirColumnas<C extends TarjetaTablero>(
   cargadas: ReadonlyArray<readonly [EtapaTrabajo, readonly C[]]>,
   overrides: Record<string, Etapa>,
+  /**
+   * `ordenarPorLuz: false` = cada columna queda en el orden del server, que es el
+   * tiempo. Es el de CAMPAÑA (pedido del dueño, 13-sep-2026: «en verde no debe
+   * estar encima de los naranjas; se respeta el tiempo, el color no reordena»).
+   * Ventas sigue leyendo cada columna por semáforo. «Atender siguiente» no depende
+   * de esto: su precedencia vive en `primeraParaAtender`.
+   */
+  { ordenarPorLuz = true }: { ordenarPorLuz?: boolean } = {},
 ): Map<EtapaTrabajo, C[]> {
-  const mapa = new Map<EtapaTrabajo, C[]>(COLUMNAS_TRABAJO.map((c) => [c.id, []]));
-  const movidas = new Map<EtapaTrabajo, C[]>(COLUMNAS_TRABAJO.map((c) => [c.id, []]));
+  /**
+   * 🔴 **LAS COLUMNAS SON LAS QUE ESTE TABLERO PIDIÓ, NO LAS DE VENTAS.**
+   *
+   * Hasta el 5-sep-2026 esto salía de `COLUMNAS_TRABAJO`, o sea de la lista de
+   * VENTAS, en los tres lugares: los dos mapas y el filtro de destino. En el
+   * tablero de campaña eso significa que **toda tarjeta cuya etapa efectiva sea
+   * `simpatiza`, `comprometido` o `voluntario` se cae al piso** — `propia` da
+   * `null`, el `continue` la descarta, y como el mapa tampoco tiene esas claves,
+   * la columna se dibuja vacía **con su total en la cabecera**.
+   *
+   * ⚠️ **Nunca se vio porque esas tres columnas están en cero desde que existen**
+   * (ADR 0063: se declaran, y nadie declaró nunca — 18 gestiones de campaña en
+   * toda la historia, cero en esos peldaños). El defecto estaba esperando al
+   * primer dato: apareció en la galería el mismo día que se sembró «Simpatizan
+   * 181», que es lo que la escucha va a declarar (ADR 0095).
+   *
+   * `cargadas` trae UNA entrada por columna dibujada (`VistaEmbudo` la arma con
+   * `columnasDe`), así que la lista correcta ya estaba acá adentro: no hace falta
+   * un parámetro nuevo, y así no puede desalinearse de lo que se cargó.
+   */
+  const delTablero = new Set<string>(cargadas.map(([etapa]) => etapa));
+  const mapa = new Map<EtapaTrabajo, C[]>(cargadas.map(([etapa]) => [etapa, []]));
+  const movidas = new Map<EtapaTrabajo, C[]>(cargadas.map(([etapa]) => [etapa, []]));
   const vistas = new Set<string>();
 
   for (const [columna, items] of cargadas) {
     for (const c of items) {
       if (vistas.has(c.clave)) continue;
       vistas.add(c.clave);
-      const propia = ETAPAS_TRABAJO.includes(c.etapa_efectiva ?? '')
+      const propia = delTablero.has(c.etapa_efectiva ?? '')
         ? (c.etapa_efectiva as EtapaTrabajo)
         : c.etapa_efectiva == null
           ? columna // server viejo sin la columna: se respeta la etapa pedida
-          : null; // interesado u otra: fuera del tablero
+          : null; // una etapa que este tablero no dibuja: fuera
       const destino = overrides[c.clave] ?? propia;
-      if (destino == null || !ETAPAS_TRABAJO.includes(destino)) continue;
+      if (destino == null || !delTablero.has(destino)) continue;
       (destino === propia ? mapa : movidas).get(destino as EtapaTrabajo)!.push(c);
     }
   }
+
+  // El orden por luz corre ANTES de subir los movimientos optimistas: lo que
+  // la vendedora acaba de arrastrar sigue yendo arriba de todo (es lo que
+  // «unshift» promete), y el resto de la columna se lee por semáforo.
+  if (ordenarPorLuz) for (const [columna, items] of mapa) mapa.set(columna, ordenarPorSemaforo(items));
 
   for (const [columna, items] of movidas) {
     if (items.length) mapa.get(columna)!.unshift(...items);
@@ -375,8 +511,28 @@ export function resumirColumna(
   conteos?: Record<string, number>,
 ): ResumenColumna {
   if (!desglose)
-    return { total: conteos?.[etapa] ?? 0, conPrecio: 0, enVentana: 0, paraSeguir: 0, seCallo: 0 };
-  const r = { total: 0, conPrecio: 0, enVentana: 0, paraSeguir: 0, seCallo: 0 };
+    return {
+      total: conteos?.[etapa] ?? 0,
+      conPrecio: 0,
+      enVentana: 0,
+      paraSeguir: 0,
+      seCallo: 0,
+      verdes: 0,
+      ambar: 0,
+      grises: 0,
+      rojos: 0,
+    };
+  const r = {
+    total: 0,
+    conPrecio: 0,
+    enVentana: 0,
+    paraSeguir: 0,
+    seCallo: 0,
+    verdes: 0,
+    ambar: 0,
+    grises: 0,
+    rojos: 0,
+  };
   for (const fila of desglose) {
     if (fila.etapa !== etapa) continue;
     r.total += fila.n;
@@ -386,8 +542,62 @@ export function resumirColumna(
     if (fila.ventana) r.enVentana += fila.n;
     if (fila.paraSeguir) r.paraSeguir += fila.n;
     if (fila.seCallo) r.seCallo += fila.n;
+    // EL SEMÁFORO (#826, S.2). `luz` ausente (server sin S.1) no suma a
+    // ninguno de los cuatro: los recortes se esconden solos por la regla del
+    // cero, en vez de contar de más un «grises» que en realidad es «no sé».
+    if (fila.luz === 'verde') r.verdes += fila.n;
+    else if (fila.luz === 'ambar') r.ambar += fila.n;
+    else if (fila.luz === 'gris') r.grises += fila.n;
+    else if (fila.luz === 'rojo') r.rojos += fila.n;
   }
   return r;
+}
+
+/**
+ * CUÁNTAS NACIERON HOY entre estas etapas — la cifra chica «N hoy» de cada
+ * columna y el «N nuevas hoy» de la fila de arriba, con la MISMA cuenta: si la
+ * de arriba no cerrara con la suma de las columnas, sería un bug.
+ *
+ * `null` = el server no manda `nacioHoy`. Ausente NO es cero (misma regla que
+ * `ventana`, `paraSeguir` y `luz`): un «0 hoy» se leería como un día sin leads.
+ */
+export function contarHoy(
+  desglose: readonly FilaDesglose[] | undefined,
+  etapas: readonly string[],
+  /**
+   * El recorte que tiene puesta la columna. El «N hoy» describe la lista que se
+   * VE: con «Verdes» puesto, contar a todas las de hoy decía «98 hoy» encima de
+   * «73 de 1.109». La luz y las marcas de los recortes viajan en la misma fila
+   * del desglose, así que el cruce sale de la misma foto.
+   */
+  recorte: Recorte = 'todas',
+): number | null {
+  // Los recortes del día los aplica el server y el desglose no trae su marca:
+  // cualquier número acá sería el de otra lista, así que calla.
+  if (esRecorteDelDia(recorte)) return null;
+  if (!desglose?.some((f) => f.nacioHoy !== undefined)) return null;
+  return desglose.reduce(
+    (n, f) => (f.nacioHoy && etapas.includes(f.etapa) && filaPasaRecorte(f, recorte) ? n + f.n : n),
+    0,
+  );
+}
+
+/** ¿Esta fila del desglose entra en el recorte? Ausente cuenta como «no», igual que en `resumirColumna`. */
+function filaPasaRecorte(f: FilaDesglose, recorte: Exclude<Recorte, RecorteDelDia>): boolean {
+  switch (recorte) {
+    case 'todas':
+      return true;
+    case 'precio':
+      return f.precio;
+    case 'ventana':
+      return f.ventana === true;
+    case 'seguir':
+      return f.paraSeguir === true;
+    case 'seCallo':
+      return f.seCallo === true;
+    default:
+      return f.luz === recorte;
+  }
 }
 
 export interface ResumenColumna {
@@ -396,6 +606,11 @@ export interface ResumenColumna {
   enVentana: number;
   paraSeguir: number;
   seCallo: number;
+  /** EL SEMÁFORO (#826, S.2): cuántas de esta columna son de cada luz. */
+  verdes: number;
+  ambar: number;
+  grises: number;
+  rojos: number;
 }
 
 /**
@@ -433,7 +648,89 @@ export interface ResumenColumna {
  * que se ve**. Y los dos tienen la misma excepción: el chip ACTIVO se ofrece
  * siempre, o la vendedora se queda sin el botón que lo apaga.
  */
-export type Recorte = 'todas' | 'precio' | 'ventana' | 'seguir' | 'seCallo';
+export type Recorte =
+  | 'todas'
+  | 'precio'
+  | 'ventana'
+  | 'seguir'
+  | 'seCallo'
+  | 'verde'
+  | 'ambar'
+  | 'gris'
+  | 'rojo'
+  | RecorteDelDia;
+
+/** Las cuatro luces, como `Recorte`. */
+export type RecorteSemaforo = 'verde' | 'ambar' | 'gris' | 'rojo';
+
+/**
+ * LOS RECORTES DEL DÍA (`dominio/recortesDelDia.ts`, #946) son `Recorte`, pero los
+ * pone la mesa entera, nunca un chip de columna: hoy llegan por el puente del
+ * Dashboard (`puentePipeline.ts`).
+ *
+ * ⚠️ El desglose no trae su marca, así que no hay número que ofrecer por
+ * adelantado: por eso no son chips, y por eso `contarHoy` calla con uno puesto.
+ */
+
+/**
+ * Cómo se nombra cada recorte del día: en el chip de la fila de arriba y en el
+ * aviso del puente cuando el server no lo sabe hacer. Con las palabras del
+ * Dashboard, que es de donde llega: «escribieron por primera vez hoy» no es
+ * «nuevas hoy» (#37).
+ */
+/**
+ * Qué cuenta «hoy», dicho una vez: lo leen la cabecera de «Te esperan» de los dos
+ * tableros y el renglón de las demás columnas.
+ */
+export const TITULO_NUEVAS_HOY = 'Nuevas hoy: la conversación empezó hoy, con un mensaje suyo o nuestro';
+
+export const NOMBRE_DEL_RECORTE_DEL_DIA: Record<RecorteDelDia, string> = {
+  escribioHoy: 'escribieron por primera vez hoy',
+  sinRespuesta24h: 'sin respuesta hace más de 24 h',
+};
+
+/**
+ * ¿ES UN RECORTE DEL SEMÁFORO? — el server (S.1) no filtra la PÁGINA por luz
+ * todavía, solo la CUENTA (`cola/semaforoSql.ts` en el desglose): estos cuatro
+ * se recortan del lado del cliente, sobre lo que ya se cargó, y no viajan como
+ * `recorte` en el pedido al server (`RecorteDeColumna` en `dominio/conversaciones.ts`
+ * no los conoce). `VistaEmbudo.tsx` los usa para decidir las dos cosas.
+ */
+export function esRecorteSemaforo(r: Recorte): r is RecorteSemaforo {
+  return r === 'verde' || r === 'ambar' || r === 'gris' || r === 'rojo';
+}
+
+/** La cuenta de `ResumenColumna` que le corresponde a cada luz. */
+export function conteoDeRecorteSemaforo(resumen: ResumenColumna, r: RecorteSemaforo): number {
+  if (r === 'verde') return resumen.verdes;
+  if (r === 'ambar') return resumen.ambar;
+  if (r === 'gris') return resumen.grises;
+  return resumen.rojos;
+}
+
+/**
+ * LO QUE SE DIBUJA DE LO CARGADO en una columna — la MISMA regla para el
+ * Tablero y la Lista: si cada vista recortara por su cuenta, cambiar de vista
+ * con «Verdes» puesto podría cambiar la respuesta.
+ *
+ * El server no filtra la página por luz (sólo la cuenta), así que la luz se
+ * recorta acá, sobre lo que ya llegó; los recortes del server ya vinieron
+ * filtrados y pasan tal cual. Una tarjeta sin `luz` cuenta como gris, nunca
+ * como verde — un dato que no vino no se asume.
+ */
+export function tarjetasVisibles<C extends TarjetaTablero>(cargadas: readonly C[], recorte: Recorte): C[] {
+  return esRecorteSemaforo(recorte) ? cargadas.filter((c) => luzDeTarjeta(c) === recorte) : [...cargadas];
+}
+
+/**
+ * EL TOTAL DE UNA COLUMNA RECORTADA, tomado de donde es verdadero. Con una luz
+ * sale del desglose: el server pidió la columna entera y no recortó nada, así
+ * que su total sería el de la columna completa. Con un recorte del server, es
+ * el que devolvió la consulta de esa columna.
+ */
+export function totalServidoDe(resumen: ResumenColumna, recorte: Recorte, totalDeColumna: number): number {
+  return esRecorteSemaforo(recorte) ? conteoDeRecorteSemaforo(resumen, recorte) : totalDeColumna;
+}
 
 /**
  * Las columnas donde recortar tiene sentido. Ver el porqué de Cierre y Perdidos
@@ -528,13 +825,104 @@ export function recortesDeColumna(
       n: resumen.conPrecio,
       ayuda: 'Ya les mandaste el precio o la forma de pagar: están cotizadas de hecho',
     },
+    /*
+     * EL SEMÁFORO YA NO ESTÁ ACÁ (10-sep-2026). Sus cuatro chips se mudaron a
+     * la leyenda de arriba del tablero (`resumen.ts#LEYENDA_SEMAFORO`), que
+     * recorta las cinco columnas a la vez. Medido en producción: ámbar era el
+     * 93 % de «Saben el precio» y el 89 % de «Contestaron» — cuatro chips por
+     * columna no recortaban nada. El recorte por luz sigue existiendo
+     * (`Recorte`, `esRecorteSemaforo`): lo que cambió es quién lo ofrece.
+     */
   ];
-  return todos.filter((r) => {
-    if (r.id === 'todas' || r.id === activo) return true;
-    const n = r.n ?? 0;
-    // Ni vacío ni completo: las dos puntas son un botón que no cambia nada.
-    return n > 0 && n < resumen.total;
-  });
+  return todos.filter((r) => r.id === 'todas' || seOfreceRecorte(r.n ?? 0, resumen.total, r.id === activo));
+}
+
+/**
+ * LA REGLA DEL CERO, ESCRITA UNA SOLA VEZ. La usan los chips de cada columna
+ * (arriba) y la cabecera del tablero (`resumen.ts`: la leyenda del semáforo y
+ * las celdas «En ventana» · «Para seguir»). Con dos escrituras, la cabecera
+ * ofrecería un botón que la columna esconde (#37).
+ *
+ * Ni vacío ni completo: las dos puntas son un botón que no cambia lo que se ve.
+ * El ACTIVO se ofrece siempre, o la vendedora se queda sin el botón que lo apaga.
+ */
+export function seOfreceRecorte(n: number, total: number, activo: boolean): boolean {
+  return activo || (n > 0 && n < total);
+}
+
+/**
+ * QUÉ CONTROL VACIÓ LA COLUMNA (`mesa.ts#origenDelVacio`), que decide qué salida
+ * se nombra:
+ *   · `columna` — su propio chip: la salida es su «Todas».
+ *   · `franja` — la franja de «Nunca contestaron»: «Todas las fechas».
+ *   · `mesa` — el recorte de ARRIBA (una luz o un recorte del día). Con él puesto
+ *     la columna no dibuja su «Todas», así que la salida está arriba.
+ *   · `rango` — Hoy · 7 d: tampoco hay chips, y la salida es «30 d».
+ */
+export type OrigenDelVacio = 'columna' | 'franja' | 'mesa' | 'rango';
+
+/**
+ * QUÉ SE LEE EN UNA COLUMNA VACÍA. Con un recorte puesto, el vacío de la etapa
+ * («Cuando le respondas a alguien, aparece acá») es FALSO: hay conversaciones, lo
+ * que no hay es ninguna que pase el recorte. Decir el vacío equivocado hace creer
+ * que la columna está vacía de verdad, y el chip «Todas» —que es la salida— queda
+ * a la vista sin que nadie entienda para qué.
+ */
+export function vacioDeColumna(
+  recorte: Recorte,
+  vacioDeEtapa: string,
+  origen: OrigenDelVacio = 'columna',
+  /** De qué columna es el vacío: «Nunca contestaron» no puede tener a nadie en un recorte del día. */
+  etapa?: string,
+): string {
+  /**
+   * La franja gana al vacío de la etapa por lo mismo que el recorte: con ella
+   * puesta, «Acá caen las que abriste tú y nadie respondió» es falso — hay 4.491,
+   * lo que no hay es ninguna en esa franja. Y va ANTES del switch porque franja y
+   * recorte son excluyentes (`mesa.ts`): si hay franja, el recorte es «todas». El
+   * rango, lo mismo, para las cinco columnas.
+   */
+  if (origen === 'franja') return 'Nadie en esa franja. Toca «Todas las fechas» para ver la columna entera.';
+  if (origen === 'rango') {
+    return `Nadie con mensajes en ese rango. Vuelve a «${DIAS_DE_LA_COLA} d» para ver la columna entera.`;
+  }
+  const salida =
+    origen === 'mesa'
+      ? 'Apaga el filtro de arriba para ver la columna entera.'
+      : 'Toca «Todas» para ver la columna entera.';
+  switch (recorte) {
+    case 'precio':
+      return `Ninguna con el precio ya enviado. ${salida}`;
+    case 'ventana':
+      // Sin «gratis»: en una línea whatsmeow no hay plantilla que pagar (ver
+      // `AYUDA_DE_RECORTE.ventana`), y este vacío ahora también lo lee campaña.
+      return `Ninguna tiene la conversación abierta ahora mismo. ${salida}`;
+    case 'seguir':
+      return `Nada que seguir hoy: ninguna lleva entre 3 y 14 días esperando respuesta. ${salida}`;
+    case 'seCallo':
+      return `Ninguna se quedó callada tras el precio. ${salida}`;
+    case 'verde':
+      return `Ninguna quiere comprar todavía. ${salida}`;
+    case 'ambar':
+      return `Ninguna en duda. ${salida}`;
+    case 'gris':
+      return `Ninguna sin señal. ${salida}`;
+    case 'rojo':
+      return `Ninguna dijo que no. ${salida}`;
+    // «Nunca contestaron» es «le escribimos y nunca escribió», y los dos recortes
+    // del día piden a alguien que SÍ escribió: ahí el 0 es por definición, y dicho
+    // como un dato del día se leía falso (revisión cruzada de #956).
+    case 'escribioHoy':
+      return etapa === 'sin_respuesta'
+        ? `Acá nadie escribió nunca, así que ninguna escribió por primera vez hoy. ${salida}`
+        : `Nadie de esta columna escribió por primera vez hoy. ${salida}`;
+    case 'sinRespuesta24h':
+      return etapa === 'sin_respuesta'
+        ? `Acá nadie escribió nunca: «sin respuesta hace más de 24 h» es de quien sí escribió. ${salida}`
+        : `Ninguna lleva más de 24 h sin respuesta. ${salida}`;
+    default:
+      return vacioDeEtapa;
+  }
 }
 
 /**
@@ -549,35 +937,6 @@ export function recortesDeColumna(
  * universo entero de la etapa: con el recorte puesto son dos cifras distintas y
  * hay que tomar cada una de donde es verdadera.
  */
-/**
- * QUÉ SE LEE EN UNA COLUMNA VACÍA. Con un recorte puesto, el vacío de la etapa
- * («Cuando le respondas a alguien, aparece acá») es FALSO: hay conversaciones, lo
- * que no hay es ninguna que pase el recorte. Decir el vacío equivocado hace creer
- * que la columna está vacía de verdad, y el chip «Todas» —que es la salida— queda
- * a la vista sin que nadie entienda para qué.
- */
-export function vacioDeColumna(recorte: Recorte, vacioDeEtapa: string, conFranja = false): string {
-  /**
-   * La franja gana al vacío de la etapa por lo mismo que el recorte: con ella
-   * puesta, «Acá caen las que abriste tú y nadie respondió» es falso — hay 4.491,
-   * lo que no hay es ninguna en esa franja. Y va ANTES del switch porque franja y
-   * recorte son excluyentes (`VistaEmbudo`): si hay franja, el recorte es «todas».
-   */
-  if (conFranja) return 'Nadie en esa franja. Toca «Todas las fechas» para ver la columna entera.';
-  switch (recorte) {
-    case 'precio':
-      return 'Ninguna con el precio ya enviado. Toca «Todas» para ver la columna entera.';
-    case 'ventana':
-      return 'A ninguna se le puede escribir gratis ahora mismo. Toca «Todas» para ver la columna entera.';
-    case 'seguir':
-      return 'Nada que seguir hoy: ninguna lleva entre 3 y 14 días esperando respuesta. Toca «Todas» para ver la columna entera.';
-    case 'seCallo':
-      return 'Ninguna se quedó callada tras el precio. Toca «Todas» para ver la columna entera.';
-    default:
-      return vacioDeEtapa;
-  }
-}
-
 export function cifrasDeColumna(
   resumen: ResumenColumna,
   recorte: Recorte,

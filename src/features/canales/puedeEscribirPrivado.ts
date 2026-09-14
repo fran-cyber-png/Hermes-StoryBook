@@ -17,6 +17,28 @@ export interface Capacidades {
   puedePrivado: boolean;
   motivo: 'ventana-cerrada' | 'privacidad' | 'instagram' | 'error' | null;
   dias?: number;
+  /**
+   * DE QUIÉN ES LA PÁGINA, para elegir qué textos se sugieren
+   * (`dominio/plantillaPublica.ts`). `modulo` es desde dónde responde quien
+   * pregunta y `cliente`, el `paginas_meta.cliente_id` de la Página (`null` =
+   * sin registrar).
+   *
+   * ⚠️ **Ausentes significan «no se sabe»**, no «la Escuela»: un pedido que
+   * falló o un server viejo dejan la caja pública vacía.
+   */
+  modulo?: 'ventas' | 'campana';
+  cliente?: string | null;
+}
+
+/**
+ * Lo que llega de la red se lee con desconfianza: un valor que no es uno de los
+ * dos módulos, o un cliente que no es texto ni `null`, cuenta como que no vino.
+ */
+function dePagina(d: { modulo?: unknown; cliente?: unknown }): Pick<Capacidades, 'modulo' | 'cliente'> {
+  return {
+    modulo: d.modulo === 'ventas' || d.modulo === 'campana' ? d.modulo : undefined,
+    cliente: typeof d.cliente === 'string' || d.cliente === null ? d.cliente : undefined,
+  };
 }
 
 
@@ -40,11 +62,11 @@ export function useCapacidades(interactionId: number | undefined): Capacidades |
     setCap(null);
     let vigente = true;
     // Por `api()`: la ruta está detrás del perímetro y necesita el Bearer.
-    api<{ puede: boolean; motivo: Capacidades['motivo']; dias?: number }>(
+    api<{ puede: boolean; motivo: Capacidades['motivo']; dias?: number; modulo?: unknown; cliente?: unknown }>(
       `/api/persona/${interactionId}/puede-privado`,
     )
       .then((d) => {
-        if (vigente) setCap({ puedePrivado: d.puede, motivo: d.motivo, dias: d.dias });
+        if (vigente) setCap({ puedePrivado: d.puede, motivo: d.motivo, dias: d.dias, ...dePagina(d) });
       })
       .catch(() => {
         if (vigente) setCap({ puedePrivado: false, motivo: 'error' });

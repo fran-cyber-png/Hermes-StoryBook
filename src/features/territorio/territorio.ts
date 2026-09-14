@@ -32,6 +32,8 @@ export interface RespuestaTerritorio {
   actual?: {
     distritoId: number | null;
     direccion: string | null;
+    /** La geografía real de esa dirección — ver `contactosRegistrados.ts`. */
+    ubicacion: string | null;
     lat: number | null;
     lon: number | null;
     anotadoPor: string | null;
@@ -65,11 +67,11 @@ export function useTerritorio(clave: string, activo: boolean) {
 }
 
 /**
- * EL CATÁLOGO Y MI LÍNEA, SIN ATARLO A NINGUNA CONVERSACIÓN — para el filtro
- * "Ubicación" de Contactos de campaña y para "Nuevo contacto", que necesita el
- * número de línea ANTES de que exista una conversación con la que pedir
- * `useTerritorio`. Mismo endpoint, sin `?clave=`; misma `queryKey` para las
- * dos formas de leerlo, así que comparten el caché y no duplican el pedido.
+ * EL CATÁLOGO Y MI LÍNEA, SIN ATARLO A NINGUNA CONVERSACIÓN — para "Nuevo
+ * contacto", que necesita el número de línea ANTES de que exista una
+ * conversación con la que pedir `useTerritorio`. Mismo endpoint, sin
+ * `?clave=`; misma `queryKey` que `useTerritorio` sin conversación, así que
+ * comparten el caché y no duplican el pedido.
  */
 function useCatalogoDeCampana(activo: boolean) {
   return useQuery({
@@ -84,12 +86,6 @@ export function useMiLineaDeCampana(activo: boolean) {
   return useCatalogoDeCampana(activo).data?.linea;
 }
 
-/** Los distritos de la línea de campaña de quien mira — para el filtro "Ubicación". */
-export function useDistritosDeCampana(activo: boolean) {
-  const { data } = useCatalogoDeCampana(activo);
-  return data?.distritos ?? [];
-}
-
 /**
  * Anotar o sacar dónde vota.
  *
@@ -101,23 +97,24 @@ export function useDistritosDeCampana(activo: boolean) {
  *
  * Desde ADR 0088, `anotar` recibe la dirección elegida en el mapa
  * (`direccion`/`lat`/`lon`) — el servidor clasifica sola el distrito de
- * catálogo, si hay uno parecido. `{ distritoId }` sigue vivo (unión en el
- * servidor) porque `FichaRapida` — el alta de "Nuevo contacto", que elige
- * ANTES de que exista una conversación con la que abrir un mapa — todavía lo
- * manda por su propio `<select>`.
+ * catálogo, si hay uno parecido. Desde el 1-sep-2026 es la ÚNICA forma: el
+ * `<select>` de distritos de `FichaRapida` (el alta de "Nuevo contacto") se
+ * reemplazó por el mismo mapa que ya usaba `BloqueTerritorio`, así que el
+ * cliente nunca más manda `{ distritoId }` — el servidor lo puede seguir
+ * aceptando (ADR 0088), pero ya no hace falta declararlo acá.
  */
 export function useAnotarTerritorio(clave: string) {
   const qc = useQueryClient();
   const invalidar = () => {
     void qc.invalidateQueries({ queryKey: ['territorio', clave] });
     // La lista de Contactos de campaña muestra el distrito en la columna
-    // "Dónde vota" (`contactos/registrados.ts`, un LEFT JOIN contra esta misma
+    // "Locación" (`contactos/registrados.ts`, un LEFT JOIN contra esta misma
     // tabla) — sin esto, anotar desde `FichaRapida` guardaba bien pero la
     // fila seguía mostrando el valor viejo hasta el próximo refresh manual.
     void qc.invalidateQueries({ queryKey: ['contactos-registrados'] });
   };
   const anotar = useMutation({
-    mutationFn: (v: { direccion: string; lat: number; lon: number } | { distritoId: number }) =>
+    mutationFn: (v: { direccion: string; lat: number; lon: number }) =>
       api<{ ok: true }>(`/api/territorio/${encodeURIComponent(clave)}`, {
         method: 'PUT',
         body: JSON.stringify(v),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ChevronDown, Loader2, UserRound, UserRoundPlus } from 'lucide-react';
 import { usePopover } from '../../lib/teclado/usePopover';
 import { ladoDelMenu } from '../canales/accionesFila';
@@ -6,6 +6,7 @@ import { ErrorApi } from '../../lib/datos/cliente';
 import { mismaVendedora, rotuloDePersona } from '../../dominio/dueno';
 import { useRueda, usePasarConversacion } from './reparto';
 import type { Conversacion } from '../../dominio/conversaciones';
+import { useEfectoAlCambiar } from '../../lib/useEfectoAlCambiar';
 
 /**
  * «PÁSASELA A OTRA PERSONA» — de quién es esta conversación, y cómo cambiarlo.
@@ -85,12 +86,22 @@ export function PasarConversacion({
   // La barra NO se desmonta al cambiar de conversación: un panel abierto
   // sobreviviría apuntando a la de antes, y sus acciones son escrituras sobre
   // quién atiende a quién. Mismo cuidado que `MenuFila`.
-  useEffect(() => {
+  //
+  // 🔴 **`reset()` SÓLO SI HAY ALGO QUE RESETEAR, y no es micro-optimización.**
+  // Este control se monta UNA VEZ POR FILA del radar (hasta 80) y de la cola, y
+  // una mutación recién montada ya está en `idle`: el `reset()` incondicional no
+  // limpiaba nada y aun así notificaba a su observador, o sea un commit de React
+  // por fila. Medido con el Profiler sobre el Dashboard con 80 filas:
+  // **82 commits en el montaje contra 2** con esta guarda.
+  //
+  // Lo que el reset SÍ tiene que hacer —borrar el error o el éxito de la fila
+  // anterior cuando la barra cambia de conversación— sigue igual: ahí el estado
+  // no es `idle` y la guarda deja pasar.
+  useEfectoAlCambiar([conversacion.clave], () => {
     setAbierto(false);
-    pasar.reset();
+    if (pasar.status !== 'idle') pasar.reset();
     // `pasar` es estable entre renders (react-query); depender de la clave alcanza.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversacion.clave]);
+  });
 
   if (!numeroPropio || !hayReparto) return null;
 
@@ -125,7 +136,33 @@ export function PasarConversacion({
           : `Asignada a ${rotuloDePersona(asignadaA, nombres)} (${asignadaA})`,
       }
     : null;
-  const cargaDe = (id: string) => rueda.find((r) => r.vendedoraId === id);
+  /**
+   * ══ 🔴 LA CARGA SE BUSCA NORMALIZANDO LOS DOS LADOS (regla dura #4) ════════
+   *
+   * Esto comparaba `r.vendedoraId === id`, y el resultado medido el 8-sep-2026 en
+   * la línea de Ventas Meta era que el selector decía **«Luz 0»** sobre una
+   * persona con **3.850 conversaciones asignadas** de esa misma línea (618 en los
+   * últimos siete días). No es un redondeo: es el número exacto al revés.
+   *
+   * El motivo es la cicatriz de siempre —el mismo humano tiene dos grafías vivas
+   * en producción—, entrando por la puerta de la LECTURA: el destino sale del mapa
+   * de Cerberus, que escribe `Luz`, y sus asignaciones están escritas como `luz`,
+   * que es como ella entra al login. Con `===` la fila existe, tiene el número
+   * correcto y **no se encuentra**, así que cae al `?? 0` de abajo — sin error y
+   * sin log.
+   *
+   * ⚠️ **Y falla justo hacia donde duele.** El número está acá para una sola cosa:
+   * *«pasarle la número 40 a quien ya tiene 40 es lo que el round-robin evita
+   * solo»*. Un cero falso no es un dato faltante — es la señal de «esta persona
+   * está libre» sobre la que más carga tiene de todas.
+   *
+   * Se SUMAN las filas en vez de tomar la primera: `comoVaElReparto` puede traer
+   * la misma persona partida en dos renglones (uno por su fila en la rueda, otro
+   * por sus asignaciones con otra grafía), y quedarse con una devolvería media
+   * carga, que se lee igual de bien que la entera.
+   */
+  const cargaDe = (id: string) =>
+    rueda.reduce((n, r) => (mismaVendedora(r.vendedoraId, id) ? n + r.asignadas : n), 0);
 
   /**
    * Alto ESTIMADO del panel, para decidir el lado ANTES de que exista y se pueda
@@ -241,7 +278,12 @@ export function PasarConversacion({
             <p className="px-1.5 pb-1 text-[11px] font-semibold text-muted-foreground">Pasar la conversación a</p>
             {destinos.map((id) => {
               const carga = cargaDe(id);
-              const esActual = conversacion.asignada_a === id;
+              // Normalizado por lo mismo que la carga: con `===`, una conversación
+              // que ya es de `luz` no se reconoce contra el destino `Luz` del mapa,
+              // así que el renglón de su propia dueña queda apretable y sin decir
+              // «la tiene». Reasignar es idempotente —no rompe nada—, pero el
+              // selector estaría afirmando que no es de ella.
+              const esActual = mismaVendedora(asignadaA, id);
               return (
                 <button
                   key={id}
@@ -263,8 +305,15 @@ export function PasarConversacion({
                       `title` lleva el username completo pase lo que pase: es
                       contra eso que se escribe la fila, y con dos personas de
                       nombre parecido es lo único que desempata. */}
+                  {/* El «(tú)» también se decide normalizando, y es el tercer `===`
+                      del mismo renglón: el destino sale del mapa de Cerberus
+                      (`Alex`) y `miVendedora` es lo que se tipeó al entrar
+                      (`alex`), así que con la comparación exacta el supervisor no
+                      se reconoce en su propia lista. El chip de arriba ya usaba
+                      `mismaVendedora` para decir «Tú» — o sea que el control se
+                      contradecía a sí mismo a tres píxeles de distancia. */}
                   <span className="truncate font-medium" title={id}>
-                    {id === miVendedora
+                    {mismaVendedora(id, miVendedora ?? '')
                       ? `${rotuloDePersona(id, nombres)} (tú)`
                       : rotuloDePersona(id, nombres)}
                   </span>
@@ -272,7 +321,7 @@ export function PasarConversacion({
                     {/* La carga de cada uno, a la vista: pasarle la número 40 a
                         quien ya tiene 40 es exactamente lo que el round-robin
                         evita solo, y a mano no lo evita nadie si no se ve. */}
-                    {esActual ? 'la tiene' : (carga?.asignadas ?? 0)}
+                    {esActual ? 'la tiene' : carga}
                   </span>
                 </button>
               );

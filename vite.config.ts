@@ -47,7 +47,7 @@ function ffmpegCore() {
       // `createRequire` resuelve por la condición `require` → el UMD; de ahí a
       // `esm/`, que es el que hace falta (el worker es `type: "module"` y
       // termina en `import(coreURL)`, que pide un `export default` que el UMD
-      // no tiene). Ver `src/features/whatsapp/comprimirVideo.ts`.
+      // no tiene). Ver `src/features/whatsapp/motorFfmpeg.ts`.
       const origen = path.join(path.dirname(path.dirname(require.resolve('@ffmpeg/core'))), 'esm')
       const destino = path.join(__dirname, 'public', 'ffmpeg')
       if (!existsSync(path.join(origen, 'ffmpeg-core.js'))) {

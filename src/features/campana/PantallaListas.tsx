@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Archive, ListChecks, Loader2, Plus, Users2, X } from 'lucide-react';
 import { api } from '../../lib/datos/cliente';
+import { esLineasNoLeidas } from '../../lib/datos/lineasNoLeidas';
 import { sectionLabel } from '../../lib/styles';
 import { DIMENSIONES, useFacetas, type Dimension } from '../padron/padron';
 import { useArchivarLista, useGuardarLista, useListas, type Lista } from './plantillas';
@@ -39,7 +40,9 @@ export function PantallaListas() {
   }
 
   if (isError) {
-    const sinMigracion = (error as { status?: number })?.status === 503;
+    // 🔴 No todo 503 es la migración: el guard `deVentas` contesta 503 `lineas_no_leidas` cuando no
+    // puede leer las líneas de quien pide (ADR 0108), y eso se dice con el mensaje del server.
+    const sinMigracion = (error as { status?: number })?.status === 503 && !esLineasNoLeidas(error);
     return (
       <div className="flex min-h-0 flex-1 items-start justify-center p-8">
         <div className="flex max-w-md items-start gap-2.5 rounded-2xl border border-warning/40 bg-warning/10 p-4 text-sm text-warning-foreground">

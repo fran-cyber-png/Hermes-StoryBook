@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { esperarA, montar, reposar, teclear, type Montado } from './pruebas/dom';
+import { esperarA, montar, reposar, teclear, tocar, type Montado } from './pruebas/dom';
 import App from './App';
 
 /**
@@ -101,10 +101,19 @@ async function irALaLibreta(m: Montado, tecla: 'n' | '⌘8' = 'n'): Promise<void
   if (tecla === 'n') teclear('n');
   else teclear('8', { meta: true });
 
+  // «Todas las páginas» (el riel, 03-sep-2026) es lo que reemplazó al
+  // buscador como marca del componente REAL montado — el riel es la única
+  // parte de la Libreta que está SIEMPRE en el DOM, sin depender de que el
+  // panel de "Páginas" esté abierto.
   await esperarA(
-    () => Boolean(m.contenedor.querySelector('[aria-label="Buscar en tus páginas"]')),
+    () => libretaMontada(m),
     'la Libreta terminó de montarse (si no, el test de abajo no probaría nada)',
   );
+}
+
+/** ¿Sigue montado el riel de la Libreta? Mismo marcador que `irALaLibreta` espera. */
+function libretaMontada(m: Montado): boolean {
+  return [...m.contenedor.querySelectorAll('button')].some((b) => b.textContent?.includes('Todas las páginas'));
 }
 
 describe('la Libreta como octava vista', () => {
@@ -171,7 +180,7 @@ describe('la Libreta como octava vista', () => {
 
     expect(vistaActual(m)).toBe('Libreta');
     // Y sigue montada: alternar la habría desmontado, llevándose el borrador.
-    expect(m.contenedor.querySelector('[aria-label="Buscar en tus páginas"]')).not.toBeNull();
+    expect(libretaMontada(m)).toBe(true);
   });
 
   it('«n» con el foco en un campo escribe, no navega', async () => {
@@ -252,26 +261,32 @@ describe('Escape sigue cerrando lo que cerraba', () => {
     await reposar();
 
     expect(vistaActual(m)).toBe('Libreta');
-    expect(m.contenedor.querySelector('[aria-label="Buscar en tus páginas"]')).not.toBeNull();
+    expect(libretaMontada(m)).toBe(true);
   });
 
   /**
-   * Y con el foco EN el buscador de la libreta, Escape es del campo: ni cierra
-   * la vista ni se lleva puesta la cabina de atrás. Es la guarda de
+   * Y con el foco EN el filtro de páginas de la libreta, Escape es del campo:
+   * ni cierra la vista ni se lleva puesta la cabina de atrás. Es la guarda de
    * `SELECTOR_CAMPOS`, aplicada por el shell — o sea, cableado otra vez.
+   *
+   * ⚠️ El filtro vive ADENTRO del panel de "Páginas" (03-sep-2026, rediseño),
+   * que arranca cerrado — hay que abrirlo primero tocando "Todas las páginas".
    */
-  it('Escape con el foco en el buscador de la libreta no toca nada de atrás', async () => {
+  it('Escape con el foco en el filtro de páginas de la libreta no toca nada de atrás', async () => {
     const m = await abrirApp();
     await irALaLibreta(m);
-    const buscador = m.contenedor.querySelector<HTMLInputElement>(
-      '[aria-label="Buscar en tus páginas"]',
+    const todasLasPaginas = [...m.contenedor.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Todas las páginas'),
     )!;
+    tocar(todasLasPaginas);
+    const filtro = m.contenedor.querySelector<HTMLInputElement>('[aria-label="Filtrar páginas"]');
+    expect(filtro, 'se abrió el panel con el filtro adentro').toBeTruthy();
 
     teclear('?');
     await reposar();
     expect(m.contenedor.textContent).toContain('La cabina');
 
-    teclear('Escape', { target: buscador });
+    teclear('Escape', { target: filtro! });
     await reposar();
 
     expect(m.contenedor.textContent).toContain('La cabina');

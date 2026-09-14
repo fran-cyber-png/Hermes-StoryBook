@@ -4,7 +4,8 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import '../../index.css';
 import { queryClient } from '../../lib/datos/cliente';
 import { Lienzo } from './Lienzo';
-import { columnasDeDivision, cablesDeDivision } from './piezas';
+import { columnasDeDivision, cablesDeDivision, columnasDePieza, type Apertura, type Pieza } from './piezas';
+import { HojaDelAnuncio } from './HojaDelAnuncio';
 import { Monitoreo } from './Monitoreo';
 import { emitirPulsoDeRuteo } from '../../lib/datos/pulsoDeRuteo';
 import type { TableroDeRuteo } from './routing';
@@ -114,6 +115,61 @@ const TABLERO: TableroDeRuteo = {
     { motivo: 'manual', vendedoraId: 'nicole', conversaciones: 3, ultima: null },
   ],
 };
+
+/**
+ * REPARTIR UN ANUNCIO EN PORCENTAJES (#1002).
+ *
+ * La campaña y el anuncio son los medidos el 11-ago-2026 (`db/routing.ts`):
+ * `[JUL] INTELIGENCIA | WSP` son nueve anuncios, y `120248616484060016` es el
+ * que llega con dos titulares. Las columnas salen de `columnasDePieza`, la misma
+ * función de la pantalla, con la campaña ABIERTA: un anuncio con su reparto y
+ * otro que sigue la regla de la campaña.
+ *
+ * ⚠️ **Esto retrata la hoja y el renglón, no el cableado.** Que tocar el renglón
+ * abra la hoja y que el `PUT` salga con el conjunto completo lo fija
+ * `VistaRouting.anuncio.test.tsx`, que monta la vista de verdad.
+ *
+ * 🔴 **Y SÓLO MUESTRA ESTADOS QUE PUEDEN EXISTIR** (candado #10). La primera
+ * versión le pasaba a la hoja un reparto GUARDADO de 30 + 50, que el server
+ * nunca acepta: la captura mostraba «Quitar el reparto» —que no aparece al
+ * tipear en un anuncio sin regla— y el renglón del lienzo no coincidía con la
+ * hoja. Ahora el segundo caso es el anuncio SIN reparto, y el «faltan 20 %» se
+ * obtiene tipeando 30 y 50 en la hoja, que es como lo ve una persona.
+ */
+const CAMPANA_ANUNCIOS: Pieza = {
+  id: 'campana:120248613186140016',
+  titulo: '[JUL] INTELIGENCIA | WSP',
+  icono: 'campana',
+  pie: '9 anuncios · 61 personas',
+  estado: 'activa',
+  familia: null,
+  volumen: 61,
+  vendedoras: ['Luz'],
+  anunciosConReparto: 1,
+};
+const ANUNCIO_SIN_REPARTO = {
+  adId: '120248613186150016',
+  titular: 'I Foro de Estado 2026',
+  personas: 14,
+  ultima: null,
+  reparto: [],
+};
+const ANUNCIO_REPARTIDO = {
+  adId: '120248616484060016',
+  titular: 'Inteligencia Estratégica',
+  personas: 23,
+  ultima: null,
+  reparto: [
+    { vendedora: 'Luz', porcentaje: 70 },
+    { vendedora: 'Sindy', porcentaje: 30 },
+  ],
+};
+const APERTURA_ANUNCIOS: Apertura = {
+  id: CAMPANA_ANUNCIOS.id,
+  cargando: false,
+  anuncios: [ANUNCIO_REPARTIDO, ANUNCIO_SIN_REPARTO],
+};
+const COLUMNAS_ANUNCIOS = columnasDePieza(CAMPANA_ANUNCIOS, VENDEDORAS, APERTURA_ANUNCIOS);
 
 /** Un tablero recortado: lo que ve una vendedora que no manda en el equipo. */
 const TABLERO_RECORTADO: TableroDeRuteo = {
@@ -232,6 +288,51 @@ function Galeria() {
       </h2>
       <div className="mb-6 overflow-hidden rounded-xl border border-border">
         <Monitoreo tablero={TABLERO_RECORTADO} />
+      </div>
+
+      <h2 className="mb-2 text-sm font-medium">
+        Repartir un anuncio en porcentajes — lo guardado (70 / 30)
+      </h2>
+      <div className="relative mb-6 flex h-[26rem] overflow-hidden rounded-xl border border-border">
+        <Lienzo
+          columnas={COLUMNAS_ANUNCIOS}
+          cables={[]}
+          onConectar={() => {}}
+          onCortar={() => {}}
+          onEntrar={() => {}}
+          onAdentro={() => {}}
+        />
+        <HojaDelAnuncio
+          anuncio={ANUNCIO_REPARTIDO}
+          campana={CAMPANA_ANUNCIOS.titulo}
+          destinos={VENDEDORAS}
+          deBaja={[]}
+          onCerrar={() => {}}
+        />
+      </div>
+
+      <h2 className="mb-2 text-sm font-medium">
+        Repartir un anuncio sin reparto — tipea 30 y 50 en la hoja para ver «faltan 20 %»
+      </h2>
+      <div
+        className="relative mb-6 flex h-[26rem] overflow-hidden rounded-xl border border-border"
+        data-galeria="tipear"
+      >
+        <Lienzo
+          columnas={COLUMNAS_ANUNCIOS}
+          cables={[]}
+          onConectar={() => {}}
+          onCortar={() => {}}
+          onEntrar={() => {}}
+          onAdentro={() => {}}
+        />
+        <HojaDelAnuncio
+          anuncio={ANUNCIO_SIN_REPARTO}
+          campana={CAMPANA_ANUNCIOS.titulo}
+          destinos={VENDEDORAS}
+          deBaja={[]}
+          onCerrar={() => {}}
+        />
       </div>
 
       <h2 className="mb-2 text-sm font-medium">

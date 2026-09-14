@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { esAtajoLibreta, ordenarNotas, type Nota } from './notas';
+import { ETIQUETA_DE_CLASE, claseDeArchivo, esAtajoLibreta, ordenarNotas, type Nota } from './notas';
 
 /**
  * Puro, sin DOM (issue #47): el orden de la lista (espejo del `ORDER BY` del
@@ -73,5 +73,60 @@ describe('esAtajoLibreta', () => {
   it('otra tecla no dispara el atajo', () => {
     expect(esAtajoLibreta({ key: 'm' })).toBe(false);
     expect(esAtajoLibreta({ key: 'Enter' })).toBe(false);
+  });
+});
+
+/**
+ * `claseDeArchivo`/`ETIQUETA_DE_CLASE` (04-sep-2026, a pedido explícito) —
+ * lo que cada fila de la lista muestra en vez de «· editada»: qué ES la
+ * página, no si se tocó.
+ */
+describe('claseDeArchivo', () => {
+  it('una página de texto de siempre es «texto» → «Página»', () => {
+    const n = nota({ tipo: 'texto' });
+    expect(claseDeArchivo(n)).toBe('texto');
+    expect(ETIQUETA_DE_CLASE[claseDeArchivo(n)]).toBe('Página');
+  });
+
+  it('sin `tipo` (una fila vieja, server de antes de ADR 0046) también es «texto»', () => {
+    const n = nota({});
+    expect(claseDeArchivo(n)).toBe('texto');
+  });
+
+  it('un PDF adjuntado es «pdf» → «PDF»', () => {
+    const n = nota({
+      tipo: 'archivo',
+      archivo: { archivo: 'x.pdf', nombreOriginal: 'Contrato.pdf', mime: 'application/pdf', bytes: 10 },
+    });
+    expect(claseDeArchivo(n)).toBe('pdf');
+    expect(ETIQUETA_DE_CLASE[claseDeArchivo(n)]).toBe('PDF');
+  });
+
+  it('un Word adjuntado es «word» → «Word»', () => {
+    const n = nota({
+      tipo: 'archivo',
+      archivo: {
+        archivo: 'x.docx',
+        nombreOriginal: 'Propuesta.docx',
+        mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        bytes: 10,
+      },
+    });
+    expect(claseDeArchivo(n)).toBe('word');
+    expect(ETIQUETA_DE_CLASE[claseDeArchivo(n)]).toBe('Word');
+  });
+
+  it('cualquier otro adjunto (texto plano) es «txt» → «Bloc»', () => {
+    const n = nota({
+      tipo: 'archivo',
+      archivo: { archivo: 'x.txt', nombreOriginal: 'apuntes.txt', mime: 'text/plain', bytes: 10 },
+    });
+    expect(claseDeArchivo(n)).toBe('txt');
+    expect(ETIQUETA_DE_CLASE[claseDeArchivo(n)]).toBe('Bloc');
+  });
+
+  it('las cuatro etiquetas son DISTINTAS entre sí', () => {
+    const etiquetas = Object.values(ETIQUETA_DE_CLASE);
+    expect(new Set(etiquetas).size).toBe(etiquetas.length);
   });
 });

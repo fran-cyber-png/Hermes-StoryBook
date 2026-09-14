@@ -95,6 +95,7 @@ function Card({
   tono,
   icono: Icono,
   titulo,
+  tituloCorto,
   detalle,
   onClick,
   apagada,
@@ -103,6 +104,12 @@ function Card({
   tono: Tono;
   icono: typeof MessageCircle;
   titulo: string;
+  /**
+   * El rótulo en el celular, donde las cuatro van en UNA fila de íconos (ADR 0121).
+   * Tiene que estar contenido en `titulo`: el nombre accesible es `titulo`, y
+   * quien maneja el teléfono por voz dice lo que ve (WCAG «Label in Name»).
+   */
+  tituloCorto: string;
   detalle: string;
   onClick: () => void;
   apagada?: boolean;
@@ -114,8 +121,10 @@ function Card({
       type="button"
       onClick={onClick}
       disabled={apagada || trabajando}
+      aria-label={titulo}
       className={
         'flex min-w-0 flex-col items-start gap-1.5 rounded-xl border border-border bg-card p-2.5 text-left ' +
+        'max-md:items-center max-md:gap-1 max-md:px-1 max-md:py-2 max-md:text-center ' +
         'transition-[border-color,background-color,transform] duration-200 ease-house ' +
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 ' +
         'disabled:cursor-not-allowed disabled:opacity-45 ' +
@@ -125,13 +134,15 @@ function Card({
       <span className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${t.icono}`}>
         {trabajando ? <Loader2 size={14} className="animate-spin" /> : <Icono size={14} />}
       </span>
-      <span className="text-xs font-bold leading-tight text-foreground">{titulo}</span>
+      <span className="text-xs font-bold leading-tight text-foreground max-md:hidden">{titulo}</span>
+      <span className="hidden text-[11px] font-bold leading-tight text-foreground max-md:block">{tituloCorto}</span>
       {/*
         Dos líneas y se corta. La fase 7 pide cards «no excesivamente altas»
         porque el objetivo es ahorrar vertical (fase 11): una descripción de
         cuatro líneas en la card más alta estira las cuatro.
       */}
-      <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">{detalle}</span>
+      {/* En el celular no entra: el motivo de una card apagada se lee igual en los avisos del pie. */}
+      <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground max-md:hidden">{detalle}</span>
     </button>
   );
 }
@@ -208,7 +219,7 @@ export default function AccionesDelComentario({
 
   return (
     <section>
-      <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+      <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground max-md:sr-only">
         ¿Qué puedes hacer con este comentario?
       </h3>
 
@@ -216,12 +227,18 @@ export default function AccionesDelComentario({
         Cuatro columnas en la mesa ancha, dos cuando la columna se angosta. No se
         bajan nunca a una sola: apiladas ocupan lo mismo que la lista vertical que
         esto vino a reemplazar.
+
+        📱 En el celular vuelven a ser CUATRO, como una fila de íconos con su
+        rótulo corto (ADR 0121). A dos columnas con el detalle, las cards ocupaban
+        media pantalla de 390 px y las cajas de respuesta quedaban debajo del
+        pliegue.
       */}
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 max-md:grid-cols-4 max-md:gap-1.5">
         <Card
           tono="verde"
           icono={MessageCircle}
           titulo="Responder en público"
+          tituloCorto="Público"
           detalle="Siempre se puede, sin importar la antigüedad. Lo ven todos los que miran el post."
           onClick={onEscribirPublico}
         />
@@ -229,6 +246,7 @@ export default function AccionesDelComentario({
           tono="azul"
           icono={Lock}
           titulo="Enviar mensaje privado"
+          tituloCorto="Privado"
           detalle={
             puedePrivado
               ? 'Le llega por Messenger aunque nunca te haya escrito. Una sola vez por comentario.'
@@ -248,6 +266,7 @@ export default function AccionesDelComentario({
           tono="ambar"
           icono={EyeOff}
           titulo={estaOculto ? 'Volver a mostrarlo' : 'Ocultar comentario'}
+          tituloCorto={estaOculto ? 'Mostrar' : 'Ocultar'}
           detalle={
             estaOculto
               ? 'Vuelve a ser visible para todos en la publicación.'
@@ -272,6 +291,7 @@ export default function AccionesDelComentario({
           tono="rojo"
           icono={Trash2}
           titulo="Eliminar comentario"
+          tituloCorto="Eliminar"
           detalle="Se elimina de Facebook para siempre. No se puede deshacer."
           onClick={() => setConfirmando('eliminar')}
           apagada={noPuedeBorrar}

@@ -33,6 +33,37 @@ import { sectionLabel } from '../../lib/styles';
  * imagen rota no deja juzgar el encuadre, que es lo único que hay que juzgar.
  */
 
+/**
+ * DESCARGAR, SIN SERVER: `/api/comentario/:id/imagen` contesta con la misma
+ * imagen dibujada, y lo que se «guarda» queda en `window.__descargas` en vez de ir
+ * a la carpeta de Descargas. Lo que se prueba es el cableado del botón —que pida
+ * a Hermes y guarde con la extensión de lo que llegó—, no a Meta.
+ *
+ * ⚠️ **El `content-type` es el que manda el CDN de Meta, no el del dibujo**: jpeg la
+ * publicación, gif la reacción. Con `image/svg+xml` —lo que el dibujo es— se
+ * guardaba SIN extensión, porque Meta nunca lo manda y `descargarArchivo.ts` no lo
+ * conoce: la galería mostraba lo contrario de lo que dice probar (candado 10).
+ */
+const fetchOriginal = window.fetch.bind(window);
+window.fetch = (async (entrada: RequestInfo | URL, init?: RequestInit) => {
+  const url = String(typeof entrada === 'string' ? entrada : entrada instanceof URL ? entrada.href : entrada.url);
+  if (url.includes('/api/comentario/')) {
+    const [de, tipo] = url.includes('de=post') ? [piezaDeCampana, 'image/jpeg'] : [gifDeReaccion, 'image/gif'];
+    return new Response(decodeURIComponent(de.split(',')[1]), { status: 200, headers: { 'content-type': tipo } });
+  }
+  return fetchOriginal(entrada, init);
+}) as typeof fetch;
+const descargas: string[] = [];
+(window as unknown as { __descargas: string[] }).__descargas = descargas;
+const clicOriginal = HTMLAnchorElement.prototype.click;
+HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+  if (this.download) {
+    descargas.push(this.download);
+    return;
+  }
+  clicOriginal.call(this);
+};
+
 const svg = (cuerpo: string, w: number, h: number) =>
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${cuerpo}</svg>`);
@@ -131,7 +162,7 @@ function Panel({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-        <PublicacionOriginal post={POST} />
+        <PublicacionOriginal post={POST} interactionId={1} />
 
         <section>
           <h3 className="mb-2 flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
@@ -139,7 +170,7 @@ function Panel({
             <span className="font-normal normal-case tracking-normal">{antiguedad}</span>
           </h3>
           <ContenidoDelComentario texto={textoDelComentario} fileteCanal={FILETE} />
-          {conAdjunto && <AdjuntoDelComentario adjunto={ADJUNTO} />}
+          {conAdjunto && <AdjuntoDelComentario adjunto={ADJUNTO} interactionId={1} />}
           <a
             href="https://facebook.com/x"
             target="_blank"

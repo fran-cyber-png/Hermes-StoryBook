@@ -4,6 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import '../../index.css';
 import { queryClient } from '../../lib/datos/cliente';
 import { BarraFiltros } from './BarraFiltros';
+import { opcionesDeLinea } from './alcance';
 import { FilaConversacion } from './FilaConversacion';
 import type { Conversacion } from '../../dominio/conversaciones';
 import type { LineaWhatsapp } from '../../dominio/lineas';
@@ -285,7 +286,7 @@ function Galeria() {
                 teEscribieron: 33,
                 puedoEscribirle: 25,
               }}
-              lineas={LINEAS}
+              opciones={opcionesDeLinea(LINEAS, false)}
               lineaActiva=""
               onLinea={() => {}}
               categoriaActiva={null}
@@ -302,10 +303,9 @@ function Galeria() {
                 teEscribieron: 5,
                 puedoEscribirle: 25,
               }}
-              lineas={LINEAS}
+              opciones={opcionesDeLinea(LINEAS, true)}
               lineaActiva="mias"
               onLinea={() => {}}
-              hayMias
               categoriaActiva={null}
               onCategoria={() => {}}
               onListas={() => {}}

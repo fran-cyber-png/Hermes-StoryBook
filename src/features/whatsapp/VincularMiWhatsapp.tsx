@@ -27,9 +27,32 @@ import {
  * `ContenidoUsuario`: la evidencia no puede depender de un navegador que sepa
  * hacer click.
  */
-export function VincularMiWhatsapp({ onCerrar }: { onCerrar: () => void }) {
+/**
+ * 🔴 EL CAMPO ARRANCA CON SU PROPIO NÚMERO CUANDO YA TIENE UNO, Y NO ES COMODIDAD.
+ *
+ * `puedeAutoVincular` (server) deja re-parear **la línea propia y ninguna otra**:
+ * cualquier otro número cae en 409 `ya_tiene_linea`. O sea que cuando esto se
+ * abre para re-vincular hay **exactamente un valor que funciona**, y hasta hoy el
+ * campo salía vacío con un placeholder peruano — la vendedora tenía que
+ * adivinarlo dígito por dígito.
+ *
+ * Medido el 2-sep-2026: la línea de Nicole es `5215610584485`, con el «1»
+ * heredado de México que su propio teléfono **no muestra**. Tipear lo que ve
+ * (`525610584485`) daba 409, y el mensaje tampoco decía cuál era el bueno.
+ *
+ * ⚠️ Sigue siendo editable: quien no tiene línea propia lo escribe entero, y
+ * `numeroPropio` llega `null` justo en ese caso.
+ */
+export function VincularMiWhatsapp({
+  onCerrar,
+  numeroPropio = null,
+}: {
+  onCerrar: () => void;
+  /** Su línea de hoy, si ya tiene una. `null` = está trayendo la primera. */
+  numeroPropio?: string | null;
+}) {
   useEscape(onCerrar);
-  const [numero, setNumero] = useState('');
+  const [numero, setNumero] = useState(numeroPropio ?? '');
 
   const iniciar = useIniciarAutoVinculacion();
   const cancelar = useCancelarAutoVinculacion();
@@ -83,6 +106,7 @@ export function VincularMiWhatsapp({ onCerrar }: { onCerrar: () => void }) {
           onNumero: setNumero,
           onVincular: () => void vincular(),
           error: iniciar.error instanceof ErrorApi ? iniciar.error.message : null,
+          esReVinculacion: numeroPropio !== null,
         }
     : e?.estado === 'conectado'
       ? {
@@ -111,7 +135,20 @@ export function VincularMiWhatsapp({ onCerrar }: { onCerrar: () => void }) {
 // ── LA VISTA — sin un solo hook de datos, así se puede importar en la galería ──
 
 export type PasoMiLinea =
-  | { tipo: 'formulario'; numero: string; onNumero: (v: string) => void; onVincular: () => void; error: string | null }
+  | {
+      tipo: 'formulario';
+      numero: string;
+      onNumero: (v: string) => void;
+      onVincular: () => void;
+      error: string | null;
+      /**
+       * `true` = ya tiene una línea y está volviendo a parear ESA. Cambia lo que
+       * dice el texto: «es solo 1 por vendedora» es la advertencia correcta para
+       * quien trae la primera y una confusión para quien está reintentando la
+       * suya — el server acepta ese reintento sin límite.
+       */
+      esReVinculacion?: boolean;
+    }
   | { tipo: 'esperando'; onCancelar: () => void }
   | { tipo: 'qr'; qr: string; onCancelar: () => void }
   /**
@@ -127,10 +164,19 @@ export type PasoMiLinea =
 export function VistaMiLinea({ paso, onCerrar }: { paso: PasoMiLinea; onCerrar: () => void }) {
   return (
     <>
-      {/* Mismo arreglo que `ConfiguracionPerfil`: el contenedor de z-50 cubre toda
-          la pantalla y tapaba el overlay de abajo — el click afuera nunca llegaba. */}
-      <div className="fixed inset-0 z-40 bg-navy/30 backdrop-blur-[2px]" aria-hidden="true" />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onCerrar}>
+      {/* Mismo arreglo que `ConfiguracionPerfil`: el contenedor de z-58 cubre toda
+          la pantalla y tapaba el overlay de abajo — el click afuera nunca llegaba.
+          🔴 z-55/z-58, NO z-40/z-50 — este modal SIEMPRE se abre desde adentro de
+          `ConfiguracionPerfil`, que ya ocupa esos mismos dos números. Empatar el
+          z-index deja a la tarjeta de Configuración (z-50) por ENCIMA del velo de
+          ESTE modal (z-40) — un velo no puede oscurecer algo con más z-index que
+          él, así que Configuración se veía sin atenuar, asomando por los bordes
+          (reporte del dueño, 10-sep-2026). Subir a z-55/z-58 pone TODO este modal
+          por encima de TODO el anterior — su propio velo incluido —, y se queda
+          por debajo de z-[60] (las notificaciones de `Avisos.tsx`, que tienen que
+          seguir viéndose pase lo que pase). */}
+      <div className="fixed inset-0 z-[55] bg-navy/30 backdrop-blur-[2px]" aria-hidden="true" />
+      <div className="fixed inset-0 z-[58] flex items-center justify-center p-4" onClick={onCerrar}>
         <div
           role="dialog"
           aria-modal="true"
@@ -151,8 +197,17 @@ export function VistaMiLinea({ paso, onCerrar }: { paso: PasoMiLinea; onCerrar: 
             {paso.tipo === 'formulario' && (
               <>
                 <p className="text-sm leading-snug text-muted-foreground">
-                  Trae tu número de WhatsApp a Hermes. Es <b>solo 1 por vendedora</b> — una vez vinculado,
-                  para cambiarlo habla con quien administra Hermes.
+                  {paso.esReVinculacion ? (
+                    <>
+                      Vuelve a conectar tu línea. Tiene que ser <b>este mismo número</b>: es el que está
+                      a tu nombre, y para cambiarlo por otro habla con quien administra Hermes.
+                    </>
+                  ) : (
+                    <>
+                      Trae tu número de WhatsApp a Hermes. Es <b>solo 1 por vendedora</b> — una vez
+                      vinculado, para cambiarlo habla con quien administra Hermes.
+                    </>
+                  )}
                 </p>
                 <input
                   value={paso.numero}

@@ -1,4 +1,4 @@
-import type { Ficha } from '../cerberus/ficha';
+import { esCompra, type Ficha } from '../cerberus/ficha';
 import type { InteresRegistrado } from '../gestion/lineaDeTiempo';
 import type { Senal } from '../senales/senales';
 import {
@@ -28,7 +28,14 @@ export type TipoEvento = 'llegada' | 'identidad' | 'mensaje' | 'interes_detectad
  * pasó. Es el mismo criterio que el ✓✓ del hilo, donde el fallido es lo único
  * que se dibuja distinto (triángulo rojo) en vez de un tilde más.
  */
-export type EstadoEvento = 'confirmado' | 'manual' | 'ia' | 'pendiente' | 'fallido';
+/**
+ * ⚠️ **`senal` no es `ia`.** Antes del destape de #797 nada del timeline salió
+ * de un LLM: «Cotización» es una regla sobre el texto saliente
+ * (`server/src/senales/cotizacion.ts`), no una inferencia. Rotularla «IA»
+ * afirmaba una tecnología que no corrió. `ia` queda reservado para cuando
+ * #797 destape la temperatura del bot/LLM de verdad.
+ */
+export type EstadoEvento = 'confirmado' | 'manual' | 'ia' | 'senal' | 'pendiente' | 'fallido';
 
 export interface EventoLinea {
   /** Estable: sirve de key de React. `${tipo}:${timestamp ?? 'sin-fecha'}:${valor ?? ''}`. */
@@ -37,7 +44,6 @@ export interface EventoLinea {
   rotulo: string;
   valor?: string;
   fuente?: string;
-  confianza?: number;
   timestamp?: string;
   estado: EstadoEvento;
   editable?: boolean;
@@ -83,6 +89,7 @@ export const COLOR: Record<EstadoEvento, { punto: string; tag: string }> = {
   confirmado: { punto: 'bg-success', tag: '' },
   manual: { punto: 'bg-primary', tag: 'Manual' },
   ia: { punto: 'bg-warning', tag: 'IA' },
+  senal: { punto: 'bg-warning', tag: 'Señal' },
   pendiente: { punto: 'border-dashed', tag: 'Pendiente' },
   // Sin oro: acá no corre ningún plazo. El rojo es lo que pide una acción.
   fallido: { punto: 'bg-destructive', tag: 'No salió' },
@@ -113,6 +120,15 @@ interface DatosTimeline {
    * Ausente = nadie lo pasó, y entonces se comporta como siempre.
    */
   nombreMostrado?: string | null;
+  /**
+   * #887 — EL ALIAS DE WHATSAPP, cuando la cabecera YA lo muestra al lado del
+   * nombre real (`identidad.ts` › `alias`). Sin fecha (no hay de dónde
+   * sacarla hoy: la conversación no manda «primer mensaje entrante»), este
+   * evento vivía para siempre en el grupo «Sin fecha» — el dueño lo pidió
+   * como dato de cabecera, no como línea de tiempo sin fecha. Mismo criterio
+   * que `nombreMostrado`: ausente = se comporta como siempre.
+   */
+  aliasMostrado?: string | null;
   /** Lo que las vendedoras registraron a mano (`eventos_contacto`). */
   eventos?: readonly EventoContacto[];
   /**
@@ -233,10 +249,21 @@ export function ensamblarTimeline(
     });
     for (const venta of ventas) {
       const valor = `${venta.monto} ${venta.moneda}`;
+      /**
+       * 🔴 #1033 — SÓLO UNA COMPRA SE ROTULA «COMPRA». Cerberus manda por el
+       * mismo webhook cotizaciones, anuladas y reembolsos, y todas salían como
+       * «Compra» (el tile «Última actividad» lo decía de una cotización). Qué es
+       * compra lo decide el server (`esCompra`); una cotización es actividad y
+       * sale como tal, y lo demás —anulada, retiro, reembolso— no es algo que
+       * pasó con la persona: se ve en la pestaña Compras, marcado.
+       */
+      const compra = esCompra(venta);
+      const cotizacion = !compra && /cotiz/i.test(venta.estado);
+      if (!compra && !cotizacion) continue;
       eventos.push({
-        id: idDeEvento('compra', venta.fecha || undefined, valor),
-        tipo: 'compra',
-        rotulo: 'Compra',
+        id: idDeEvento(compra ? 'compra' : 'cotizacion', venta.fecha || undefined, valor),
+        tipo: compra ? 'compra' : 'cotizacion',
+        rotulo: compra ? 'Compra' : 'Cotización',
         valor,
         fuente: 'Cerberus',
         timestamp: venta.fecha || undefined,
@@ -259,14 +286,21 @@ export function ensamblarTimeline(
     });
   }
 
-  if (datos.conversacion?.persona_nombre || datos.conversacion?.lead_nombre) {
-    const nombre = datos.conversacion.persona_nombre ?? datos.conversacion.lead_nombre ?? '';
-    const fuente = datos.conversacion.persona_nombre ? 'WhatsApp' : 'Formulario';
+  // #1033 — un nombre tiene que NOMBRAR: «.» o «🦋🦋» no identifican a nadie (la
+  // Actividad de un cliente decía «Nombre identificado .»). La misma regla que
+  // `nombreDelContacto` aplica a la cabecera.
+  const nombraAlguien = (s: string | undefined) => /[\p{L}\p{N}]/u.test(s ?? '');
+  const nombreDelChat = nombraAlguien(datos.conversacion?.persona_nombre) ? datos.conversacion?.persona_nombre : undefined;
+  const nombreDelForm = nombraAlguien(datos.conversacion?.lead_nombre) ? datos.conversacion?.lead_nombre : undefined;
+  if (nombreDelChat || nombreDelForm) {
+    const nombre = nombreDelChat ?? nombreDelForm ?? '';
+    const fuente = nombreDelChat ? 'WhatsApp' : 'Formulario';
     // Se compara normalizando los DOS lados, como todo lo que compara nombres en
     // este repo: con «Karen Tarazona» vs «karen tarazona » la comparación exacta
     // no da error, da que el renglón redundante se sigue dibujando.
     const yaEstaArriba =
-      nombre.trim().toLowerCase() === (datos.nombreMostrado ?? '').trim().toLowerCase();
+      nombre.trim().toLowerCase() === (datos.nombreMostrado ?? '').trim().toLowerCase() ||
+      nombre.trim().toLowerCase() === (datos.aliasMostrado ?? '').trim().toLowerCase();
     if (!yaEstaArriba) eventos.push({
       id: idDeEvento('identidad', undefined, nombre),
       tipo: 'identidad',
@@ -437,11 +471,13 @@ export function ensamblarTimeline(
   }
 
   if (datos.senales?.cotizacion?.esCotizacion) {
+    const ocurrida = datos.senales.cotizacion.ocurridoEn;
     eventos.push({
-      id: idDeEvento('cotizacion', undefined, undefined),
+      id: idDeEvento('cotizacion', ocurrida, undefined),
       tipo: 'cotizacion',
       rotulo: 'Cotización',
-      estado: 'ia',
+      timestamp: ocurrida,
+      estado: 'senal',
       fuente: 'Señal automática',
     });
   }
@@ -459,7 +495,7 @@ export function ensamblarTimeline(
    *
    * ADR 0080 ya había sacado esta lista de campaña por eso mismo («un indicador
    * de avance que no avanza enseña a no mirarlo») y había dejado viva la mitad
-   * de ventas. Lo que la reemplaza es `panel/QuienEs.tsx`, que dibuja los mismos
+   * de ventas. Lo que la reemplaza es la tarjeta de identidad de `panel/EncabezadoTimeline.tsx`, que dibuja los mismos
    * campos con su VALOR cuando existe, con la forma del hueco cuando no, y con
    * el botón que los llena.
    *

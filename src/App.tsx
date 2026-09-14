@@ -6,7 +6,6 @@ import '@fontsource/montserrat/800.css';
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   AlarmClock,
-  ChevronLeft,
   ChevronRight,
   Columns3,
   Compass,
@@ -25,6 +24,7 @@ import { Avisos } from './components/Avisos';
 import { BotonDeTema } from './components/BotonDeTema';
 import { TituloDeSeccion } from './components/TituloDeSeccion';
 import { useLocalStorage } from './lib/useLocalStorage';
+import { botonAzulClass } from './lib/styles';
 import { ColaUnificada } from './features/canales/ColaUnificada';
 import { ConversacionActiva } from './features/canales/ConversacionActiva';
 import type { Conversacion } from './dominio/conversaciones';
@@ -46,11 +46,17 @@ import { entrenaYNoEsDeCampana, noEsDeCampana, type QuienMira, veRouting } from 
 import { pendientesQueApuran, useAgenda } from './features/agenda/agenda';
 import { Login } from './features/auth/Login';
 import { useSesion, type Vendedora } from './features/auth/sesion';
-import { useActividadDeSesion } from './features/auth/actividad';
+import { useLatidoDeSesion } from './features/auth/actividad';
+import { useEfectoAlCambiar } from './lib/useEfectoAlCambiar';
 import { AvisoCerberus } from './features/auth/AvisoCerberus';
 import { PanelUsuario } from './features/auth/PanelUsuario';
+import { MenuMovil } from './features/auth/MenuMovil';
+import { BarraDeNavegacionMovil, PISO_MOVIL } from './features/movil/BarraDeNavegacionMovil';
+import { useEsMovil } from './lib/useEsMovil';
+import { enTauri } from './lib/tauri';
 
 import { useTiempoReal } from './lib/datos/tiempoReal';
+import { useLlamadaActual } from './features/llamadas/llamadaActual';
 import { SELECTOR_CAMPOS } from './lib/teclado/escapeDePopover';
 import type { DestinoCorreo, Puente } from './lib/puente';
 import { esAtajoLibreta } from './features/notas/notas';
@@ -123,6 +129,9 @@ const VistaRouting = lazy(() => import('./features/routing/VistaRouting').then((
  * todos y nadie lo nota hasta la próxima medición.
  */
 const VistaLlamadas = lazy(() => import('./features/llamadas/VistaLlamadas').then((m) => ({ default: m.VistaLlamadas })));
+// La barra de la llamada va perezosa por el presupuesto del chunk de arranque (`npm run presupuesto`); el
+// estado de la llamada y la suscripción a la señal sí van en el arranque (`features/llamadas/llamadaActual.ts`).
+const BarraDeLlamada = lazy(() => import('./features/llamadas/BarraDeLlamada').then((m) => ({ default: m.BarraDeLlamada })));
 
 const Libreta = lazy(() => import('./features/notas/Libreta').then((m) => ({ default: m.Libreta })));
 
@@ -262,7 +271,41 @@ function reflejarVistaEnUrl(vista: Vista) {
   const url = new URL(location.href);
   if (url.searchParams.get('vista') === vista) return;
   url.searchParams.set('vista', vista);
-  history.replaceState(null, '', url.toString());
+  // `history.state` y no `null`: en el celular la entrada actual puede ser la de
+  // un chat abierto (ver abajo), y pisarla con `null` dejaría al botón atrás sin
+  // saber que tiene un chat que cerrar.
+  history.replaceState(history.state, '', url.toString());
+}
+
+/**
+ * ══ EN EL CELULAR, EL CHAT ABIERTO ES UNA ENTRADA DEL HISTORIAL ═════════════
+ *
+ * En Android el botón atrás es el gesto de «volver a la lista», igual que en
+ * WhatsApp. Sin una entrada propia, ese botón sacaría a la vendedora de Hermes
+ * con el chat abierto. Por eso abrir un chat en el celular apila una entrada
+ * (con la MISMA URL: no hay rutas, ADR 0002), y volver —con el botón del sistema
+ * o con la flecha del chat— la consume.
+ *
+ * ⚠️ **La flecha no cierra el chat directo: hace `history.back()` y deja que el
+ * `popstate` lo cierre.** Si cerrara por su cuenta, la entrada quedaría apilada y
+ * cada chat atendido dejaría un «atrás» muerto: la vendedora aprieta atrás para
+ * salir y no pasa nada, una vez por persona.
+ *
+ * ⚠️ **Abrir otro chat con uno ya abierto REEMPLAZA la entrada, no apila otra**
+ * («abrir contacto» desde el registro rápido): atrás vuelve a la lista, no al
+ * chat de antes — que es lo que hace WhatsApp.
+ */
+const CHAT_EN_EL_HISTORIAL = 'hermesChat';
+
+function hayChatEnElHistorial(): boolean {
+  const estado = history.state as Record<string, unknown> | null;
+  return Boolean(estado?.[CHAT_EN_EL_HISTORIAL]);
+}
+
+function apilarChatEnElHistorial(clave: string) {
+  const estado = { ...((history.state as Record<string, unknown> | null) ?? {}), [CHAT_EN_EL_HISTORIAL]: clave };
+  if (hayChatEnElHistorial()) history.replaceState(estado, '');
+  else history.pushState(estado, '');
 }
 
 /**
@@ -520,7 +563,8 @@ export default function App() {
      */
     return (
       <div className="flex h-dvh bg-background">
-        <div className="w-[4.75rem] shrink-0 border-r border-border bg-card" />
+        {/* `max-md:hidden`: en el celular no hay riel, y el esqueleto no puede prometer uno. */}
+        <div className="w-[4.75rem] shrink-0 border-r border-border bg-card max-md:hidden" />
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="h-14 shrink-0 border-b border-border bg-card" />
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
@@ -569,10 +613,13 @@ interface PropsAutenticada {
  * cuelga de acá, así que nada de esto existe mientras la vendedora no entró.
  */
 function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: PropsAutenticada) {
-  // El latido de la sesión (ADR pendiente de nombre — pedido del dueño): un
-  // solo hook para toda la app autenticada, así corre en segundo plano aunque
-  // Configuración esté cerrada. Ella solo lo MUESTRA.
-  const actividad = useActividadDeSesion(vendedora.id);
+  // El latido de la sesión (pedido del dueño): corre en segundo plano aunque
+  // Configuración esté cerrada, porque si deja de latir el server cree que te
+  // fuiste. 🔴 Es el LATIDO, no el cronómetro: acá adentro ya no hay ningún
+  // `setInterval` que re-renderice el shell entero una vez por segundo (ver el
+  // docblock de `features/auth/actividad.ts`). El reloj lo tickea quien lo
+  // dibuja, que es el modal de Configuración.
+  const actividad = useLatidoDeSesion(vendedora.id);
   const [abierta, setAbierta] = useState<Conversacion | null>(null);
   /**
    * EL PANEL DERECHO SE PUEDE CONTRAER (`PanelDerecho`, la ficha de al lado del
@@ -583,10 +630,90 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
    * Empieza ABIERTO — quien nunca lo tocó ve exactamente el panel de siempre.
    */
   const [panelColapsado, setPanelColapsado] = useLocalStorage('hermes.panelDerechoColapsado', false);
-  const [vista, setVista] = useState<Vista>(() => vistaInicialDesdeUrl(new Set(vistasDe(vendedora).map((v) => v.id))));
+  /**
+   * ══ EL PANEL SE MONTA EN DOS TIEMPOS, PARA PODER ANIMAR LOS DOS SENTIDOS
+   * (08-sep-2026, pedido del dueño: mismo riel/animación que el filtro de
+   * canales de Mensajes) ══
+   *
+   * `panelColapsado` es la PREFERENCIA (persistida); estos dos son el estado
+   * de RENDER, y por qué no son lo mismo:
+   *
+   * `PanelDerecho` dispara nueve hooks de datos (ficha, eventos, intereses,
+   * agenda, llamadas…) — a diferencia de `RielDeCanales` (estático), dejarlo
+   * SIEMPRE montado detrás de un `opacity-0` sería pedirle a Cerberus y
+   * compañía trabajo que la vendedora pidió explícitamente no ver mientras
+   * tiene el panel colapsado. Por eso `panelMontado` demora el DESMONTAR
+   * hasta que la transición de CERRADO termina —220 ms, el mismo número que
+   * `duration-[220ms]` de ahí abajo, no los 380 ms de abrir: desmontar antes
+   * de que termine el abrir no aplica, esa rama nunca lo programa— y
+   * `panelExpandido` es lo que de verdad dispara el ancho: al abrir, se monta
+   * primero a ancho 0 y recién en el frame SIGUIENTE crece — sin ese primer
+   * frame no hay «desde dónde» animar, un elemento no transiciona su propio
+   * primer render.
+   *
+   * 🔴 **UN SOLO `requestAnimationFrame` NO ALCANZA, y por eso está encadenado
+   * dos veces (08-sep-2026, corrección del mismo día: «se abre muy rápido» —
+   * medido, ni siquiera animaba, saltaba directo a 360px en el primer frame).**
+   * React puede terminar de commitear el render de `panelMontado=true` (ancho
+   * 0) y el de `panelExpandido=true` (ancho completo) ANTES de que el
+   * navegador llegue a pintar el primero — un `rAF` corre justo antes del
+   * próximo repintado, no después de él, así que no garantiza que ese
+   * repintado ya haya pasado. El segundo `rAF`, ANIDADO adentro del primero,
+   * es lo que fuerza a esperar a que el ancho 0 se haya pintado de verdad
+   * antes de disparar la transición — el mismo patrón que ya usa este
+   * archivo para el foco del buscador (`busquedaRef`, un poco más abajo).
+   */
+  const [panelMontado, setPanelMontado] = useState(!panelColapsado);
+  const [panelExpandido, setPanelExpandido] = useState(!panelColapsado);
+  useEffect(() => {
+    if (!panelColapsado) {
+      setPanelMontado(true);
+      let id2 = 0;
+      const id1 = requestAnimationFrame(() => {
+        id2 = requestAnimationFrame(() => setPanelExpandido(true));
+      });
+      return () => {
+        cancelAnimationFrame(id1);
+        cancelAnimationFrame(id2);
+      };
+    }
+    setPanelExpandido(false);
+    const t = setTimeout(() => setPanelMontado(false), 220);
+    return () => clearTimeout(t);
+  }, [panelColapsado]);
+  /**
+   * ══ EN EL CELULAR HAY UNA SOLA VISTA: MENSAJES — SALVO PARA CAMPAÑA ═══════
+   *
+   * A menos de 768 px no hay riel (no entra), así que no hay cómo ir a otra
+   * vista: Mensajes es la pantalla de inicio y la única. La vista que se MUESTRA
+   * se deriva y no se escribe en el estado, para que no haya un cuadro de
+   * Dashboard antes de pasar a Mensajes ni un efecto que lo corrija tarde.
+   *
+   * **Un comando de campaña tiene dos** (12-sep-2026, pedido del dueño):
+   * Mensajes y Pipeline, con la barra de abajo (`BarraDeNavegacionMovil`) como
+   * único camino entre ellas. Es la misma derivación: lo que no sea una de las
+   * dos cae a Mensajes, y para ventas sigue cayendo todo. Se decide con
+   * `esDeCampana` porque es visibilidad, no una frontera (`vistas/acceso.ts`):
+   * el Pipeline ya es de los dos módulos en escritorio.
+   *
+   * `vistaElegida` sigue viva por debajo: al girar el teléfono (o ensanchar la
+   * ventana) vuelve el escritorio de siempre, y arranca en Mensajes si se abrió
+   * en el celular — pasar de golpe al Dashboard con un chat a medio escribir
+   * sería un castigo por girar la pantalla.
+   */
+  const esMovil = useEsMovil();
+  const [vistaElegida, setVista] = useState<Vista>(() =>
+    esMovil ? 'bandeja' : vistaInicialDesdeUrl(new Set(vistasDe(vendedora).map((v) => v.id))),
+  );
+  const barraMovil = esMovil && vendedora.esDeCampana === true;
+  const vista: Vista = !esMovil ? vistaElegida : barraMovil && vistaElegida === 'embudo' ? 'embudo' : 'bandeja';
   const [direccion, setDireccion] = useState<'abajo' | 'arriba'>('abajo');
-  const [telefonoPersonas, setTelefonoPersonas] = useState<string | null>(null);
   const [cabina, setCabina] = useState(false);
+  // Una llamada a la vista es una capa sobre la mesa: tapa el navegador embebido igual que la cabina. Y el
+  // aviso de un error o de «la contestó otra» también se ve, así que también tapa.
+  const llamadaActual = useLlamadaActual();
+  const hayLlamadaALaVista =
+    llamadaActual.estado.fase !== 'libre' || llamadaActual.error !== null || llamadaActual.nota !== null;
   const [paleta, setPaleta] = useState(false);
   /**
    * LAS SEÑALES DE LOS ATAJOS DEL CHAT. Contadores, no booleanos: apretar `R`,
@@ -626,15 +753,14 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
   // lo agrega), o si los permisos cambian, la vista actual puede dejar de ser
   // válida. En ese caso caemos a Dashboard en vez de dejarla en una pantalla
   // que no le corresponde.
-  useEffect(() => {
+  // Solo importa cuando cambia la identidad; no queremos revalidar en cada
+  // cambio de vista.
+  useEfectoAlCambiar([vendedora.id, vendedora.esDeCampana, vendedora.puedeEntrenar], () => {
     const permitidas = new Set(vistasDe(vendedora).map((v) => v.id));
     if (!permitidas.has(vista)) {
       setVista('dashboard');
     }
-    // Solo importa cuando cambia la identidad; no queremos revalidar en cada
-    // cambio de vista.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vendedora.id, vendedora.esDeCampana, vendedora.puedeEntrenar]);
+  });
 
   // Objeto estable: la Agenda re-dispararía su efecto si la identidad cambiara por render.
   const crearInicialAgenda = useMemo(
@@ -645,14 +771,13 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
   // Entrar a una sugerencia ABRE su conversación: revisar es mirar un chat, no
   // leer un texto suelto. Es la costura entre el modo y la mesa de siempre.
   const claveDeRevision = revision.actual?.clave ?? null;
-  useEffect(() => {
+  // Solo al cambiar de sugerencia: reabrir en cada render pisaría la
+  // conversación que la vendedora haya elegido a mano.
+  useEfectoAlCambiar([claveDeRevision, revision.activo], () => {
     if (!revision.activo || !revision.actual) return;
-    setAbierta(conversacionDeSugerencia(revision.actual));
+    abrirEnLaBandeja(conversacionDeSugerencia(revision.actual));
     setVista('bandeja');
-    // Solo al cambiar de sugerencia: reabrir en cada render pisaría la
-    // conversación que la vendedora haya elegido a mano.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [claveDeRevision, revision.activo]);
+  });
 
   // El nervio en vivo: escucha el stream del server e invalida lo que cambió.
   // Solo con sesión (el stream está detrás del perímetro, #36); si el stream
@@ -706,7 +831,11 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
   ];
 
   // ── El teclado global (§2.8): la guarda va antes que todo. ──
-  useEffect(() => {
+  // `vendedora.id` está en las claves porque de él sale `vistas`: sin eso, el
+  // listener se quedaría con el riel de quien estaba antes y ⌘N abriría otra cosa.
+  useEfectoAlCambiar(
+    [vista, cabina, paleta, abierta, revision.activo, revision.actualId, revision.fila, vendedora.id],
+    () => {
     function alTeclear(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         // Escape cierra en orden: cabina → revisión → conversación abierta
@@ -740,7 +869,7 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
           revision.salir();
           return;
         }
-        if (vista === 'bandeja') setAbierta(null);
+        if (vista === 'bandeja') cerrarConversacion();
         return;
       }
       // Los acordes con ⌘/Ctrl no escriben texto: pasan aun con el foco en un input.
@@ -854,23 +983,54 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
     }
     window.addEventListener('keydown', alTeclear);
     return () => window.removeEventListener('keydown', alTeclear);
-    // `vendedora.id` está acá porque de él sale `vistas`: sin eso, el listener
-    // se quedaría con el riel de quien estaba antes y ⌘N abriría otra cosa.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vista, cabina, paleta, abierta, revision.activo, revision.actualId, revision.fila, vendedora.id]);
+    },
+  );
 
 
   // Abrir una conversación desde cualquier vista te trae a la Bandeja: es la
   // única vista donde se conversa. Las demás miran, esta trabaja.
   function abrirConversacion(c: Conversacion) {
-    setAbierta(c);
+    abrirEnLaBandeja(c);
     cambiarVista('bandeja');
   }
 
-  function buscarPersona(telefono: string) {
-    setTelefonoPersonas(telefono);
-    cambiarVista('personas');
+  /**
+   * ABRIR Y CERRAR UNA CONVERSACIÓN PASAN POR ACÁ, y no por `setAbierta` suelto:
+   * en el celular las dos cosas tocan el historial (ver `CHAT_EN_EL_HISTORIAL`).
+   * En escritorio no se apila nada y cerrar es `setAbierta(null)`, lo de siempre.
+   *
+   * `cerrarConversacion` pregunta al HISTORIAL y no a `esMovil`: si el chat se
+   * abrió en el celular y después se giró la pantalla, la entrada sigue ahí y
+   * hay que consumirla igual.
+   */
+  function abrirEnLaBandeja(c: Conversacion) {
+    if (esMovil) apilarChatEnElHistorial(c.clave);
+    setAbierta(c);
   }
+  function cerrarConversacion() {
+    // `abierta` en la guarda: al recargar con un chat abierto el navegador
+    // conserva su entrada, pero ya no hay chat. Sin esto, Escape se gastaría esa
+    // entrada navegando hacia atrás sin nada que cerrar. (La entrada vieja no se
+    // pierde: el próximo chat que se abra la reusa con `replaceState`.)
+    if (abierta && hayChatEnElHistorial()) history.back();
+    else setAbierta(null);
+  }
+  // El que cierra de verdad: el botón atrás del sistema y la flecha del chat
+  // terminan los dos acá. Sin guarda de `esMovil` por el mismo motivo de arriba.
+  useEffect(() => {
+    const alIrAtras = () => {
+      if (!hayChatEnElHistorial()) setAbierta(null);
+    };
+    window.addEventListener('popstate', alIrAtras);
+    return () => window.removeEventListener('popstate', alIrAtras);
+  }, []);
+  // Cruzar a celular CON un chat abierto —se abrió con el teléfono en horizontal,
+  // que ya es escritorio, y después se giró—: ese chat no tiene entrada, y el
+  // primer atrás de Android sacaría a la vendedora de Hermes. Se la da al cruzar.
+  // Al volver a escritorio no se toca: la entrada queda y el atrás cierra el chat.
+  useEfectoAlCambiar([esMovil], () => {
+    if (esMovil && abierta && !hayChatEnElHistorial()) apilarChatEnElHistorial(abierta.clave);
+  });
 
   // «Escribirle» desde una ficha: el chat nuevo. Siempre se abre el selector
   // antes de armar la conversación, aunque haya una sola línea: la vendedora
@@ -911,13 +1071,17 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
   }
 
   const vistaActiva = VISTAS.find((v) => v.id === vista)!;
+  const chatTapaLaLista = esMovil && abierta != null;
   const claseEntrada =
     'flex min-h-0 flex-1 flex-col duration-300 ease-house animate-in fade-in ' +
     (direccion === 'abajo' ? 'slide-in-from-bottom-1' : 'slide-in-from-top-1');
 
   return (
     <div className="flex h-dvh bg-background text-foreground">
-      {/* ── EL RIEL: ícono + nombre. Nadie navega adivinando. ── */}
+      {/* ── EL RIEL: ícono + nombre. Nadie navega adivinando. ──
+          En el celular no se monta: a 390 px se comería un quinto del ancho, y
+          ahí sólo existe Mensajes (ver `vistaElegida`). */}
+      {!esMovil && (
       <nav
         aria-label="Vistas"
         className="flex w-[4.75rem] shrink-0 flex-col items-center border-r border-border bg-card pb-3 pt-9"
@@ -980,9 +1144,48 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
           />
         </div>
       </nav>
+      )}
 
-      {/* ── EL CONTENIDO: barra fina arriba (título + línea de salud) y la vista ── */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* ── EL CONTENIDO: barra fina arriba (título + línea de salud) y la vista ──
+          `relative` y `--piso-movil` sólo con la píldora de campaña montada: ella
+          se mide contra esta columna, y lo que scrollea adentro (la cola, las
+          columnas del Pipeline) lee la variable para dejarle lugar abajo. Sin
+          píldora la variable no existe y el padding cae a 0: la Escuela queda igual. */}
+      <div
+        className={'flex min-w-0 flex-1 flex-col' + (barraMovil ? ' relative' : '')}
+        style={barraMovil ? ({ '--piso-movil': PISO_MOVIL } as CSSProperties) : undefined}
+      >
+        {esMovil ? (
+          /* EN EL CELULAR, LA CABECERA ES LA DE UNA SOLA VISTA: el escudo,
+             «Mensajes» y la cuenta, que sólo sirve para salir. Lo que la de
+             escritorio lleva a la derecha —el tema, el bot, los semáforos— no
+             entra: son lecturas de quien administra la mesa, no de quien
+             contesta desde el teléfono, y cada chip es una consulta más.
+             ⚠️ **El aviso de Cerberus SÍ entra**, y sólo cuando la sesión se
+             cayó: es lo único de esa barra que bloquea plata —sin él, la
+             vendedora registra una venta y no sabe por qué no queda—.
+             🔴 **Y la ventana de escritorio también llega acá**: Tauri deja
+             angostarla hasta 720 px (`src-tauri/tauri.conf.json`), así que entre
+             720 y 767 esta es SU cabecera. Por eso lleva la región de arrastre y,
+             adentro de Tauri, el `pt-8` que deja lugar a los semáforos de macOS
+             (la barra de título es `Overlay`); en el navegador, el
+             `safe-area-inset-top` es el notch de la PWA instalada. */
+          <header
+            className={
+              'flex shrink-0 items-center gap-2.5 border-b border-border bg-card pb-2.5 pl-4 pr-3 ' +
+              (enTauri() ? 'pt-8' : 'pt-[max(0.625rem,env(safe-area-inset-top))]')
+            }
+            style={ARRASTRABLE}
+            data-tauri-drag-region
+          >
+            <Escudo size={24} />
+            <TituloDeSeccion>{vistaActiva.label}</TituloDeSeccion>
+            <div className="ml-auto flex items-center gap-2" style={NO_ARRASTRABLE}>
+              {cerberusVivo === false && <AvisoCerberus usuario={vendedora.id} entrar={entrar} />}
+              <MenuMovil vendedora={vendedora} onSalir={salir} />
+            </div>
+          </header>
+        ) : (
         <header
           className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-3 pb-3 pt-8"
           style={ARRASTRABLE}
@@ -1021,6 +1224,7 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
             </div>
           </div>
         </header>
+        )}
 
         {/* La Bandeja vive SIEMPRE montada: ocultarla no es desmontarla.
 
@@ -1030,12 +1234,36 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
             centro no se toca: la conversación real es el punto. Por eso la
             revisión no es un modal: un modal tapa justamente lo que hay que
             mirar para poder decidir. */}
-        <div className={vista === 'bandeja' ? 'flex min-h-0 flex-1 gap-3 p-3' : 'hidden'}>
+        <div className={vista === 'bandeja' ? (esMovil ? 'flex min-h-0 flex-1' : 'flex min-h-0 flex-1 gap-3 p-3') : 'hidden'}>
           {/* La lista de revisión pide MENOS ancho que la cola: no tiene
               búsqueda, ni tabs, ni chips de categoría — solo quién y cuánto
               hace que espera. Devolverle esos 80 px al chat importa a 1280,
               donde el panel derecho ya se lleva 22,5rem. */}
-          <main className={'min-h-0 shrink-0 ' + (revision.activo ? 'w-[20rem]' : 'w-[25rem]')}>
+          {/*
+            🔴 **EL RIEL DE CANALES YA NO VIVE ACÁ (07-sep-2026, pedido del
+            dueño).** Vivía como columna fija, hermana de `<main>`, desde el
+            4-sep-2026 — y ese mismo ancho fue lo primero que se sacrificó
+            cuando el pedido nuevo fue meter Todos/WhatsApp/Facebook/… DENTRO
+            del contenedor de la cola, flotando desde un botón, para
+            devolverle a `<main>` la alineación de siempre contra la
+            navegación. Ahora `ColaUnificada` lo dibuja ella misma (ver su
+            docblock grande) — por eso `<main>` ya no tiene un hermano a la
+            izquierda, y por eso ya no le hacía falta ninguna condición de
+            `!revision.activo` acá: en revisión se monta `ColaRevision`, no
+            `ColaUnificada`, así que el riel desaparece solo con ella.
+          */}
+          {/* ══ EN EL CELULAR, LA LISTA NO SE DESMONTA CUANDO SE ABRE UN CHAT ══
+              Queda donde está, a pantalla completa, y el chat se dibuja ENCIMA
+              (`fixed`, en la `<section>` de abajo). Desmontarla —o esconderla con
+              `display: none`, que en Chrome tira el scroll a cero— haría que
+              volver pierda el scroll, la búsqueda y las páginas de «Ver más»: la
+              vendedora buscaría otra vez desde arriba a la persona siguiente.
+              `inert` la saca del foco y del lector de pantalla mientras está tapada. */}
+          <main
+            inert={chatTapaLaLista}
+            aria-hidden={chatTapaLaLista || undefined}
+            className={esMovil ? 'min-h-0 min-w-0 flex-1' : 'min-h-0 shrink-0 ' + (revision.activo ? 'w-[20rem]' : 'w-[25rem]')}
+          >
             {revision.activo ? (
               <ColaRevision
                 grupos={revision.grupos}
@@ -1053,7 +1281,7 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
             ) : (
               <ColaUnificada
                 seleccionada={abierta?.clave ?? null}
-                onSeleccionar={setAbierta}
+                onSeleccionar={abrirEnLaBandeja}
                 conversacionAbierta={abierta}
                 miVendedora={vendedora.id}
                 esDeCampana={vendedora.esDeCampana}
@@ -1062,10 +1290,36 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
               />
             )}
           </main>
-          <section className="min-h-0 min-w-0 flex-1">
+          {/* EN EL CELULAR, EL CHAT VA A PANTALLA COMPLETA, ENCIMA DE LA LISTA.
+              Es el MISMO `<section>` que en escritorio, sólo cambian sus clases:
+              cruzar el corte con el chat abierto (girar el teléfono) no lo
+              remonta ni se lleva el borrador. `hidden` —el atributo, no la
+              clase— mientras no hay nadie abierto: el vacío de «Elige a alguien
+              de la cola» es para la columna de escritorio, no para tapar la
+              lista.
+              ⚠️ **Esta caja sólo TAPA la lista y ANIMA la entrada; no le da alto
+              ni márgenes al hilo.** Por debajo de `md` cada hilo es `fixed` por su
+              cuenta y se mide contra `visualViewport` (el teclado de iOS no
+              achica `100dvh`), con el `safe-area-inset-bottom` en su propio pie.
+              Un padding de notch acá no le llegaría —un `fixed` ignora el padding
+              del padre— y sólo engañaría a quien lo lea. El `slide-in` sí lo
+              arrastra: mientras dura, la transformación vuelve a esta caja el
+              marco de sus hijos `fixed`, y como es `inset-0` el marco sigue
+              siendo la pantalla. */}
+          <section
+            hidden={esMovil && !abierta}
+            className={
+              esMovil
+                ? 'fixed inset-0 z-40 flex flex-col bg-card duration-200 ease-house animate-in slide-in-from-right'
+                : 'min-h-0 min-w-0 flex-1'
+            }
+          >
             <ConversacionActiva
               conversacion={abierta}
-              onCerrar={() => setAbierta(null)}
+              onCerrar={cerrarConversacion}
+              // La flecha de volver sólo en el celular: en escritorio la lista
+              // está al lado y no hay a dónde volver.
+              onVolver={esMovil ? cerrarConversacion : undefined}
               miVendedora={vendedora.id}
               senales={senales}
               /* «Abrir contacto» cuando el registro rápido detecta que esa
@@ -1092,7 +1346,10 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
               }
             />
           </section>
-          {abierta && (
+          {/* En el celular la ficha no se monta: no hay ancho para una tercera
+              columna, y montada detrás del chat pediría sus nueve consultas para
+              nada. */}
+          {!esMovil && abierta && (
             /* `relative` SOLO para anclar el trigger — no le agrega ningún
                estilo al contenido, es la envoltura mínima para poder poner el
                botón `absolute` sobre el borde sin que empuje nada adentro. */
@@ -1104,6 +1361,29 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
                 del panel (el pedido explícito), y por eso sigue en el MISMO
                 lugar tanto contraído como expandido — es lo que lo hace
                 encontrable para volver a abrir.
+
+                ══ MISMO BOTÓN, MISMO ÍCONO, MISMA FLECHA QUE EL FILTRO DE
+                CANALES DE MENSAJES (08-sep-2026, pedido del dueño) ══
+                Antes era su propio círculo `border border-border bg-card`
+                —blanco, sin peso, `size-6`— y dos íconos
+                (`ChevronLeft`/`ChevronRight`) intercambiados a mano. Ahora
+                usa `botonAzulClass` (`lib/styles.ts`, la MISMA cadena que el
+                filtro de canal y «chat nuevo» de Mensajes, no una copia
+                parecida) tal cual —`size-7` incluido, no un `size-6` propio:
+                «los mismos efectos» pedía igualarlo, no acercarlo— y un solo
+                `ChevronRight` que rota.
+
+                ⚠️ **El sentido es AL REVÉS del filtro de canales, a propósito
+                (corrección del mismo día, pedido del dueño)**: ahí «cerrado
+                apunta a la derecha» porque el riel se acopla A LA IZQUIERDA
+                del botón, así que la flecha señala hacia dónde está el
+                contenido que se va a revelar. Acá el panel vive A LA DERECHA
+                del botón, así que es la flecha en reposo (`ChevronRight`,
+                SIN rotar) la que ya apunta hacia donde el panel se revela —
+                oculto (`panelColapsado`) rota 180° y apunta a la IZQUIERDA en
+                cambio, señalando hacia el chat: «esto está guardado de este
+                lado». Dos paneles, cada flecha apunta hacia SU contenido, no
+                hacia una convención fija de qué lado es «abrir».
               */}
               <button
                 type="button"
@@ -1111,46 +1391,112 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
                 title={panelColapsado ? 'Mostrar la ficha del contacto' : 'Ocultar la ficha del contacto'}
                 aria-label={panelColapsado ? 'Mostrar la ficha del contacto' : 'Ocultar la ficha del contacto'}
                 aria-pressed={panelColapsado}
-                className="absolute left-0 top-1/2 z-10 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-[color,border-color,transform] duration-200 ease-house hover:border-primary/40 hover:text-navy-ink active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className={
+                  'absolute left-0 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
+                  botonAzulClass
+                }
               >
-                {panelColapsado ? <ChevronLeft size={13} strokeWidth={2} /> : <ChevronRight size={13} strokeWidth={2} />}
+                <ChevronRight
+                  size={15}
+                  aria-hidden="true"
+                  className={'transition-transform duration-200 ' + (panelColapsado ? 'rotate-180' : '')}
+                />
               </button>
 
-              {!panelColapsado && (
-                // 22.5rem = 360 px: el ancho para el que está diseñado el panel
-                // multifunción (antes 18rem, que solo daba para la ficha).
-                <aside className="flex min-h-0 w-[22.5rem] shrink-0 flex-col gap-3">
-                  {/* EL PORQUÉ DE LA SUGERENCIA, arriba del panel y no en vez de él:
-                      «por qué se sugiere esto» y «quién es esta persona» son dos
-                      preguntas y se contestan las dos. Bloque aparte a propósito —
-                      el panel multifunción (ADR 0017) es de otro frente y este
-                      cambio no toca ninguno de sus archivos. Cuando convenga, esto
-                      se vuelve una pestaña suya: el contenido ya está aislado y no
-                      depende de dónde se monte.
+              {/*
+                ══ SIEMPRE MONTADO MIENTRAS DURA LA TRANSICIÓN, NO DE UN
+                SALTO (corrección del mismo día, pedido del dueño: «se abre y
+                se cierra muy de golpe») ══
+                `panelMontado` decide si esto existe (`PanelDerecho` deja de
+                pedir datos apenas la transición de cierre termina, ver el
+                docblock grande de `panelMontado` más arriba); `panelExpandido`
+                decide el ANCHO — las dos cosas por separado son lo que
+                permite animar los dos sentidos con un componente que, a
+                diferencia de `RielDeCanales`, sí cuesta mantener vivo.
+                `inert`/`aria-hidden` mientras se achica: nada tabulable ni
+                anunciado durante el medio segundo que dura el cierre.
 
-                      Solo aparece en revisión, así que fuera del modo el panel
-                      ocupa la columna entera como siempre. */}
-                  {revision.activo && revision.actual && revision.actual.clave === abierta.clave && (
-                    <PorQueEstaSugerencia sugerencia={revision.actual} limites={limitesAuto} />
-                  )}
-                  {/* El panel se queda con lo que sobra y scrollea adentro, como
-                      siempre: el bloque del porqué es `shrink-0` y él `flex-1`. Sin
-                      esto, apilarlos dejaba al de abajo aplastado a media frase. */}
-                  <div className="min-h-0 flex-1">
-                    {/* `miVendedora` viaja como prop y no llamando a `useSesion()`
-                        adentro: ese hook hace su propio `fetch` a `/api/auth/yo`
-                        al montar (no es react-query), así que ahí abajo sería un
-                        request más por cada conversación que se abre. Lo necesita
-                        el timeline para saber cuáles eventos puedes editar. */}
-                    <PanelDerecho
-                      conversacion={abierta}
-                      miVendedora={vendedora.id}
-                      esDeCampana={vendedora.esDeCampana}
-                      onMandarCorreo={mandarCorreoA}
-                      senalNotas={senales.notas}
-                    />
-                  </div>
-                </aside>
+                🔴 **`ease-house` SOLO EN EL CIERRE, NO EN LA APERTURA
+                (corrección del mismo día: «se sigue abriendo abruptamente»,
+                medido con capturas cuadro a cuadro)** — misma duración
+                (240 ms) que el riel de canales, y aun así se veía distinto:
+                `ease-house` (`cubic-bezier(0.32, 0.72, 0, 1)`) llega al 72 %
+                del recorrido al 32 % del tiempo, y en 72px (el riel) eso pasa
+                inadvertido — en 360px (este panel) son ~260px de golpe en
+                los primeros 40 ms y el resto del medio segundo casi sin
+                movimiento: el ojo lo lee como un salto con un temblor al
+                final, no como un despliegue. Cerrando, la misma curva SÍ se
+                sintió bien (confirmado, pedido del dueño): un cierre que
+                arranca rápido lee como «se guardó», no como «se rompió» — es
+                la asimetría de percepción entre abrir y cerrar, no un
+                defecto de la curva. Por eso la curva depende de
+                `panelExpandido`: abriendo usa `ease-in-out`
+                (`cubic-bezier(0.4,0,0.2,1)`, el estándar parejo — reparte el
+                recorrido a lo largo de TODO el medio segundo), cerrando
+                sigue con `ease-house`.
+
+                🔴 **Y la duración TAMBIÉN es asimétrica (corrección del mismo
+                día: «casi lo siento igual, mejora los tiempos»)** — con la
+                curva corregida, 240 ms en las dos direcciones seguía leyéndose
+                parecido: es la MISMA asimetría de percepción de arriba,
+                aplicada a la duración y no sólo a la forma de la curva. Abrir
+                es «algo está llegando» y tolera —pide— más tiempo para leerse
+                como un despliegue; cerrar es «esto se guarda» y un tramo
+                corto es justo lo que lo hace sentir resuelto, no lento. Por
+                eso 380 ms al abrir (bien por encima de los 240 ms del riel de
+                canales, a propósito: éste es 5× más ancho) y 220 ms al
+                cerrar. `panelMontado` (más arriba) desmonta a los 220 ms —
+                atado al cierre, que es la única dirección que de verdad
+                necesita el temporizador.
+              */}
+              {panelMontado && (
+                <div
+                  inert={!panelExpandido}
+                  aria-hidden={!panelExpandido}
+                  className={
+                    'flex min-h-0 shrink-0 flex-col overflow-hidden transition-[width,opacity] ' +
+                    (panelExpandido ? 'duration-[380ms] opacity-100 ease-in-out' : 'duration-[220ms] opacity-0 ease-house')
+                  }
+                  style={{ width: panelExpandido ? '22.5rem' : 0 }}
+                >
+                  {/* 22.5rem = 360 px: el ancho para el que está diseñado el panel
+                      multifunción (antes 18rem, que solo daba para la ficha). Fijo
+                      acá adentro (no en el wrapper de arriba, que es el que anima):
+                      es lo que deja que el `overflow-hidden` de afuera recorte el
+                      contenido en vez de que el contenido se achique con él. */}
+                  <aside className="flex h-full min-h-0 w-[22.5rem] shrink-0 flex-col gap-3">
+                    {/* EL PORQUÉ DE LA SUGERENCIA, arriba del panel y no en vez de él:
+                        «por qué se sugiere esto» y «quién es esta persona» son dos
+                        preguntas y se contestan las dos. Bloque aparte a propósito —
+                        el panel multifunción (ADR 0017) es de otro frente y este
+                        cambio no toca ninguno de sus archivos. Cuando convenga, esto
+                        se vuelve una pestaña suya: el contenido ya está aislado y no
+                        depende de dónde se monte.
+
+                        Solo aparece en revisión, así que fuera del modo el panel
+                        ocupa la columna entera como siempre. */}
+                    {revision.activo && revision.actual && revision.actual.clave === abierta.clave && (
+                      <PorQueEstaSugerencia sugerencia={revision.actual} limites={limitesAuto} />
+                    )}
+                    {/* El panel se queda con lo que sobra y scrollea adentro, como
+                        siempre: el bloque del porqué es `shrink-0` y él `flex-1`. Sin
+                        esto, apilarlos dejaba al de abajo aplastado a media frase. */}
+                    <div className="min-h-0 flex-1">
+                      {/* `miVendedora` viaja como prop y no llamando a `useSesion()`
+                          adentro: ese hook hace su propio `fetch` a `/api/auth/yo`
+                          al montar (no es react-query), así que ahí abajo sería un
+                          request más por cada conversación que se abre. Lo necesita
+                          el timeline para saber cuáles eventos puedes editar. */}
+                      <PanelDerecho
+                        conversacion={abierta}
+                        miVendedora={vendedora.id}
+                        esDeCampana={vendedora.esDeCampana}
+                        onMandarCorreo={mandarCorreoA}
+                        senalNotas={senales.notas}
+                      />
+                    </div>
+                  </aside>
+                </div>
               )}
             </div>
           )}
@@ -1168,12 +1514,13 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
             <Suspense fallback={<div className="min-h-0 flex-1" aria-busy="true" />}>
             {vista === 'dashboard' && (
               <VistaDashboard
-                onAbrir={abrirConversacion}
-                onBuscarPersona={buscarPersona}
-                onIrAgenda={() => cambiarVista('agenda')}
-                miVendedora={vendedora.id}
                 esDeCampana={vendedora.esDeCampana}
-                onMandarCorreo={mandarCorreoA}
+                // Cada cifra de «Hoy» abre el Pipeline con su recorte (ADR 0104):
+                // el puente lo consume `VistaEmbudo` y lo limpia al usarlo.
+                onAbrirPipeline={(p) => {
+                  setPuente(p);
+                  cambiarVista('embudo');
+                }}
               />
             )}
             {/* El drop en Cierre/Cotizados abre su modal DENTRO del Pipeline (#60);
@@ -1189,6 +1536,10 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
                 // sin este cable, «Escribirle» aparecería en una pantalla y no
                 // en la otra sobre la misma ficha.
                 onMandarCorreo={mandarCorreoA}
+                // El puente desde el Dashboard (ADR 0104): cada cifra de «Hoy»
+                // abre el Pipeline ya recortado; la vista lo aplica y lo limpia.
+                recorteInicial={puente?.tipo === 'pipeline' ? puente : null}
+                onConsumido={() => setPuente(null)}
               />
             )}
             {vista === 'agenda' && (
@@ -1208,10 +1559,9 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
                 que sí tiene. */}
             {vista === 'personas' &&
               (vendedora.esDeCampana ? (
-                <VistaContactosCampana esCandidato={vendedora.esCandidato} onEscribir={escribirA} />
+                <VistaContactosCampana onEscribir={escribirA} />
               ) : (
                 <VistaPersonas
-                  telefonoInicial={telefonoPersonas}
                   onEscribir={escribirA}
                   miVendedora={vendedora.id}
                   // Baja hasta la `HojaContacto` del padrón: la tercera pantalla
@@ -1229,7 +1579,11 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
                 síntoma de olvidarse es inconfundible (aparece detrás del
                 navegador), y por eso no hay un registro global que pueda
                 desincronizarse en silencio. */}
-            {vista === 'navegador' && <VistaNavegador tapado={cabina} />}
+            {vista === 'navegador' && <VistaNavegador tapado={cabina || hayLlamadaALaVista} />}
+            {/* Su propio Suspense: si compartiera el de las vistas, cargar la barra mostraría el esqueleto de la vista. */}
+            <Suspense fallback={null}>
+              <BarraDeLlamada />
+            </Suspense>
             {vista === 'productos' && <VistaProductos />}
             {vista === 'llamadas' && <VistaLlamadas miVendedoraId={vendedora.id} />}
             {/* Vacía a propósito (ver su archivo). Quién la ve se decide en el
@@ -1277,6 +1631,19 @@ function AppAutenticada({ vendedora, reintentar, entrar, salir, cerberusVivo }: 
             )}
             </Suspense>
           </div>
+        )}
+
+        {/* ══ LA PÍLDORA DE ABAJO DEL CELULAR, SÓLO PARA CAMPAÑA (ADR 0113) ══
+            Flota sobre esta columna (`absolute`), y lo que scrollea le deja
+            lugar por `--piso-movil` (arriba). `hidden` —el atributo— mientras
+            un chat tapa la lista: el chat es `fixed` y la cubriría igual, pero
+            sin esto seguiría en el orden de foco y en el lector de pantalla. */}
+        {barraMovil && (
+          <BarraDeNavegacionMovil
+            activa={vista === 'embudo' ? 'embudo' : 'bandeja'}
+            onElegir={cambiarVista}
+            hidden={chatTapaLaLista}
+          />
         )}
       </div>
 

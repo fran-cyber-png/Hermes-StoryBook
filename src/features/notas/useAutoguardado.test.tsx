@@ -55,7 +55,7 @@ function Anfitrion({ puertas, idInicial = null }: { puertas: PuertasDeGuardado; 
     puertas,
     alCrear: setId,
   });
-  const r = renglonDeEstado(estado, false);
+  const r = renglonDeEstado(estado, null);
   return (
     <div>
       <button type="button" onClick={() => alCambiar({ doc: { escrito: true } })}>

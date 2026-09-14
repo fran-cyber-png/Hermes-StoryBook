@@ -17,6 +17,8 @@ export interface HechoRecomendado {
   clave: string;
   rotulo: string;
   texto: string;
+  /** La imagen del dato — OPCIONAL. `null`/`undefined` = el dato es solo texto. */
+  imagen?: { archivo: string; mime: string; nombre: string | null } | null;
   momentos: string[];
   orden: number;
 }

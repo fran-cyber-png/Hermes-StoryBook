@@ -199,9 +199,11 @@ describe('con sesión y el stream vivo, los cinco polls de la raíz siguen el la
      * dan 3 — el mínimo posible con un solo observador. Autorespuesta y bot lo
      * tocan justo: sus dos observadores (`AppAutenticada` + su chip de
      * header) nacen en el MISMO render y dedupan. `sesion` y `agenda` dan uno
-     * más (4): sus segundos observadores viven en `VistaDashboard`, que es
-     * PEREZOSA — monta un tick después del header, así que su timer no queda
-     * sincronizado con el del header y agrega un pedido de más.
+     * más (4): sus segundos observadores VIVÍAN en `VistaDashboard`, que es
+     * PEREZOSA: montaba un tick después del header y su timer no quedaba
+     * sincronizado con el del header. Desde ADR 0104 el Dashboard ya no pide la
+     * agenda ni la sesión (se fueron las píldoras y la ficha), así que hoy dan 3;
+     * el techo de 4 se deja como estaba.
      *
      * ⚠️ **El plan estimó ≤ 12 en total asumiendo un observador por clave**
      * (`docs/plan-borrar-el-polling.md` §6, PR 0). Medido con la app real, la

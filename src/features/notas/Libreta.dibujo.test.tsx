@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { act } from 'react';
-import { esperarA, montar, reposar, tocar, type Montado } from '../../pruebas/dom';
+import { esperarA, montar, reposar, teclear, tocar, type Montado } from '../../pruebas/dom';
 import { Libreta } from './Libreta';
 
 /**
@@ -132,9 +132,9 @@ const barra = () => document.querySelector('[role="toolbar"][aria-label="Herrami
 const capa = () => document.querySelector('canvas');
 /**
  * 🔴 SE BUSCA DENTRO DE LA BARRA, no en todo el documento. «Deshacer» no es un
- * nombre exclusivo de acá: el toast de archivar tiene el suyo (`Libreta.tsx`) y
- * el diagrama otro (`DiagramaDePagina.tsx`), así que un `querySelector` global
- * devuelve el PRIMERO del documento —habilitado— y el test terminaría afirmando
+ * nombre exclusivo de acá: el toast de archivar tiene el suyo (`Libreta.tsx`),
+ * así que un `querySelector` global devuelve el PRIMERO del documento
+ * —habilitado— y el test terminaría afirmando
  * sobre un botón que no es el que está probando. Ya pasó una vez, con el
  * «Deshacer» de la Ribbon que después se retiró: el nombre repetido es la
  * situación normal, no un caso raro.
@@ -148,6 +148,10 @@ function botonQueDice(texto: string): HTMLElement | undefined {
 
 async function abrir(titulo: string) {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  await esperarA(() => Boolean(botonQueDice('Todas las páginas')), 'llegó el riel');
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice(titulo)), `llegó «${titulo}»`);
   botonQueDice(titulo)?.click();
   /**
@@ -167,6 +171,8 @@ async function abrir(titulo: string) {
 
 test('sin una página abierta no hay capa ni barra', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  await esperarA(() => Boolean(botonQueDice('Todas las páginas')), 'llegó el riel');
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('precios del diplomado')), 'llegó la lista');
 
   expect(capa()).toBeNull();
@@ -268,6 +274,9 @@ test('🔴 la herramienta elegida NO cruza de una página a otra', async () => {
   await reposar();
   expect(herramienta('Lápiz')?.getAttribute('aria-pressed')).toBe('true');
 
+  // Elegir una página CIERRA el panel — hay que volver a abrirlo para la segunda.
+  botonQueDice('Todas las páginas')?.click();
+  await esperarA(() => Boolean(botonQueDice('ruta al local')), 'el panel volvió a abrirse');
   botonQueDice('ruta al local')?.click();
   await reposar();
 
@@ -300,6 +309,9 @@ test('«Borrar todo» está apagado en una página sin anotar y prendido en una 
   await abrir('precios del diplomado');
   expect(herramienta('Borrar todo')?.disabled, 'sin nada dibujado').toBe(true);
 
+  // Elegir una página CIERRA el panel — hay que volver a abrirlo para la segunda.
+  botonQueDice('Todas las páginas')?.click();
+  await esperarA(() => Boolean(botonQueDice('ruta al local')), 'el panel volvió a abrirse');
   botonQueDice('ruta al local')?.click();
   await reposar();
 
@@ -488,6 +500,102 @@ test('🔴 con una sola capa, «Eliminar» está apagado en su menú', async () 
   expect(eliminar.disabled).toBe(true);
 });
 
+test('🔴 el menú «⋯» de una capa se porta afuera de la lista que scrollea, no queda recortado', async () => {
+  await abrir('precios del diplomado');
+  tocar(herramienta('Panel de capas')!);
+  await reposar();
+
+  tocar(document.querySelector('[aria-label="Opciones de la capa"]') as HTMLElement);
+  await reposar();
+
+  const menu = document.querySelector('[role="menu"][aria-label="Opciones de la capa"]') as HTMLElement;
+  expect(menu, 'no se abrió el menú').toBeTruthy();
+  // La lista de capas (`<ul>`) es la que scrollea y recorta a sus
+  // descendientes con `overflow-y-auto` — un menú `absolute` colgado ahí
+  // adentro quedaba tapado por la fila de abajo. Por eso tiene que vivir
+  // AFUERA de ella, en `position: fixed`.
+  expect(document.querySelector('[role="dialog"][aria-label="Capas"] ul')!.contains(menu)).toBe(false);
+  expect(menu.style.position).toBe('fixed');
+});
+
+test('🔴 «Mover selección aquí» está apagado sin nada elegido', async () => {
+  await abrir('precios del diplomado');
+  tocar(herramienta('Panel de capas')!);
+  await reposar();
+
+  tocar(document.querySelector('[aria-label="Opciones de la capa"]') as HTMLElement);
+  await reposar();
+
+  const mover = [...document.querySelectorAll('[role="menuitem"]')].find((b) =>
+    b.textContent?.includes('Mover selección aquí'),
+  ) as HTMLButtonElement;
+  expect(mover, 'falta la opción en el menú').toBeTruthy();
+  // Sin nada elegido en el lienzo, no hay qué mover.
+  expect(mover.disabled).toBe(true);
+});
+
+test('🔴 «Nueva» con algo elegido se lo lleva: no hay que volver a elegirlo después', async () => {
+  await abrir('con una caja');
+  tocar(herramienta('Seleccionar y mover')!);
+  await reposar();
+
+  // ⌘A elige todo lo que hay en el lienzo — acá, la única caja de la página.
+  teclear('a', { target: capa()!, ctrl: true });
+  await reposar();
+
+  tocar(herramienta('Panel de capas')!);
+  await reposar();
+  tocar(document.querySelector('[aria-label="Nueva capa"]') as HTMLElement);
+  await reposar();
+
+  const filas = document.querySelectorAll('[role="dialog"][aria-label="Capas"] li');
+  expect(filas).toHaveLength(2);
+  // Arriba la nueva (activa): se llevó la caja elegida. Abajo, la vieja, vacía.
+  expect(filas[0].textContent).toContain('1 objeto');
+  expect(filas[1].textContent).toContain('0 objetos');
+});
+
+test('🔴 «Mover selección aquí» manda lo elegido a la capa que se clickeó, sin activarla', async () => {
+  await abrir('con una caja');
+  tocar(herramienta('Panel de capas')!);
+  await reposar();
+  tocar(document.querySelector('[aria-label="Nueva capa"]') as HTMLElement);
+  await reposar();
+
+  // Vuelve a activar la VIEJA (donde está la caja): quedó activa la nueva al
+  // crearla, y ese es el otro camino (el de «Nueva») — este test es del menú.
+  let filas = document.querySelectorAll('[role="dialog"][aria-label="Capas"] li');
+  tocar(filas[1]);
+  await reposar();
+
+  tocar(herramienta('Seleccionar y mover')!);
+  await reposar();
+  // ⌘A elige todo lo que hay en el lienzo — acá, la única caja de la página.
+  teclear('a', { target: capa()!, ctrl: true });
+  await reposar();
+
+  filas = document.querySelectorAll('[role="dialog"][aria-label="Capas"] li');
+  expect(filas[1].getAttribute('aria-current'), 'la vieja, con la caja, vuelve a estar activa').toBe('true');
+
+  // Pide mover la selección hacia la capa NUEVA (arriba) desde su propio
+  // menú «⋯» — sin que esa capa sea la activa.
+  tocar(filas[0].querySelector('[aria-label="Opciones de la capa"]') as HTMLElement);
+  await reposar();
+  tocar(
+    [...document.querySelectorAll('[role="menuitem"]')].find((b) =>
+      b.textContent?.includes('Mover selección aquí'),
+    ) as HTMLButtonElement,
+  );
+  await reposar();
+
+  filas = document.querySelectorAll('[role="dialog"][aria-label="Capas"] li');
+  expect(filas[0].textContent, 'la caja se mudó a la capa nueva').toContain('1 objeto');
+  expect(filas[1].textContent, 'la vieja quedó vacía').toContain('0 objetos');
+  // Y la ACTIVA no cambió: mover no es lo mismo que activar.
+  expect(filas[1].getAttribute('aria-current')).toBe('true');
+  expect(filas[0].getAttribute('aria-current')).toBe('false');
+});
+
 test('🔴 cada capa muestra una MINIATURA de su contenido', async () => {
   await abrir('precios del diplomado');
   tocar(herramienta('Panel de capas')!);
@@ -541,6 +649,53 @@ test('el orden Z está apagado sin selección', async () => {
   tocar(herramienta('Panel de capas')!);
   await reposar();
   expect((document.querySelector('[aria-label="Traer al frente"]') as HTMLButtonElement).disabled).toBe(true);
+});
+
+test('el panel distingue el orden del OBJETO del orden de la CAPA', async () => {
+  await abrir('precios del diplomado');
+  tocar(herramienta('Panel de capas')!);
+  await reposar();
+
+  // La fuente más común de confusión del panel: sin este rótulo, las cuatro
+  // flechas de abajo parecen mover la capa y en realidad mueven un objeto
+  // dentro de ella — con una figura sola por capa, no hacen nada visible.
+  expect(document.querySelector('[role="dialog"][aria-label="Capas"]')!.textContent).toContain('Orden del objeto');
+});
+
+test('🔴 «Orden de la capa» está a la vista (no solo en el «⋯») y sube la capa ACTIVA sin elegir nada', async () => {
+  await abrir('con una caja');
+  tocar(herramienta('Panel de capas')!);
+  await reposar();
+  tocar(document.querySelector('[aria-label="Nueva capa"]') as HTMLElement);
+  await reposar();
+
+  // «Capa 1» (con la caja) vuelve a quedar activa: al crearla quedó activa la nueva.
+  let filas = document.querySelectorAll('[role="dialog"][aria-label="Capas"] li');
+  tocar(filas[1]);
+  await reposar();
+
+  // Sin abrir ningún menú ni elegir nada en el lienzo: el botón está a la vista.
+  const subir = document.querySelector('[aria-label="Subir capa (queda más adelante)"]') as HTMLButtonElement;
+  expect(subir, 'el control tiene que verse sin abrir el «⋯»').toBeTruthy();
+  tocar(subir);
+  await reposar();
+
+  filas = document.querySelectorAll('[role="dialog"][aria-label="Capas"] li');
+  expect(filas[0].textContent, 'la activa subió al tope').toContain('Capa 1');
+});
+
+test('«Orden de la capa» se apaga en los extremos, igual que el del objeto', async () => {
+  await abrir('precios del diplomado');
+  tocar(herramienta('Panel de capas')!);
+  await reposar();
+
+  const subir = document.querySelector('[aria-label="Subir capa (queda más adelante)"]') as HTMLButtonElement;
+  const bajar = document.querySelector('[aria-label="Bajar capa (queda más atrás)"]') as HTMLButtonElement;
+  expect(subir, 'falta el botón a la vista').toBeTruthy();
+  expect(bajar, 'falta el botón a la vista').toBeTruthy();
+  // Con una sola capa, es a la vez la de más adelante y la del fondo.
+  expect(subir.disabled).toBe(true);
+  expect(bajar.disabled).toBe(true);
 });
 
 /* ── Cajas de texto ────────────────────────────────────────────────────────── */

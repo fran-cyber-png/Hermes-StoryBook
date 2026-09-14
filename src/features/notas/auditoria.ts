@@ -8,7 +8,7 @@ import type { Alcance, Permiso } from './notas';
  *
  * El vocabulario y los números viven en el SERVER (`espacios/auditoriaLink.ts`):
  * acá solo se decide **cómo se dice cada cosa**. Es la misma separación que los
- * motivos del bot (`features/canales/bot.ts`) y los tipos de evento de contacto
+ * motivos del bot (`dominio/bot.ts`) y los tipos de evento de contacto
  * (ADR 0037), y por el mismo motivo: un `switch` adentro de un componente no se
  * puede interrogar sobre el valor que todavía no existe.
  *

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { montar, type Montado } from '../../pruebas/dom';
 import { BarraFiltros } from './BarraFiltros';
+import { opcionesDeLinea } from './alcance';
 import { LINEA_MIAS } from '../../dominio/cola';
 
 /**
@@ -52,6 +53,21 @@ function pintar(props: Partial<Parameters<typeof BarraFiltros>[0]> = {}) {
   );
   return montado.contenedor;
 }
+
+/**
+ * LA COMPOSICIÓN QUE HACE LA PANTALLA, TAL CUAL — `ColaUnificada` resuelve las
+ * opciones con `opcionesDeLinea` y le pasa a la barra el resultado.
+ *
+ * ⚠️ **Se compone acá y no se escriben opciones a mano** a propósito: lo que
+ * estos tests cuidan es que la salida de la REGLA llegue a la pantalla. Con
+ * opciones literales seguirían verdes con la regla rota, que es exactamente el
+ * agujero que el ADR 0024 describe.
+ */
+const conLineas = (
+  lineas: Parameters<typeof opcionesDeLinea>[0],
+  hayMias: boolean,
+  veTodo = false,
+) => ({ opciones: opcionesDeLinea(lineas, hayMias, veTodo) });
 
 const rotulos = (c: HTMLElement) =>
   Array.from(c.querySelectorAll('[data-chip]')).map((b) => b.textContent?.trim() ?? '');
@@ -143,7 +159,7 @@ describe('las etiquetas ganan el lugar de los tres chips retirados', () => {
  */
 describe('el segmentado de línea', () => {
   it('sin líneas propias ofrece «Todas» y las cuatro: fail-open, como siempre', () => {
-    const texto = rotulos(pintar({ lineas: LINEAS, onLinea: () => {}, hayMias: false })).join('|');
+    const texto = rotulos(pintar({ ...conLineas(LINEAS, false), onLinea: () => {} })).join('|');
     expect(texto).toContain('Todas');
     expect(texto).toContain('Escuela');
     expect(texto).toContain('Bot');
@@ -155,7 +171,7 @@ describe('el segmentado de línea', () => {
    */
   it('con UNA línea propia el selector no se dibuja — ni «Todas» ni las ajenas', () => {
     const texto = rotulos(
-      pintar({ lineas: LINEAS, onLinea: () => {}, hayMias: true, onListas: () => {} }),
+      pintar({ ...conLineas(LINEAS, true), onLinea: () => {}, onListas: () => {} }),
     ).join('|');
     expect(texto).not.toContain('Todas');
     expect(texto).not.toContain('Escuela');
@@ -164,9 +180,29 @@ describe('el segmentado de línea', () => {
     expect(texto).toContain('listas');
   });
 
+  /**
+   * 🔴 EL DEFECTO DEL 7-SEP-2026, EN LA PANTALLA.
+   *
+   * `alex` es supervisor y el mapa le asigna UNA línea, así que caía justo en el
+   * caso de arriba: sin selector y clavado a Ventas Meta. Su cola decía «2.346
+   * en cola» —el conteo exacto de esa línea— mientras el server le servía las
+   * 7.178 de la mesa entera.
+   *
+   * Con el rol puesto vuelve el control **y «Todas» es la PRIMERA**, porque
+   * `lineaEfectiva` cae a `opciones[0]` cuando lo guardado ya no está: si
+   * arrancara en «Las mías», el arreglo reproduciría el defecto con otro nombre.
+   */
+  it('quien supervisa con UNA línea propia recupera el selector, con «Todas» adelante', () => {
+    const c = pintar({ ...conLineas(LINEAS, true, true), onLinea: () => {} });
+    const chips = rotulos(c);
+    expect(chips[0]).toBe('Todas');
+    expect(chips.join('|')).toContain('Las mías');
+    expect(chips.join('|')).toContain('Escuela');
+  });
+
   it('con VARIAS propias sí hay elección: «Las mías» + las suyas, sin «Todas»', () => {
     const dosPropias = LINEAS.map((l) => ({ ...l, mias: true }));
-    const c = pintar({ lineas: dosPropias, onLinea: () => {}, hayMias: true });
+    const c = pintar({ ...conLineas(dosPropias, true), onLinea: () => {} });
     const texto = rotulos(c).join('|');
     expect(texto).toContain('Las mías');
     expect(texto).toContain('Escuela');
@@ -175,7 +211,7 @@ describe('el segmentado de línea', () => {
 
   it('«Las mías» manda el valor reservado del MISMO eje, no una bandera aparte', () => {
     const onLinea = vi.fn();
-    const c = pintar({ lineas: LINEAS.map((l) => ({ ...l, mias: true })), onLinea, hayMias: true });
+    const c = pintar({ ...conLineas(LINEAS.map((l) => ({ ...l, mias: true })), true), onLinea });
     const boton = Array.from(c.querySelectorAll<HTMLButtonElement>('[data-chip]')).find((b) =>
       b.textContent?.includes('Las mías'),
     );
@@ -196,7 +232,7 @@ describe('el segmentado de línea', () => {
    * segmentado adentro de la pista de los filtros—, y eso es lo que se mira.
    */
   it('la línea y los filtros viven en pistas SEPARADAS', () => {
-    const c = pintar({ lineas: LINEAS, onLinea: () => {}, hayMias: false, conteos: { botEscalada: 3 } });
+    const c = pintar({ ...conLineas(LINEAS, false), onLinea: () => {}, conteos: { botEscalada: 3 } });
     const pistas = Array.from(c.querySelectorAll<HTMLElement>('[role="toolbar"]'));
     expect(pistas).toHaveLength(2);
 
@@ -211,16 +247,15 @@ describe('el segmentado de línea', () => {
   it('sin selector de línea queda UNA sola pista: la de los filtros', () => {
     // Con una línea propia el segmentado no se dibuja (regla de `alcance.ts`), y
     // entonces no hay por qué gastar los 26 px de una fila vacía.
-    const c = pintar({ lineas: LINEAS, onLinea: () => {}, hayMias: true, conteos: { botEscalada: 3 } });
+    const c = pintar({ ...conLineas(LINEAS, true), onLinea: () => {}, conteos: { botEscalada: 3 } });
     expect(c.querySelectorAll('[role="toolbar"]')).toHaveLength(1);
   });
 
   it('lo activo se ve activo, y se cambia de línea con un click', () => {
     const onLinea = vi.fn();
     const c = pintar({
-      lineas: LINEAS.map((l) => ({ ...l, mias: true })),
+      ...conLineas(LINEAS.map((l) => ({ ...l, mias: true })), true),
       onLinea,
-      hayMias: true,
       lineaActiva: LINEA_MIAS,
     });
     const botones = Array.from(c.querySelectorAll<HTMLButtonElement>('[data-chip]'));

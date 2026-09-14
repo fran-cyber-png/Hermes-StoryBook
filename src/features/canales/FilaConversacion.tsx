@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type Ref } from 'react';
-import { Bot, Check, Hourglass, Pin, Star, UserRound } from 'lucide-react';
-import { temperatureOf, TEMPERATURE_META } from '../leads/temperature';
+import { Bot, Check, ClipboardList, Hourglass, Link2, Megaphone, Pin, Star, UserRound } from 'lucide-react';
 import { hace } from '../../lib/datos/frescura';
-import { formatoTelefono, horasDesde } from '../../lib/formato';
+import { formatoTelefono, horasDesde, SEMAFORO_META } from '../../lib/formato';
 import { textoDePreview } from '../../lib/preview';
 import { ETAPA_CHIP, rotuloEtapa } from '../../lib/etapas';
 import {
@@ -14,16 +13,18 @@ import {
   resolverColor,
 } from '../../dominio/paletaCategorias';
 import { cursoDeFila, detalleDeCurso } from '../../dominio/curso';
+import { deDondeVino, type ClaseOrigen } from '../../dominio/origen';
 import { marcaDeCliente, type NivelCliente } from '../../dominio/cliente';
-import { marcaDelBot, type TonoBot } from './bot';
+import { marcaDelBot, type TonoBot } from '../../dominio/bot';
 import { nombreCorto } from '../../dominio/dueno';
 import { PildoraCanal } from '../../components/BadgeCanal';
 import { Avatar } from '../../components/Avatar';
 import { VENTANA_DIAS } from './types';
 import { ayudaDeAntiguedad, lecturaDeVentana, plazoDuro, type ColorVentana } from '../../dominio/ventana';
-import type { Conversacion } from '../../dominio/conversaciones';
+import { idDeComentario, type Conversacion } from '../../dominio/conversaciones';
 import { transporteDeLinea, type LineaWhatsapp } from '../../dominio/lineas';
 import { esPrioritaria, quiereFoto, siguienteConFoto } from '../../dominio/fotoVisible';
+import { PastillaRespondido, PastillaTieneAbierto } from './PastillasDelComentario';
 
 /**
  * Prende `conFoto` con el propio IntersectionObserver de la fila (guardarraíl
@@ -116,6 +117,46 @@ const CLASE_BOT: Record<TonoBot, string> = {
 };
 
 /**
+ * DE DÓNDE VINO — el ícono de cada clase de origen (`dominio/origen.ts`).
+ *
+ * `desconocido` NO tiene ícono, y eso es la mitad del diseño: los tres estados
+ * que se saben se dibujan con fondo lleno y un glifo, y el que no se sabe se
+ * dibuja como un **contorno punteado vacío**. La forma dice «acá falta un dato»
+ * sin gastar un color — y no puede gastarlo, porque el único color que le
+ * quedaría libre a una señal permanente sería el oro, y en Hermes el oro
+ * significa una sola cosa: tiempo que se acaba. Un origen no es un reloj.
+ */
+const ICONO_ORIGEN: Record<ClaseOrigen, typeof Megaphone | null> = {
+  anuncio: Megaphone,
+  landing: Link2,
+  formulario: ClipboardList,
+  desconocido: null,
+};
+
+/**
+ * 🔴 **LAS DOS CAJAS MIDEN LO MISMO DE ALTO, Y ESTÁ HECHO A PROPÓSITO.**
+ *
+ * La llena lleva `py-px` (1 px arriba + 1 abajo) y la punteada lleva `py-0` con
+ * `border` (1 px arriba + 1 abajo): **2 px en los dos casos**. Si la punteada
+ * conservara el `py-px` de sus hermanas, el borde le sumaría 2 px y la fila
+ * entera crecería — sólo en las filas sin origen, o sea en la mayoría, y esa es
+ * exactamente la clase de diferencia que el rediseño del 28-ago-2026 vino a
+ * matar («una fila iba de 66 px a 84, a 102 según qué le tocara»).
+ *
+ * Se copian las clases de CAJA de la píldora que ya existe, nunca un alto
+ * clavado: mismo criterio que el hueco invisible del final del renglón.
+ * **Medido en Chromium el 7-sep-2026 sobre la galería: 17,75 px las cuatro.**
+ *
+ * ⚠️ **Dos constantes y no un `Record<ClaseOrigen, string>`**: eran cuatro
+ * claves con tres strings IDÉNTICOS, o sea un mapa que fingía cuatro casos donde
+ * el eje real es uno solo — **se sabe o no se sabe**. Con el mapa, agregar una
+ * clase obligaba a copiar el mismo string por cuarta vez, y nada impedía que la
+ * copia nueva saliera distinta de las otras tres.
+ */
+const CAJA_SABIDO = 'bg-muted py-px text-muted-foreground';
+const CAJA_DESCONOCIDO = 'border border-dashed border-border py-0 text-muted-foreground';
+
+/**
  * ⚠️ **LA PÍLDORA "DE QUIÉN ES" SE SACÓ DEL RENGLÓN 1 (28-ago-2026, pedido del
  * dueño)**: quedaba duplicada con el ícono de agente asignado debajo del
  * avatar (mismo dato, `c.asignada_a`, con su propio hover mostrando el
@@ -162,8 +203,15 @@ export function FilaConversacion({
   onFocus,
   lineas = [],
   ref,
+  esDeCampana = false,
 }: {
   c: Conversacion;
+  /**
+   * 🔴 **En campaña la fila no muestra nada de la Escuela** (regla del dueño,
+   * 11-sep-2026, lo reportó la cola de Américo): ni el chip de curso, ni la
+   * marca de cliente, ni «Preguntó precio». Ausente = ventas, la fila de siempre.
+   */
+  esDeCampana?: boolean;
   seleccionada: boolean;
   onAbrir: (c: Conversacion) => void;
   /** Etapa del embudo si el shell la conoce — chip vía `ETAPA_CHIP` compartido. */
@@ -189,7 +237,10 @@ export function FilaConversacion({
   ref?: Ref<HTMLButtonElement>;
 }) {
   const { conFoto, elRef } = useConFotoVisible(indice, c.canal);
-  const temp = TEMPERATURE_META[temperatureOf(c.referencia)];
+  // EL SEMÁFORO REEMPLAZA A `temperatureOf`/`TEMPERATURE_META` ACÁ (#826, S.2):
+  // la banda ya no dice antigüedad, dice interés de compra. Todos llegan
+  // grises (D2): `c.luz` ausente (server sin la migración) también cae ahí.
+  const temp = SEMAFORO_META[c.luz ?? 'gris'];
   const restan = VENTANA_DIAS - c.dias;
   /**
    * Cuánto le queda de ventana a esta conversación. Se recalcula en cada render
@@ -240,6 +291,8 @@ export function FilaConversacion({
   const mejorNombre = c.lead_nombre || nombreDeFicha || c.persona_nombre;
   const esTelefono = !mejorNombre && c.canal === 'whatsapp' && c.persona_id != null;
   const nombre = mejorNombre ?? (esTelefono ? formatoTelefono(c.persona_id!) : 'Usuario');
+  /** El id del comentario, o `null` si la fila es un chat. Es lo que prende sus pastillas (ADR 0121). */
+  const idComentario = idDeComentario(c);
   // Horas reales desde la referencia — `c.dias` son días enteros, así que abajo
   // de un día daba siempre 0 → "hace 1 min". Con las horas, "hace 3 horas" es cierto.
   const horas = horasDesde(c.referencia);
@@ -289,7 +342,7 @@ export function FilaConversacion({
    * cuando se sabe el curso, gana el curso (es el dato más accionable), y
    * «Pide info» queda de respaldo para las filas sin curso conocido.
    */
-  const curso = cursoDeFila(c);
+  const curso = cursoDeFila(c, { esDeCampana });
   /**
    * ¿YA NOS COMPRÓ? (#133) — 140 de las 1.997 conversaciones vivas, hoy
    * indistinguibles de un desconocido. Va en el renglón 1 porque es identidad
@@ -299,7 +352,7 @@ export function FilaConversacion({
    * reconociéndose, una marca ausente es invisible. Y solo cede en el 7% de las
    * filas.
    */
-  const marca = marcaDeCliente(c);
+  const marca = esDeCampana ? null : marcaDeCliente(c);
   /**
    * EL VEREDICTO DEL BOT (`bot.ts`), y ocupa el MISMO lugar que el curso.
    *
@@ -316,6 +369,12 @@ export function FilaConversacion({
    * varios cursos hay que volver acá.
    */
   const bot = marcaDelBot(c);
+  /**
+   * DE DÓNDE VINO ESTA PERSONA (`dominio/origen.ts`) — y si no se sabe, que lo
+   * diga. `null` sólo en los comentarios, donde el origen es la publicación que
+   * la fila ya muestra abajo con «en “…”».
+   */
+  const origen = deDondeVino(c);
 
   return (
     <button
@@ -385,13 +444,36 @@ export function FilaConversacion({
             filas abiertas, pero el dueño la sacó al verla en la app — ver el
             docblock de `pesoDinamico` más arriba. El avatar se queda a
             opacidad plena siempre. */}
-        <Avatar
-          nombre={c.persona_nombre}
-          telefono={c.canal === 'whatsapp' ? c.persona_id : null}
-          numeroPropio={c.numero_propio}
-          conFoto={conFoto}
-          className={'size-9 shrink-0 rounded-full text-[13px] font-bold leading-[18px] text-white ' + CLASE_FONDO[colorAvatar]}
-        />
+        {/* ⚠️ **El logo del canal vuelve al avatar (pedido del dueño, 07-sep-2026)**:
+            enmienda puntual del rediseño 22-ago-2026 que lo había sacado de acá por
+            «casi invisible» a 14px sobre el borde — ese argumento era sobre la
+            posición vieja (un disco flotando sobre el borde superior). Acá va
+            integrado en la esquina inferior derecha del círculo, y REEMPLAZA a la
+            píldora del renglón 1 (corrección del mismo día: el dueño la vio
+            duplicada — el mismo logo dicho dos veces en la misma fila — así que la
+            del renglón 1 se saca, y el nombre pasa a arrancar en la misma X que el
+            preview de abajo).
+            `PildoraCanal … conEtiqueta={false}` y no `BadgeCanal`: éste último, a
+            14px, dibuja un disco de color LISO —sin el glifo— porque `conInicial`
+            exige 18px o más; lo que el dueño pidió ver es el LOGO, no un punto de
+            color, y `PildoraCanal` es la única pieza que ya sabe dibujar el glifo
+            pelado (WhatsApp/IG) o autocontenido (FB/Messenger, vía `soloGlifo`)
+            sobre su propio disco.
+            Sin `ring`/halo (corrección del mismo día, el dueño lo vio como un
+            borde blanco de más): el logo se apoya directo sobre el color del
+            avatar, sin separación. */}
+        <span className="relative shrink-0">
+          <Avatar
+            nombre={c.persona_nombre}
+            telefono={c.canal === 'whatsapp' ? c.persona_id : null}
+            numeroPropio={c.numero_propio}
+            conFoto={conFoto}
+            className={'size-9 rounded-full text-[13px] font-bold leading-[18px] text-white ' + CLASE_FONDO[colorAvatar]}
+          />
+          <span className="absolute -bottom-0.5 -right-0.5">
+            <PildoraCanal canal={c.canal} tipo={c.tipo} conEtiqueta={false} />
+          </span>
+        </span>
 
         <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
           {/* Renglón 1: quién, y a la derecha la urgencia — nombre y hora
@@ -400,10 +482,13 @@ export function FilaConversacion({
               los desalineaba contra el nombre de la izquierda). */}
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1.5">
-              {/* El canal, primero: el logo solo, sin la palabra «Coment.»
-                  (rediseño 28-ago-2026, pedido del dueño) — la fila es angosta
-                  y el `title`/`aria-label` siguen diciendo de qué canal es. */}
-              <PildoraCanal canal={c.canal} tipo={c.tipo} conEtiqueta={false} />
+              {/* ⚠️ **El logo del canal SE SACÓ DE ACÁ (07-sep-2026, pedido del
+                  dueño)**: quedaba dicho dos veces en la misma fila — ya vive en
+                  la esquina inferior derecha del avatar (ver el docblock ahí
+                  arriba) — y el nombre pasa a ser el PRIMER elemento del
+                  renglón, alineado en la misma X que el preview de abajo (que
+                  tampoco lleva ícono al frente). El `title`/`aria-label` del
+                  logo en el avatar sigue diciendo de qué canal es. */}
               {/* Pin: por qué esta fila está en la banda de arriba. Navy, no oro. */}
               {c.fijada && (
                 <Pin size={12} fill="currentColor" className="shrink-0 text-navy-ink" aria-label="Fijada" />
@@ -563,7 +648,10 @@ export function FilaConversacion({
                   pesoDinamico
                 }
               >
-                {c.respondida && <Check size={11} className="shrink-0 text-success" aria-label="respondida" />}
+                {/* En un comentario lo dice la pastilla «Respondido» de abajo: el ✓ acá sería el mismo dato dos veces. */}
+                {c.respondida && idComentario === null && (
+                  <Check size={11} className="shrink-0 text-success" aria-label="respondida" />
+                )}
                 {hace(horas)}
               </span>
             </span>
@@ -721,6 +809,67 @@ export function FilaConversacion({
             naranja del bot, el color hash del curso, el color de catálogo de
             cada etiqueta) no se tocan — sólo la caja. */}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 pr-7">
+          {/*
+            ══ DE DÓNDE VINO, SIEMPRE, Y PRIMERO (7-sep-2026) ══════════════════
+
+            🔴 **EL DEFECTO QUE ESTO CIERRA NO ERA UN DATO QUE FALTARA: ERA UNO
+            QUE HERMES TENÍA Y NO DECÍA.** El origen se captura desde siempre
+            (`server/src/whatsapp/origen.ts` lee el `externalAdReply` del
+            Click-to-WhatsApp) y en la fila se asomaba **sólo cuando el último
+            mensaje no traía texto** — o sea, casi nunca: era un respaldo del
+            preview («📣 Vino del anuncio» en lugar de «(sin texto)»), no una
+            señal. El 6-sep-2026 un lead escribió «si seguí tu anuncio en
+            Facebook deberías saber qué necesito», recibió un saludo genérico y
+            terminó tratado de grosero: quien atendía no tenía **nada** en
+            pantalla que dijera de dónde venía.
+
+            ⚠️ **VA PRIMERO, y es lo único que justifica moverse de la jerarquía
+            del renglón.** El orden que fijó el dueño el 28-ago (1º bot, 2º
+            curso, 3º «Preguntó», 4º etiquetas) **no se toca: esos cuatro
+            siguen exactamente en ese orden entre ellos.** Lo que se le antepone
+            es un marcador FIJO, y tiene que ir en la posición 0 por una razón
+            mecánica, no estética: este contenedor es `flex-wrap`, así que
+            cualquier chip que no sea el primero puede caer al renglón de abajo
+            —o quedar fuera de vista— cuando la fila junta bot + curso + tres
+            etiquetas. Un dato cuya única promesa es **estar siempre** no puede
+            ocupar el único lugar donde a veces no está.
+
+            ⚠️ **No repite el chip de curso, aunque los dos salgan del mismo
+            anuncio.** El curso contesta QUÉ QUIERE (sale del titular del
+            creativo, `dominio/curso.ts`); esto contesta DE DÓNDE VINO. Por eso
+            acá va la CLASE en dos palabras y no el nombre del anuncio: medidos
+            el 7-sep-2026, los nombres reales son slugs genéricos («flyer
+            principal» en 6 anuncios distintos, «reel jarvis», «busqueda
+            osint») y la campaña que sí identifica el producto es un código
+            interno largo —«[SEP][DIPICOT027] Diplomado en Inteligencia 27 -
+            Perú»— que no entra en 360 px. El nombre, la campaña y el titular
+            se leen en el `title`, y completos en la ficha.
+          */}
+          {origen && (
+            <span
+              title={origen.ayuda}
+              data-origen={origen.clase}
+              className={
+                'flex shrink-0 items-center gap-1 rounded-full px-1 text-[10.5px] font-semibold ' +
+                (origen.clase === 'desconocido' ? CAJA_DESCONOCIDO : CAJA_SABIDO)
+              }
+            >
+              {(() => {
+                const Icono = ICONO_ORIGEN[origen.clase];
+                return Icono ? <Icono size={11} className="shrink-0" aria-hidden="true" /> : null;
+              })()}
+              {origen.etiqueta}
+            </span>
+          )}
+          {/*
+            ══ ¿YA ESTÁ RESPONDIDO? ¿QUIÉN LO TIENE ABIERTO? (ADR 0121) ══
+            Sólo en comentarios, y pegadas al origen por lo mismo que el origen va
+            primero: son marcas que tienen que estar SIEMPRE a la vista, y en un
+            renglón `flex-wrap` lo de atrás es lo que cae. Con varias agentes en la
+            misma Página, saberlo sin abrir es lo que evita la segunda respuesta.
+          */}
+          {idComentario !== null && c.respondida && <PastillaRespondido en="fila" />}
+          {idComentario !== null && <PastillaTieneAbierto interactionId={idComentario} en="fila" />}
           {bot ? (
             <span
               title={bot.titulo}
@@ -756,7 +905,7 @@ export function FilaConversacion({
               // que es literalmente nuestro token `--secondary` — no un tinte
               // de `--primary` calculado en runtime.
               <span className="shrink-0 rounded-full bg-secondary px-1 py-px text-[10.5px] font-semibold text-primary">
-                {c.pregunto_precio ? 'Preguntó precio' : 'Preguntó'}
+                {c.pregunto_precio && !esDeCampana ? 'Preguntó precio' : 'Preguntó'}
               </span>
             )
           )}

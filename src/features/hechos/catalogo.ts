@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { API_URL } from '../../config';
 import { api } from '../../lib/datos/cliente';
+import { tokenGuardado } from '../../lib/datos/token';
 import { MOMENTOS, type MomentoDeVenta } from './hechos';
 
 /**
@@ -26,13 +28,28 @@ import { MOMENTOS, type MomentoDeVenta } from './hechos';
  * pantalla afirmaría «esto se ve» sobre algo que la vendedora no ve (#37).
  */
 
+/** La imagen de un dato — OPCIONAL. `null`/`undefined` = el dato es solo texto. */
+export interface ImagenDeHecho {
+  archivo: string;
+  mime: string;
+  nombre: string | null;
+}
+
 export interface HechoDelCatalogo {
   clave: string;
   rotulo: string;
   texto: string;
+  imagen?: ImagenDeHecho | null;
   momentos: MomentoDeVenta[];
   orden: number;
   activo: boolean;
+  /**
+   * De qué producto habla, por la familia del SKU (`DIPICOT`), o `null` si vale para
+   * todos (ADR 0106). Lo lee la hoja de Productos: un `precio-peru` sin familia no se
+   * muestra en ningún producto. **OPCIONAL**: un server viejo o el caché de IndexedDB
+   * (ADR 0007) no lo mandan, y eso se lee igual que `null`.
+   */
+  familia?: string | null;
 }
 
 export interface RespuestaCatalogo {
@@ -61,8 +78,31 @@ export interface RespuestaCatalogo {
 export interface CamposDeHecho {
   rotulo: string;
   texto: string;
+  imagen?: ImagenDeHecho | null;
   momentos: MomentoDeVenta[];
   orden: number;
+  /** `null` = vale para todos los productos. */
+  familia?: string | null;
+}
+
+/**
+ * SUBE LA IMAGEN DE UN DATO — mismo camino que la media de una plantilla
+ * (`EditorPlantilla.tsx: subirArchivo`): el cuerpo crudo del archivo, no
+ * FormData. Devuelve la referencia para meter en `CamposDeHecho.imagen`; no
+ * guarda nada en el dato — eso lo hace `crear`/`editar` al mandar el formulario.
+ */
+export async function subirImagenDeHecho(archivo: File): Promise<ImagenDeHecho> {
+  const r = await fetch(`${API_URL}/api/hechos/media?nombre=${encodeURIComponent(archivo.name)}`, {
+    method: 'POST',
+    headers: {
+      'content-type': archivo.type || 'application/octet-stream',
+      authorization: `Bearer ${tokenGuardado() ?? ''}`,
+    },
+    body: archivo,
+  });
+  if (!r.ok) throw new Error('no se pudo subir la imagen');
+  const d = (await r.json()) as { imagen: ImagenDeHecho };
+  return d.imagen;
 }
 
 export const CLAVE_CATALOGO = ['hechos', 'catalogo'] as const;

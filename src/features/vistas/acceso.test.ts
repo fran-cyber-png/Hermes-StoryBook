@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { entrena, entrenaYNoEsDeCampana, noEsDeCampana, VEN_ROUTING, veRouting } from './acceso';
 
 describe('quién ve Routing', () => {
-  it('la ven las dos personas de la lista', () => {
+  it('la ven las personas de la lista', () => {
     expect(veRouting('alan')).toBe(true);
     expect(veRouting('Usuario1')).toBe(true);
+    expect(veRouting('gsifuentes')).toBe(true);
   });
 
   it('no la ve nadie más', () => {
     expect(veRouting('luz')).toBe(false);
+    expect(veRouting('alex')).toBe(false);
     expect(veRouting('ventas10@grupogoberna.com')).toBe(false);
   });
 
@@ -33,7 +35,7 @@ describe('quién ve Routing', () => {
   });
 
   it('la lista es la que se pidió, y se lee de un solo lado', () => {
-    expect([...VEN_ROUTING]).toEqual(['alan', 'Usuario1']);
+    expect([...VEN_ROUTING]).toEqual(['alan', 'Usuario1', 'gsifuentes']);
   });
 });
 

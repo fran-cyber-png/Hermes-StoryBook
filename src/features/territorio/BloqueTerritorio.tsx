@@ -46,7 +46,7 @@ export function BloqueTerritorio({ clave, activo }: { clave: string; activo: boo
     <section className="border-t border-border px-4 py-3">
       <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
         <MapPin size={12} />
-        Dónde vota
+        Locación
       </h3>
 
       {isPending && <p className="text-sm text-muted-foreground">Buscando…</p>}

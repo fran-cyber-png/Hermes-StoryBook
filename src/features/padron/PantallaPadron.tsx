@@ -1,25 +1,38 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  type ColumnDef,
+  getCoreRowModel,
+  useReactTable,
+} from '@tanstack/react-table';
+import {
   AlertTriangle,
+  ArrowDownUp,
   BadgeCheck,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
   Loader2,
   MessageCircle,
   Search,
   ShieldOff,
   X,
 } from 'lucide-react';
-import { Avatar } from '../../components/Avatar';
-import { fechaCorta, formatoTelefono } from '../../lib/formato';
+import { Paginador } from '../../components/Paginador';
+import {
+  cabeceraQuieta,
+  CeldaPersona,
+  celdaDeCabecera,
+  celdaQuieta,
+  tablaQuieta,
+} from '../../components/TablaQuieta';
+import { cifra, fechaCorta, formatoTelefono } from '../../lib/formato';
+import { controlDeBarraClass } from '../../lib/styles';
 import { conversacionDeTelefono } from '../../dominio/conversacionNueva';
 import { HojaContacto } from '../panel/HojaContacto';
 import type { DestinoCorreo } from '../../lib/puente';
 import { useSesionWa } from '../whatsapp/conversacionWa';
-import { AtajosDeReparto } from './AtajosDeReparto';
-import { AvisoDeDueno, BarraReparto, Confirmacion, TiraDeReparto, useReparto } from './BarraReparto';
+import { AvisoDeDueno, BarraReparto, BotonDeReparto, Confirmacion, useReparto } from './BarraReparto';
 import { useDeshacer } from './Deshacer';
-import { PanelFiltros, PanelLateralFiltros } from './PanelFiltros';
+import { BotonFiltros, ChipsActivos, PanelLateralFiltros } from './PanelFiltros';
+import { SelectorDeVista } from './SelectorDeVista';
 import { temperaturaDeEntrada } from './temperaturaEntrada';
 import { TEMPERATURE_META } from '../leads/temperature';
 import {
@@ -34,12 +47,27 @@ import {
 } from './seleccion';
 import {
   contarActivos,
+  nombreCorto,
   usePadron,
   useFacetas,
   useRepartoPadron,
   type ContactoPadron,
   type FiltrosPadron,
 } from './padron';
+import {
+  aplicarVista,
+  chipsDelRecorte,
+  vistasDelPadron,
+  vistaVigente,
+  type VistaDelPadron,
+} from './vistasDelPadron';
+
+/**
+ * Columna única, sin celda: `useReactTable` la exige pero acá solo se usa la
+ * tabla como motor de PAGINACIÓN — las filas se siguen dibujando con `<Fila>`,
+ * no con `flexRender`. Fuera del componente para no recrearla en cada render.
+ */
+const COLUMNAS_PADRON: ColumnDef<ContactoPadron>[] = [{ accessorKey: 'id' }];
 
 /**
  * EL PADRÓN — 72.923 contactos que nunca escribieron, en una tabla.
@@ -54,6 +82,14 @@ import {
  * El supervisor ve el padrón entero y reparte. La vendedora ve **lo que le
  * habilitaron**, sin filtros de universo. Quién es quién lo decide el server y
  * llega en `supervisor`: acá no se decide nada, se dibuja lo que vino.
+ *
+ * ── Una fila de controles, no seis (ADR 0102, 10-sep-2026) ──
+ * «Siento que está muy desordenado, no se ve limpio como la referencia» (el
+ * dueño). Antes de la primera fila de datos había pestañas, buscador + reparto,
+ * orden + País + Filtros, chips, la franja «Para repartir hoy» y la línea de
+ * conteo. No faltaba ningún dato: sobraban capas. Ahora: vista · buscador ·
+ * Filtros, y a la derecha orden y Repartir; los chips sólo si algo refina a la
+ * vista; el conteo, al pie junto al paginador.
  */
 export function PantallaPadron({
   onEscribir,
@@ -115,15 +151,15 @@ export function PantallaPadron({
   const facetas = useFacetas(conBusqueda, soySupervisor);
   const repartoQuery = useRepartoPadron(soySupervisor);
   /**
-   * LOS ATAJOS MIRAN «SIN REPARTIR», NO EL FILTRO QUE EL SUPERVISOR TENGA
-   * PUESTO — a propósito, ver el docblock de `AtajosDeReparto`. Consulta
-   * aparte, fija, para que «En conversación · 512» sea siempre «512 sin
-   * repartir», nunca «512 en el padrón entero».
+   * LAS VISTAS MIRAN «SIN ASIGNAR», NO EL FILTRO QUE EL SUPERVISOR TENGA
+   * PUESTO — a propósito, ver `vistasDelPadron`. Consulta aparte, fija, para que
+   * «En negociación · 5.792» sea siempre «5.792 sin asignar», nunca «5.792 en el
+   * padrón entero».
    */
-  const atajosFacetas = useFacetas({ sinHabilitar: true }, soySupervisor);
+  const facetasSinAsignar = useFacetas({ sinHabilitar: true }, soySupervisor);
 
   /**
-   * «SIN REPARTIR» POR DEFECTO — pedido del dueño (24-ago-2026), pero SOLO
+   * «SIN ASIGNAR» POR DEFECTO — pedido del dueño (24-ago-2026), pero SOLO
    * para supervisor.
    *
    * 🔴 **Mandarlo de entrada, antes de saber el rol, rompería la pantalla de
@@ -151,14 +187,18 @@ export function PantallaPadron({
   }
 
   /**
-   * UN ATAJO SALTA A UNA VISTA, NO LA REFINA — a diferencia de `cambiar`, que
-   * MEZCLA sobre lo que ya está puesto, esto REEMPLAZA todo. Si no, el número
-   * que el atajo mostró (contra `{ sinHabilitar: true }` puro) podría no
-   * coincidir con lo que la tabla termina mostrando bajo el filtro real.
+   * UNA VISTA SALTA, NO REFINA — a diferencia de `cambiar`, que MEZCLA sobre lo
+   * que ya está puesto, esto REEMPLAZA el recorte (`aplicarVista`). Si no, la
+   * cifra que la vista mostró podría no coincidir con lo que termina mostrando la
+   * tabla. Es también «Limpiar filtros»: volver a poner la vista que ya está.
+   *
+   * ⚠️ **Borra también el texto buscado**, a propósito y como el atajo que
+   * reemplaza: el texto es parte del recorte, y una vista que dejara «gonzález»
+   * puesto prometería una cifra que la tabla no devuelve.
    */
-  function aplicarAtajo(parcial: Partial<FiltrosPadron>) {
+  function elegirVista(vista: VistaDelPadron) {
     setTexto('');
-    setFiltros({ pagina: 1, porPagina: 50, ...parcial });
+    setFiltros((f) => aplicarVista(f, vista));
     setSeleccion(NADA);
   }
 
@@ -167,12 +207,60 @@ export function PantallaPadron({
   const porPagina = data?.porPagina ?? 50;
   const paginaActual = data?.paginaActual ?? 1;
   const ultimaPagina = Math.max(1, Math.ceil(total / porPagina));
+  // «¿Hay algo recortando?», para el texto del vacío. No es «Filtros N»: acá
+  // cuentan también la vista y el texto buscado, porque cualquiera de los dos
+  // puede ser el motivo de que no aparezca nadie.
   const activos = contarActivos(conBusqueda);
+
+  const vistas = vistasDelPadron({
+    sinAsignar: {
+      etapa: facetasSinAsignar.data?.facetas.etapa,
+      sinRepartir: facetasSinAsignar.data?.asignadoA?.sinRepartir,
+      lineas: facetasSinAsignar.data?.entroPorLinea,
+    },
+    carga: repartoQuery.data?.carga,
+  });
+  const vigente = vistaVigente(conBusqueda, vistas);
+  const chips = chipsDelRecorte(conBusqueda, vigente, facetas.data?.entroPorLinea);
+  /**
+   * «ASIGNADO A» SE DIBUJA SÓLO SI DICE ALGO.
+   *
+   *   · Si el server no lo mandó: ausente no es «sin dueña» (ver
+   *     `ContactoPadron.asignadoA`), y una columna entera de «—» sobre un server
+   *     que no preguntó se leería como «todo esto está libre».
+   *   · Con «sin asignar» puesto: ahí diría «—» en las 50 filas por definición, y
+   *     es justo la vista con la que abre el supervisor.
+   */
+  const conDueno =
+    soySupervisor &&
+    !conBusqueda.sinHabilitar &&
+    contactos.length > 0 &&
+    contactos.every((c) => c.asignadoA !== undefined);
+
+  /**
+   * La paginación real la sigue sirviendo el server (`filtros.pagina`); esto es
+   * `manualPagination` — react-table solo administra el estado y las reglas de
+   * «puedo ir atrás/adelante», nunca recorta `contactos` por su cuenta.
+   */
+  const tablaPadron = useReactTable({
+    data: contactos,
+    columns: COLUMNAS_PADRON,
+    state: { pagination: { pageIndex: paginaActual - 1, pageSize: porPagina } },
+    pageCount: ultimaPagina,
+    manualPagination: true,
+    onPaginationChange: (updater) => {
+      const actual = { pageIndex: paginaActual - 1, pageSize: porPagina };
+      const siguiente = typeof updater === 'function' ? updater(actual) : updater;
+      setFiltros((f) => ({ ...f, pagina: siguiente.pageIndex + 1 }));
+    },
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   const idsDeLaPagina = contactos.map((c) => c.id);
   const todaLaPaginaElegida =
     idsDeLaPagina.length > 0 && idsDeLaPagina.every((id) => estaElegido(seleccion, id));
   const elegidos = cuantos(seleccion, total);
+  const desde = (paginaActual - 1) * porPagina + 1;
 
   const reparto = useReparto({
     seleccion,
@@ -214,10 +302,19 @@ export function PantallaPadron({
   return (
     // `relative`: la hoja de la ficha se ancla acá adentro, no al viewport.
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b border-border bg-card px-4 py-3">
+      <div className="shrink-0 border-b border-border bg-card px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <label className="relative min-w-[15rem] flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          {soySupervisor && (
+            <SelectorDeVista
+              vistas={vistas}
+              vigente={vigente}
+              onElegir={elegirVista}
+              estadoDelReparto={repartoQuery.isError ? 'error' : repartoQuery.isPending ? 'cargando' : 'listo'}
+            />
+          )}
+
+          <label className="relative min-w-[12rem] flex-1 sm:max-w-xs">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
               value={texto}
               onChange={(e) => {
@@ -226,72 +323,46 @@ export function PantallaPadron({
                 setSeleccion(NADA);
               }}
               placeholder="Nombre, teléfono, correo o DNI"
-              className="w-full rounded-full border border-border bg-muted py-2 pl-9 pr-8 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              aria-label="Buscar en el padrón"
+              className="h-8 w-full rounded-lg border border-border bg-card pl-8 pr-7 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             />
             {texto && (
               <button
                 type="button"
                 aria-label="Borrar la búsqueda"
                 onClick={() => setTexto('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-muted-foreground hover:bg-border hover:text-foreground"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <X size={13} />
               </button>
             )}
           </label>
 
-          {/* El reparto vive ACÁ ahora, donde antes vivía «Más nuevos»
-              (pedido del dueño, 24-ago-2026, viendo la pantalla en vivo): un
-              control FIJO, nunca aparece-y-desaparece con la selección. El
-              orden se mudó a la fila de filtros — ver el docblock de
-              `TiraDeReparto` en `BarraReparto.tsx`. */}
           {soySupervisor && (
-            <TiraDeReparto
-              reparto={reparto}
-              destinos={repartoQuery.data?.destinos ?? []}
-              carga={repartoQuery.data?.carga ?? []}
-            />
+            <BotonFiltros cuantos={chips.length} abierto={filtrosAbiertos} onAbrirCerrar={setFiltrosAbiertos} />
+          )}
+
+          {soySupervisor && (
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <SelectorOrden orden={filtros.orden} onCambiar={(orden) => cambiar({ orden })} />
+              {/* El reparto sigue siendo un control FIJO (regla del dueño,
+                  24-ago-2026): nunca aparece-y-desaparece con la selección. Ver
+                  el docblock de `BotonDeReparto`. */}
+              <BotonDeReparto
+                reparto={reparto}
+                destinos={repartoQuery.data?.destinos ?? []}
+                carga={repartoQuery.data?.carga ?? []}
+              />
+            </div>
           )}
         </div>
 
         {soySupervisor && (
-          <PanelFiltros
-            filtros={conBusqueda}
-            onCambiar={cambiar}
-            onLimpiarTexto={() => setTexto('')}
-            facetas={facetas.data?.facetas}
-            entroPorLinea={facetas.data?.entroPorLinea}
-            cargandoFacetas={facetas.isPending}
-            abierto={filtrosAbiertos}
-            onAbrirCerrar={setFiltrosAbiertos}
-          />
+          <ChipsActivos chips={chips} onQuitar={cambiar} onLimpiar={() => vigente && elegirVista(vigente)} />
         )}
-
-        {soySupervisor && (
-          <AtajosDeReparto
-            facetas={atajosFacetas.data?.facetas}
-            asignadoA={atajosFacetas.data?.asignadoA}
-            entroPorLinea={atajosFacetas.data?.entroPorLinea}
-            onElegir={aplicarAtajo}
-          />
-        )}
-
-        <AvisoDeDueno reparto={reparto} />
-
-        <p className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-          {isFetching && <Loader2 size={11} className="animate-spin" />}
-          <span className="font-semibold tabular-nums text-foreground">{total.toLocaleString('es')}</span>
-          {soySupervisor ? (
-            <>
-              {total === 1 ? 'contacto en esta lista' : 'contactos en esta lista'}
-              {/* El aviso de la regla dura #7: cuántos NO se están viendo. */}
-              {total > porPagina && <span>· se ven {contactos.length} en esta página</span>}
-            </>
-          ) : (
-            <>{total === 1 ? 'contacto que te repartieron' : 'contactos que te repartieron'}</>
-          )}
-        </p>
       </div>
+
+      <AvisoDeDueno reparto={reparto} />
 
       {/* La tabla y el panel de filtros viven en una fila: el panel EMPUJA el
           ancho de la tabla, nunca la tapa ni la saca de la pantalla. La
@@ -317,7 +388,7 @@ export function PantallaPadron({
               onClick={() => setSeleccion(todoElRecorte())}
               className="font-bold text-navy-ink underline underline-offset-2 hover:text-navy-ink/80"
             >
-              Elegir los {total.toLocaleString('es')} de este filtro
+              Elegir los {cifra(total)} de este filtro
             </button>
           </div>
         )}
@@ -325,7 +396,7 @@ export function PantallaPadron({
         {soySupervisor && seleccion.modo === 'recorte' && (
           <div className="flex flex-wrap items-center justify-center gap-2 border-b border-border bg-navy/5 px-4 py-2 text-xs">
             <span className="font-semibold text-navy-ink">
-              Están elegidos los {elegidos.toLocaleString('es')} contactos de este filtro
+              Están elegidos los {cifra(elegidos)} contactos de este filtro
               {seleccion.excluidos.length > 0 &&
                 ` (sacaste ${seleccion.excluidos.length})`}
               .
@@ -343,17 +414,17 @@ export function PantallaPadron({
         {isPending ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 8 }, (_, i) => (
-              <div key={i} className="h-11 animate-pulse rounded-lg bg-muted" />
+              <div key={i} className="h-12 animate-pulse rounded-lg bg-muted" />
             ))}
           </div>
         ) : contactos.length === 0 ? (
           <Vacio soySupervisor={soySupervisor} hayFiltro={activos > 0} />
         ) : (
-          <table className="w-full border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
-              <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+          <table className={tablaQuieta}>
+            <thead className={cabeceraQuieta}>
+              <tr>
                 {soySupervisor && (
-                  <th className="w-9 px-3 py-2">
+                  <th className={`${celdaDeCabecera} w-10`}>
                     <input
                       type="checkbox"
                       aria-label="Elegir toda la página"
@@ -365,18 +436,21 @@ export function PantallaPadron({
                     />
                   </th>
                 )}
-                <th className="px-3 py-2 font-semibold">Quién</th>
-                <th className="px-3 py-2 font-semibold">Teléfono</th>
-                <th className="px-3 py-2 font-semibold">País</th>
-                <th className="px-3 py-2 font-semibold">Curso / compra</th>
-                <th className="px-3 py-2 font-semibold">Compró</th>
+                <th className={celdaDeCabecera}>Quién</th>
+                <th className={celdaDeCabecera}>Teléfono</th>
+                <th className={celdaDeCabecera}>País</th>
+                <th className={celdaDeCabecera}>Curso / compra</th>
+                <th className={celdaDeCabecera}>Compró</th>
+                {conDueno && <th className={celdaDeCabecera}>Asignado a</th>}
                 <th
-                  className="px-3 py-2 font-semibold"
+                  className={celdaDeCabecera}
                   title="Cuándo se cargó al sistema, no siempre cuándo escribió por primera vez — se está por corregir con la fecha real."
                 >
                   Cargado
                 </th>
-                <th className="w-10 px-3 py-2" />
+                <th className={`${celdaDeCabecera} w-12`}>
+                  <span className="sr-only">Abrir el chat</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -385,6 +459,7 @@ export function PantallaPadron({
                   key={c.id}
                   c={c}
                   elegible={soySupervisor}
+                  conDueno={conDueno}
                   elegido={estaElegido(seleccion, c.id)}
                   onElegir={() => setSeleccion((prev) => alternarFila(prev, c.id))}
                   onEscribir={onEscribir}
@@ -411,29 +486,42 @@ export function PantallaPadron({
       )}
       </div>
 
-      {total > porPagina && (
-        <div className="flex shrink-0 items-center justify-center gap-3 border-t border-border bg-card px-4 py-2 text-xs">
-          <button
-            type="button"
-            disabled={paginaActual <= 1}
-            onClick={() => setFiltros((f) => ({ ...f, pagina: (f.pagina ?? 1) - 1 }))}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 font-semibold text-foreground hover:bg-muted disabled:opacity-30"
-          >
-            <ChevronLeft size={13} /> Anterior
-          </button>
-          <span className="tabular-nums text-muted-foreground">
-            {paginaActual} de {ultimaPagina.toLocaleString('es')}
-          </span>
-          <button
-            type="button"
-            disabled={paginaActual >= ultimaPagina}
-            onClick={() => setFiltros((f) => ({ ...f, pagina: (f.pagina ?? 1) + 1 }))}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 font-semibold text-foreground hover:bg-muted disabled:opacity-30"
-          >
-            Siguiente <ChevronRight size={13} />
-          </button>
-        </div>
-      )}
+      {/* EL PIE: cuántos hay y cuáles se ven, al lado del paginador. La mitad
+          «se ven 1–50» es el aviso de la regla dura #7 — cuántos NO se están
+          viendo —, y va acá porque es lo que el paginador recorre. */}
+      <Paginador
+        paginaActual={paginaActual}
+        totalPaginas={ultimaPagina}
+        puedeAnterior={paginaActual > 1}
+        puedeSiguiente={paginaActual < ultimaPagina}
+        onAnterior={() => tablaPadron.previousPage()}
+        onSiguiente={() => tablaPadron.nextPage()}
+        onIrA={(n) => tablaPadron.setPageIndex(n - 1)}
+        resumen={
+          data ? (
+            <>
+              {isFetching && <Loader2 size={11} className="animate-spin" />}
+              {/* Cada mitad en un renglón que no se parte: en angosto el pie baja
+                  la segunda mitad entera, no una palabra por renglón. */}
+              <span className="whitespace-nowrap">
+                <span className="font-semibold tabular-nums text-foreground">{cifra(total)}</span>{' '}
+                {soySupervisor
+                  ? total === 1
+                    ? 'contacto'
+                    : 'contactos'
+                  : total === 1
+                    ? 'contacto que te repartieron'
+                    : 'contactos que te repartieron'}
+              </span>
+              {total > contactos.length && contactos.length > 0 && (
+                <span className="whitespace-nowrap tabular-nums">
+                  · se ven {cifra(desde)}–{cifra(desde + contactos.length - 1)}
+                </span>
+              )}
+            </>
+          ) : null
+        }
+      />
 
       {soySupervisor && (
         <>
@@ -462,6 +550,7 @@ export function PantallaPadron({
 function Fila({
   c,
   elegible,
+  conDueno,
   elegido,
   onElegir,
   onEscribir,
@@ -470,6 +559,8 @@ function Fila({
 }: {
   c: ContactoPadron;
   elegible: boolean;
+  /** Si la columna «Asignado a» está puesta (la decide la pantalla, no la fila). */
+  conDueno: boolean;
   elegido: boolean;
   onElegir: () => void;
   onEscribir?: (telefono: string) => void;
@@ -482,6 +573,9 @@ function Fila({
   // usable no hay nada que abrir, y una hoja vacía se leería como «no es
   // cliente» cuando lo que pasa es que no se lo pudo preguntar.
   const conFicha = onFicha && telefono.length >= 8 ? () => onFicha(c) : null;
+  const temperatura = c.creadoEn
+    ? TEMPERATURE_META[temperaturaDeEntrada(c.creadoEn, new Date()) ?? 'helado'].bar
+    : null;
   return (
     <tr
       role={conFicha ? 'button' : undefined}
@@ -502,21 +596,21 @@ function Fila({
           : undefined
       }
       className={
-        `border-b border-border/60 transition-colors ${elegido ? 'bg-primary/5' : 'hover:bg-muted/50'}` +
+        `transition-colors ${elegido ? 'bg-primary/5' : 'hover:bg-muted/50'}` +
         (conFicha ? ' cursor-pointer' : '') +
         // De cuál se está leyendo la ficha. Tiene que ganarle al `hover:` de
         // arriba: con la hoja abierta el puntero está del otro lado de la
         // pantalla, y sin marca no hay forma de saber a quién se está mirando.
         // `bg-secondary` y no `bg-muted`: el gris de la casa es #F5F7FB, a un
-        // pelo del blanco de la tabla, y sobre un renglón de 32 px no se ve. El
-        // tinte azul es el mismo que marca «mira esta» en el radar.
+        // pelo del blanco de la tabla, y sobre un renglón no se ve. El tinte
+        // azul es el mismo que marca «mira esta» en el radar.
         (abierta ? ' bg-secondary hover:bg-secondary' : '')
       }
     >
       {elegible && (
         // El clic del check NO abre la ficha: repartir es la acción de esta
         // columna, y tildar 50 filas abriendo 50 hojas sería inusable.
-        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+        <td className={celdaQuieta} onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             aria-label={`Elegir a ${c.nombre ?? c.id}`}
@@ -526,35 +620,28 @@ function Fila({
           />
         </td>
       )}
-      <td className="max-w-[16rem] px-3 py-2">
-        <div className="flex items-center gap-2">
-          {/* `conFoto` NUNCA en esta tabla: se dibujan hasta 50 filas de una, y
-              pedirle a WhatsApp una foto por fila es el patrón exacto que la
-              regla dura #7 prohíbe (rate-limit, riesgo de ban). Iniciales solas,
-              como manda el propio docblock de `Avatar`. */}
-          <span className="relative shrink-0">
-            <Avatar nombre={c.nombre} className="size-7 rounded-full bg-navy/10 text-[10px] font-bold text-navy-ink" />
-            {/* La misma señal de «Entró» (`temperaturaEntrada.ts`), repetida acá
-                porque con el panel de filtros abierto esa columna queda del
-                otro lado del scroll horizontal — sin esto, filtrar tapa
-                justo la frescura que se está buscando (Estephano, 24-ago). */}
-            {c.creadoEn && (
+      <td className={`${celdaQuieta} max-w-[16rem]`}>
+        <CeldaPersona
+          nombre={c.nombre}
+          detalle={c.correo}
+          insignia={
+            // La misma señal de «Entró» (`temperaturaEntrada.ts`), repetida acá
+            // porque con el panel de filtros abierto esa columna queda del otro
+            // lado del scroll horizontal — sin esto, filtrar tapa justo la
+            // frescura que se está buscando (Estephano, 24-ago).
+            temperatura && c.creadoEn ? (
               <span
-                className={`absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-2 ring-card ${TEMPERATURE_META[temperaturaDeEntrada(c.creadoEn, new Date()) ?? 'helado'].bar}`}
+                className={`absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-card ${temperatura}`}
                 title={`Entró ${fechaCorta(c.creadoEn)}`}
               />
-            )}
-          </span>
-          <div className="min-w-0">
-            <div className="truncate font-semibold text-foreground">{c.nombre ?? '—'}</div>
-            {c.correo && <div className="truncate text-[11px] text-muted-foreground">{c.correo}</div>}
-          </div>
-        </div>
+            ) : undefined
+          }
+        />
       </td>
-      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs tabular-nums text-muted-foreground">
+      <td className={`${celdaQuieta} whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground`}>
         {telefono ? formatoTelefono(telefono) : '—'}
       </td>
-      <td className="px-3 py-2 text-xs text-muted-foreground">{c.pais ?? '—'}</td>
+      <td className={`${celdaQuieta} text-xs text-muted-foreground`}>{c.pais ?? '—'}</td>
       {/*
         🔴 DOS DATOS DISTINTOS EN UNA COLUMNA, y por eso se dibujan distinto.
         `comprado` es lo que PAGÓ (sale de la venta) y va con peso; `curso` es lo
@@ -562,7 +649,7 @@ function Fila({
         mostraba solo el declarado, y por eso la tabla se leía al revés: filas con
         curso que decían «no compró» junto a filas sin curso que decían «Sí».
       */}
-      <td className="max-w-[14rem] px-3 py-2">
+      <td className={`${celdaQuieta} max-w-[14rem]`}>
         {c.comprado ? (
           <span className="block truncate text-xs font-medium text-foreground" title={c.comprado}>
             {c.comprado}
@@ -580,7 +667,7 @@ function Fila({
           </span>
         )}
       </td>
-      <td className="px-3 py-2">
+      <td className={celdaQuieta}>
         {/* 🔴 Verde SOLO con venta real. `compras` (el contador de icarus) miente
             en más de la mitad de los casos, así que cuando afirma sin respaldo se
             dibuja en gris y se dice de dónde salió — nunca como un cliente. */}
@@ -591,7 +678,7 @@ function Fila({
         ) : c.compras && c.compras > 0 ? (
           <span
             title="Quedó marcado como comprador al importar los contactos, pero no hay ninguna venta real que lo respalde. Pasa en más de la mitad del padrón."
-            className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
           >
             <AlertTriangle size={10} /> sin respaldo
           </span>
@@ -599,21 +686,32 @@ function Fila({
           <span className="text-xs text-muted-foreground">—</span>
         )}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-muted-foreground">
+      {conDueno && (
+        <td className={celdaQuieta}>
+          {c.asignadoA ? (
+            <CeldaPersona compacta nombre={nombreCorto(c.asignadoA)} titulo={c.asignadoA} />
+          ) : (
+            // Se preguntó y no tiene dueña: un guion tenue, no un rótulo. «Sin
+            // asignar» repetido en 50 filas de la vista «Sin asignar» es ruido.
+            <span className="text-xs text-muted-foreground">—</span>
+          )}
+        </td>
+      )}
+      <td className={`${celdaQuieta} whitespace-nowrap text-xs tabular-nums text-muted-foreground`}>
         {/* La rampa de temperatura: cortes PROPIOS del padrón (7/30/180 días),
             no los de `leads/temperature.ts` (pensados para horas de una
             conversación de WhatsApp) — con esos, casi todo el padrón saldría
             «helado» el primer día. Ver `temperaturaEntrada.ts`. */}
-        {c.creadoEn ? (
+        {c.creadoEn && temperatura ? (
           <span className="flex items-center gap-1.5">
-            <span className={`size-1.5 rounded-full ${TEMPERATURE_META[temperaturaDeEntrada(c.creadoEn, new Date()) ?? 'helado'].bar}`} />
+            <span className={`size-1.5 rounded-full ${temperatura}`} />
             {fechaCorta(c.creadoEn)}
           </span>
         ) : (
           '—'
         )}
       </td>
-      <td className="px-3 py-2">
+      <td className={`${celdaQuieta} text-center`}>
         {onEscribir && telefono.length >= 8 && (
           <button
             type="button"
@@ -624,13 +722,46 @@ function Fila({
               onEscribir(telefono);
             }}
             title="Abrir el chat con esta persona"
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-navy hover:text-white"
+            aria-label={`Abrir el chat con ${c.nombre ?? telefono}`}
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-primary hover:text-primary-foreground"
           >
             <MessageCircle size={14} />
           </button>
         )}
       </td>
     </tr>
+  );
+}
+
+/**
+ * EL ORDEN — no filtra, así que no vive entre los filtros ni cuenta en «Filtros
+ * N» (ADR 0102). Nativo a propósito: cuatro opciones fijas, sin conteos ni
+ * búsqueda. Las opciones llevan el fondo de la tarjeta explícito: sin eso, en
+ * tema oscuro el menú nativo puede abrir claro con la letra clara encima.
+ */
+function SelectorOrden({
+  orden,
+  onCambiar,
+}: {
+  orden: FiltrosPadron['orden'];
+  onCambiar: (orden: NonNullable<FiltrosPadron['orden']>) => void;
+}) {
+  return (
+    <label className={`${controlDeBarraClass} relative cursor-pointer pr-7`}>
+      <ArrowDownUp size={13} className="text-muted-foreground" />
+      <select
+        value={orden ?? 'recientes'}
+        onChange={(e) => onCambiar(e.target.value as NonNullable<FiltrosPadron['orden']>)}
+        aria-label="Ordenar"
+        className="cursor-pointer appearance-none bg-transparent text-xs font-semibold text-foreground outline-none [&>option]:bg-card [&>option]:text-foreground"
+      >
+        <option value="recientes">Más nuevos</option>
+        <option value="antiguos">Más antiguos</option>
+        <option value="mas_gastaron">Los que más gastaron</option>
+        <option value="nombre">Por nombre</option>
+      </select>
+      <ChevronDown size={13} className="pointer-events-none absolute right-2 text-muted-foreground" />
+    </label>
   );
 }
 

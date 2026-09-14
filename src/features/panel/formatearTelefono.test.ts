@@ -22,4 +22,19 @@ describe('formatearTelefono', () => {
   it('menos de 8 dígitos: devuelve el crudo, no hay nada que formatear', () => {
     expect(formatearTelefono('12345')).toBe('12345');
   });
+
+  /**
+   * 🔴 13-SEP-2026 — EL +1 SE PARTÍA MAL: «+18 097 961 936» para una dominicana. El
+   * código salía de «lo que sobra antes de los últimos 9», y en el plan de
+   * numeración del +1 el local tiene 10. Desde que el número va grande en su propio
+   * renglón de la cabecera, el error se lee a primera vista.
+   */
+  it('el +1 tiene código de un dígito y local de 10, que se agrupa 3-3-4', () => {
+    expect(formatearTelefono('18097961936')).toBe('+1 809 796 1936');
+    expect(formatearTelefono('12125550123')).toBe('+1 212 555 0123');
+  });
+
+  it('un local de 10 dígitos de un país conocido también se agrupa 3-3-4', () => {
+    expect(formatearTelefono('525512345678')).toBe('+52 551 234 5678');
+  });
 });

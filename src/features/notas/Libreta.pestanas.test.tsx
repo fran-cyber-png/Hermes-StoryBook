@@ -36,10 +36,24 @@ const PAGINA_2 = {
 
 let montado: Montado | null = null;
 
+/** La clave de `useLocalStorage` que arma `usePestanas` — ver `pestanas.ts`. */
+const CLAVE_PESTANAS = 'libreta:pestanas';
+
+/**
+ * `removeItem` a secas NO ALCANZA. `useLocalStorage` (`lib/useLocalStorage.ts`)
+ * cachea el crudo en un `Map` de MÓDULO que sobrevive entre casos — así que las
+ * pestañas que dejó abiertas un test se filtran al siguiente y la suite pasa a
+ * depender del ORDEN (mismo defecto ya documentado en `lib/tema.test.tsx`). El
+ * evento `storage` es la puerta que el propio módulo abre para invalidar esa
+ * caché.
+ */
+function limpiarPestanas() {
+  window.localStorage.removeItem(CLAVE_PESTANAS);
+  window.dispatchEvent(new StorageEvent('storage', { key: CLAVE_PESTANAS, newValue: null }));
+}
+
 beforeEach(() => {
-  // La barra vive en localStorage — un test no puede heredar las pestañas
-  // que dejó otro.
-  window.localStorage.removeItem('libreta:pestanas');
+  limpiarPestanas();
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
@@ -63,7 +77,7 @@ afterEach(() => {
   montado?.desmontar();
   montado = null;
   vi.unstubAllGlobals();
-  window.localStorage.removeItem('libreta:pestanas');
+  limpiarPestanas();
 });
 
 function botonQueDice(texto: string): HTMLElement | undefined {
@@ -84,6 +98,9 @@ function botonCerrarPestana(titulo: string): HTMLButtonElement {
 
 test('sin ninguna página abierta, la fila de pestañas no se dibuja', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026, rediseño): hay que
+  // abrirlo para que la lista aparezca en el DOM.
+  tocar(botonQueDice('Todas las páginas')!);
   await esperarA(() => Boolean(botonQueDice('precios del diplomado')), 'llegó la lista');
 
   expect(filaDePestanas()).toBeNull();
@@ -91,6 +108,9 @@ test('sin ninguna página abierta, la fila de pestañas no se dibuja', async () 
 
 test('abrir una página desde la lista le agrega su pestaña', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026, rediseño): hay que
+  // abrirlo para que la lista aparezca en el DOM.
+  tocar(botonQueDice('Todas las páginas')!);
   await esperarA(() => Boolean(botonQueDice('precios del diplomado')), 'llegó la lista');
 
   tocar(botonQueDice('precios del diplomado')!);
@@ -99,9 +119,15 @@ test('abrir una página desde la lista le agrega su pestaña', async () => {
 
 test('cerrar una pestaña que NO es la activa no mueve la selección', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026, rediseño): hay que
+  // abrirlo para que la lista aparezca en el DOM.
+  tocar(botonQueDice('Todas las páginas')!);
   await esperarA(() => Boolean(botonQueDice('precios del diplomado')), 'llegó la lista');
   tocar(botonQueDice('precios del diplomado')!);
   await esperarPestana('precios del diplomado');
+  // Elegir una página CIERRA el panel — hay que volver a abrirlo para la segunda.
+  tocar(botonQueDice('Todas las páginas')!);
+  await esperarA(() => Boolean(botonQueDice('ruta al local')), 'el panel volvió a abrirse');
   tocar(botonQueDice('ruta al local')!);
   await esperarPestana('ruta al local');
 
@@ -114,9 +140,15 @@ test('cerrar una pestaña que NO es la activa no mueve la selección', async () 
 
 test('🔴 cerrar la pestaña ACTIVA activa la que quedó en su lugar', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026, rediseño): hay que
+  // abrirlo para que la lista aparezca en el DOM.
+  tocar(botonQueDice('Todas las páginas')!);
   await esperarA(() => Boolean(botonQueDice('precios del diplomado')), 'llegó la lista');
   tocar(botonQueDice('precios del diplomado')!);
   await esperarPestana('precios del diplomado');
+  // Elegir una página CIERRA el panel — hay que volver a abrirlo para la segunda.
+  tocar(botonQueDice('Todas las páginas')!);
+  await esperarA(() => Boolean(botonQueDice('ruta al local')), 'el panel volvió a abrirse');
   tocar(botonQueDice('ruta al local')!);
   await esperarPestana('ruta al local');
 
@@ -129,8 +161,33 @@ test('🔴 cerrar la pestaña ACTIVA activa la que quedó en su lugar', async ()
   await esperarA(() => Boolean(document.querySelector('[data-libreta-editor]')), 'el editor sigue con algo abierto');
 });
 
+test('🔴 una pestaña guardada con un `tipo` que ya no existe no tira abajo la Libreta', async () => {
+  // Simula lo que quedó en el navegador de ANTES de un cambio como el de hoy
+  // (se sacó `copy` de `BarraDePestanas.tsx`): una pestaña vieja en
+  // `localStorage` con un `tipo` que el mapa de íconos ya no conoce, apuntando
+  // a un id que ni siquiera existe más (`/api/notas/99` da 404, así que
+  // `nota.data` nunca resuelve y `Pestana` usa `pestana.tipo` tal cual quedó
+  // guardado). Sin el `?? FileText` de `BarraDePestanas.tsx`, esto crashea
+  // React entero — pantalla en blanco, sin ningún error visible para quien
+  // mira la app.
+  const conPestanaVieja = JSON.stringify([{ id: 99, espacioId: null, tipo: 'copy' }]);
+  window.localStorage.setItem(CLAVE_PESTANAS, conPestanaVieja);
+  // `newValue` tiene que llevar el JSON que se acaba de guardar — con `null`
+  // (como hace `limpiarPestanas`) el listener de `useLocalStorage.ts` invalida
+  // su caché en vez de cargarlo, y la Libreta monta como si no hubiera pestaña.
+  window.dispatchEvent(new StorageEvent('storage', { key: CLAVE_PESTANAS, newValue: conPestanaVieja }));
+
+  montado = montar(<Libreta vendedoraId="luz" />);
+
+  await esperarA(() => Boolean(filaDePestanas()), 'la fila de pestañas se dibuja con la pestaña vieja adentro');
+  expect(filaDePestanas()).not.toBeNull();
+});
+
 test('cerrar la ÚNICA pestaña abierta vuelve a la lista', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026, rediseño): hay que
+  // abrirlo para que la lista aparezca en el DOM.
+  tocar(botonQueDice('Todas las páginas')!);
   await esperarA(() => Boolean(botonQueDice('precios del diplomado')), 'llegó la lista');
   tocar(botonQueDice('precios del diplomado')!);
   await esperarPestana('precios del diplomado');

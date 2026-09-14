@@ -33,7 +33,18 @@ export interface NodoLienzo {
    * ⚠️ Vacío significa TRES cosas distintas y hay que poder separarlas: ver
    * `Apertura` en `piezas.ts`.
    */
-  adentro?: { id: string; titulo: string; pie: string }[];
+  adentro?: {
+    id: string;
+    titulo: string;
+    pie: string;
+    /** Un segundo renglón: el reparto del anuncio, cuando tiene uno propio (#1002). */
+    detalle?: string;
+    /**
+     * El rótulo del botón que abre lo de adentro, para lectores de pantalla. Sin
+     * él el renglón es de solo lectura — que es lo que era todo hasta #1002.
+     */
+    accion?: string;
+  }[];
   cargando?: boolean;
   fallo?: boolean;
   /**

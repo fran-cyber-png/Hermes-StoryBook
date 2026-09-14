@@ -244,24 +244,24 @@ export function chipsDeGrupos(
  *
  * Antes eran DOS controles que hablaban del mismo hecho —el interruptor «Sin
  * repartir» y el desplegable «Asignado a»—; ahora son una sola lista, y
- * «Nadie todavía» es UNA OPCIÓN MÁS, no un interruptor aparte.
+ * «Sin asignar» es UNA OPCIÓN MÁS, no un interruptor aparte.
  *
- * 🔴 **«Nadie todavía» NO es un valor de `asignadoA`.** El server lo manda
+ * 🔴 **«Sin asignar» NO es un valor de `asignadoA`.** El server lo manda
  * separado (`FacetaReparto.sinRepartir`) porque mandarlo de vuelta como si
  * fuera una grafía de `asignadoA` buscaría a alguien con ese nombre y no
  * encontraría a nadie — cero resultados, lo contrario de lo pedido. Por eso
  * esta función no devuelve algo que se pueda mandar tal cual: devuelve filas
- * con un `id`, y quien las use decide, mirando `esNadieTodavia`, si togglear
+ * con un `id`, y quien las use decide, mirando `esSinAsignar`, si togglear
  * `sinHabilitar` (booleano) o sumar/sacar de `asignadoA` (lista) — la
  * traducción es la única parte de esto que sabe de `FiltrosPadron`, y por
  * eso vive en la feature, no acá.
  *
- * ⚠️ **«Nadie todavía» va PRIMERO, no al final.** Es el mismo tamaño gigante
+ * ⚠️ **«Sin asignar» va PRIMERO, no al final.** Es el mismo tamaño gigante
  * que «Todavía sin trabajar» en Etapa (probablemente el 84 % del padrón), pero
  * al revés: ese no sirve para armar un lote, ÉSTE es literalmente lo que el
  * supervisor va a repartir. El grande que importa no se esconde.
  */
-export const ID_NADIE_TODAVIA = '__nadie_todavia__';
+export const ID_SIN_ASIGNAR = '__sin_asignar__';
 
 export interface OpcionDeReparto {
   id: string;
@@ -269,15 +269,18 @@ export interface OpcionDeReparto {
   contactos: number;
 }
 
-/** ¿Esta fila es la opción «Nadie todavía» (→ `sinHabilitar`), o una vendedora (→ `asignadoA`)? */
-export function esNadieTodavia(opcion: OpcionDeReparto): boolean {
-  return opcion.id === ID_NADIE_TODAVIA;
+/** ¿Esta fila es la opción «Sin asignar» (→ `sinHabilitar`), o una vendedora (→ `asignadoA`)? */
+export function esSinAsignar(opcion: OpcionDeReparto): boolean {
+  return opcion.id === ID_SIN_ASIGNAR;
 }
 
 export function opcionesDeReparto(faceta: { opciones: OpcionFaceta[]; sinRepartir: number } | undefined): OpcionDeReparto[] {
   if (!faceta) return [];
   return [
-    { id: ID_NADIE_TODAVIA, rotulo: 'Nadie todavía', contactos: faceta.sinRepartir },
+    // «Sin asignar» y ya no «Nadie todavía» (ADR 0102): el mismo filtro tenía
+    // tres nombres en la misma pantalla —éste, «Sin asignar» y «Sin repartir»—,
+    // y tres nombres se leen como tres filtros.
+    { id: ID_SIN_ASIGNAR, rotulo: 'Sin asignar', contactos: faceta.sinRepartir },
     ...faceta.opciones.map((o) => ({ id: o.valor, rotulo: nombreCorto(o.valor), contactos: o.contactos })),
   ];
 }

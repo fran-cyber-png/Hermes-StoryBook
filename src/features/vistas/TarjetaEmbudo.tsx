@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlarmClock,
   ArrowLeft,
+  BadgeCheck,
   BadgeDollarSign,
+  Bot,
   Check,
   ClipboardList,
   GraduationCap,
@@ -11,19 +13,25 @@ import {
   Loader2,
   Megaphone,
 } from 'lucide-react';
-import type { Conversacion } from '../../dominio/conversaciones';
+import { marcaDeCliente } from '../../dominio/cliente';
+import { marcaDeAsignacion } from '../../dominio/dueno';
+import { idDeComentario, type Conversacion } from '../../dominio/conversaciones';
 import { transporteDeLinea, type LineaWhatsapp } from '../../dominio/lineas';
 import { Avatar } from '../../components/Avatar';
 import { BotonAbrirChat } from './BotonAbrirChat';
-import { BadgeCanal } from '../../components/BadgeCanal';
+import { BadgeCanal, insigniaDe, LogoDeCanal } from '../../components/BadgeCanal';
 import { detalleDeCurso } from '../../dominio/curso';
 import { esPrioritaria, quiereFoto, siguienteConFoto } from '../../dominio/fotoVisible';
+import { marcaDelBot, type TonoBot } from '../../dominio/bot';
+import { porqueDestacable } from '../../dominio/semaforo';
 import { hace } from '../../lib/datos/frescura';
 import { lecturaDeVentana, plazoDuro } from '../../dominio/ventana';
 import { lecturaDeAntiguedad } from '../../dominio/antiguedad';
 import { etiquetaDeMedia } from '../../lib/etiquetaMedia';
-import { horasDesde, tempBorde, tempClass } from '../../lib/formato';
+import { bordePropuestaSemaforo, fondoSemaforo, horasDesde, tempClass } from '../../lib/formato';
 import { cotizarEnUnClic, cursoDeTarjeta, haceCorto, nombreDeTarjeta, turnoDeTarjeta } from './tarjeta';
+import { PildoraAsignacion } from './PildoraAsignacion';
+import { PastillaRespondido, PastillaTieneAbierto } from '../canales/PastillasDelComentario';
 
 /**
  * LA TARJETA DEL PIPELINE — lo que decide a quién tocar y qué decirle.
@@ -45,6 +53,36 @@ import { cotizarEnUnClic, cursoDeTarjeta, haceCorto, nombreDeTarjeta, turnoDeTar
  * El oro no aparece acá salvo en el seguimiento VENCIDO: es el único plazo duro
  * de esta pantalla, y el oro significa tiempo que se acaba, nada más.
  */
+
+/**
+ * EL VEREDICTO DEL BOT, EN LOS TONOS DE ESTA TARJETA.
+ *
+ * Los mismos dos hechos que la fila de la cola (`FilaConversacion`), traducidos
+ * a la paleta del `Chip` de acá: **rojo** la escalada —el bot se frenó y hay un
+ * lead esperando a una persona— y **amarillo** la caliente, que es una
+ * oportunidad y no una deuda.
+ *
+ * ⚠️ **Nunca oro.** El oro de esta app significa tiempo que se acaba y nada más
+ * (`src/index.css`); una escalada apura, pero no tiene reloj.
+ */
+const TONO_BOT: Record<TonoBot, 'rojo' | 'amarillo'> = {
+  escalada: 'rojo',
+  caliente: 'amarillo',
+};
+
+/**
+ * EL FILETE DE LA LUZ, en campaña (13-sep-2026, la maqueta que eligió el dueño: «el
+ * color aparece SÓLO como señal»). Ventas pinta la luz como un degradado de fondo con
+ * el borde entero teñido (`fondoSemaforo`); campaña, como un filete izquierdo sobre
+ * una tarjeta blanca. Los mismos cuatro tokens `--sem-*`, así que el ámbar sigue sin
+ * ser oro. Literales enteros para que Tailwind los encuentre.
+ */
+const FILETE_DE_LUZ = {
+  verde: 'border-l-sem-verde',
+  ambar: 'border-l-sem-ambar',
+  gris: 'border-l-sem-gris',
+  rojo: 'border-l-sem-rojo',
+} as const;
 
 /** Cuántas tarjetas de cada columna piden foto sin esperar al scroll (anti-ban #59). */
 const CON_FOTO_ARRIBA = 8;
@@ -77,16 +115,22 @@ function Chip({
   titulo,
   tono = 'neutro',
   encoge = false,
+  alFinal = false,
 }: {
   icono?: React.ReactNode;
   children: React.ReactNode;
   titulo?: string;
-  tono?: 'neutro' | 'marca' | 'oro' | 'rojo' | 'amarillo' | 'verde';
+  tono?: 'neutro' | 'marca' | 'oro' | 'rojo' | 'amarillo' | 'verde' | 'suave';
   /** Quién cede el ancho cuando no alcanza. Solo el curso encoge; los rótulos cortos, nunca. */
   encoge?: boolean;
+  /** Se va al extremo derecho del renglón (la antigüedad en campaña, como en la maqueta). */
+  alFinal?: boolean;
 }) {
   const tonos = {
     neutro: 'border-border text-muted-foreground',
+    /* La píldora chica y clara de campaña: sin borde, un gris de fondo. Neutra a
+       propósito: la antigüedad no vence, y un color la confundiría con la luz. */
+    suave: 'border-transparent bg-secondary text-muted-foreground',
     marca: 'border-navy/20 bg-secondary text-secondary-foreground',
     /* El ORO significa tiempo que se acaba y NADA más (`src/index.css`). Ya no
        lo lleva ningún chip de esta tarjeta (la ventana pasó a la escala de
@@ -105,6 +149,7 @@ function Chip({
       className={
         'inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[11px] font-semibold ' +
         (encoge ? 'min-w-0 shrink ' : 'shrink-0 ') +
+        (alFinal ? 'ml-auto ' : '') +
         tonos[tono]
       }
     >
@@ -124,11 +169,19 @@ export function TarjetaEmbudo({
   alTerminar,
   arrastrando,
   rebotada,
-  onCotizar,
+  onCotizar: onCotizarDeLaColumna,
   cotizando,
   columna,
   lineas = [],
+  conAsignacion = false,
+  esDeCampana = false,
 }: {
+  /**
+   * 🔴 **En campaña la tarjeta no muestra nada de la Escuela** (regla del dueño,
+   * 11-sep-2026): ni curso, ni «Ya compró», ni «Saben el precio», ni el atajo a
+   * Cotizados. Ausente = ventas, la tarjeta de siempre.
+   */
+  esDeCampana?: boolean;
   c: Conversacion;
   indice: number;
   onAbrir: (c: Conversacion) => void;
@@ -152,6 +205,12 @@ export function TarjetaEmbudo({
    * Ausente = sin nada que elegir, y el botón se comporta como siempre.
    */
   lineas?: LineaWhatsapp[];
+  /**
+   * ¿Quien mira supervisa? Entonces la tarjeta dice a quién está asignada, y
+   * «Sin asignar» cuando no la tiene nadie (`marcaDeAsignacion`). El rol lo decide
+   * el server y baja con las líneas (`veTodo`); acá no se deduce de nada.
+   */
+  conAsignacion?: boolean;
 }) {
   const { conFoto, elRef } = useConFotoVisible(indice, c.canal);
   /**
@@ -167,8 +226,33 @@ export function TarjetaEmbudo({
   const huboArrastre = useRef(false);
   const nombre = nombreDeTarjeta(c);
   const { turno, apremia } = turnoDeTarjeta(c);
-  const curso = cursoDeTarjeta(c);
-  const unClic = cotizarEnUnClic(c);
+  const curso = cursoDeTarjeta(c, { esDeCampana });
+  /** «Ya te compró» — la misma marca que la fila de la cola (`dominio/cliente.ts`). En campaña, nada de la Escuela. */
+  const marca = esDeCampana ? null : marcaDeCliente(c);
+  const unClic = cotizarEnUnClic(c, { esDeCampana });
+  // Precio y cotizar son de ventas: en campaña ni el chip ni el atajo, aunque la columna lo ofrezca.
+  const precioEnviado = !esDeCampana && Boolean(c.precio_enviado);
+  const onCotizar = esDeCampana ? undefined : onCotizarDeLaColumna;
+  /**
+   * 🔴 El dato YA VIAJABA en esta conversación y la tarjeta no lo miraba.
+   * `GET /tablero` y `GET /` comparten `consultarCola`, así que cada tarjeta del
+   * Pipeline llegaba con `bot_escalada` y `bot_temperatura` adentro desde que la
+   * cola los sirve. La escalada se veía en Mensajes y no acá — o sea, en todos
+   * lados menos donde se elige a quién tocar.
+   *
+   * `marcaDelBot` calla `tibio` y `frio` a propósito, y eso vale igual acá: son
+   * tres de cada cuatro conversaciones, y una columna de 1.389 tarjetas con un
+   * chip en casi todas no ayuda a elegir. Se leen en la ficha (`lecturaDelBot`),
+   * que es donde ya elegiste y hay lugar.
+   */
+  const bot = marcaDelBot(c);
+  const asignacion = conAsignacion ? marcaDeAsignacion(c) : null;
+  /** El id del comentario, o `null` si la tarjeta es un chat. Prende sus pastillas (ADR 0121), igual que en la fila de la cola. */
+  const idComentario = idDeComentario(c);
+  /** La luz del filete: sin `luz` es gris, nunca se asume otro color (`tablero.ts#luzDeTarjeta`). */
+  const luz = c.luz ?? 'gris';
+  /** En campaña el canal va AL LADO del nombre, en su color: encima del avatar tapaba las iniciales. */
+  const canalJuntoAlNombre = esDeCampana ? insigniaDe(c.canal, c.tipo) : null;
   const horas = horasDesde(c.referencia);
 
   // El preview solo cuando la pelota es NUESTRA: si el último mensaje es el
@@ -184,14 +268,18 @@ export function TarjetaEmbudo({
    * dato ES el paso del tiempo, y un `useMemo` con `[c]` lo congelaría hasta que
    * la tarjeta cambie por otro motivo. Mismo criterio que `FilaConversacion`.
    */
-  const ventana = lecturaDeVentana(
-    c.ventana_cierra,
-    new Date(),
-    // Misma regla que la fila de la cola: sin plazo que se cumpla, no hay cuenta
-    // regresiva que dibujar (`plazoDuro`). `lineas` ya llegaba acá para el botón
-    // de abrir chat — no hace falta ninguna prop nueva.
-    plazoDuro(transporteDeLinea(lineas, c.numero_propio)),
-  );
+  // 🔴 En campaña no hay reloj de arena (dueño, 13-sep-2026: «quítale el chip [⧗ 6 d]
+  // a todo el pipeline, que quede el del hace tiempo»). Queda la antigüedad.
+  const ventana = esDeCampana
+    ? null
+    : lecturaDeVentana(
+        c.ventana_cierra,
+        new Date(),
+        // Misma regla que la fila de la cola: sin plazo que se cumpla, no hay cuenta
+        // regresiva que dibujar (`plazoDuro`). `lineas` ya llegaba acá para el botón
+        // de abrir chat — no hace falta ninguna prop nueva.
+        plazoDuro(transporteDeLinea(lineas, c.numero_propio)),
+      );
 
   /**
    * CUÁNTO LLEVA EN SU COLUMNA (`canales/antiguedad.ts`). Es el dato que separa a
@@ -211,7 +299,17 @@ export function TarjetaEmbudo({
     // `landing` entra a la lista porque su píldora VIVE en ese renglón: un lead
     // sin curso ni preview no dibujaría el renglón, y entonces la marca que lo
     // distingue de un chat desaparecería justo en la tarjeta más pobre.
-    curso || c.precio_enviado || ventana || antiguedad || preview || onCotizar || c.canal === 'landing',
+    // ⚠️ `bot` entra por el MISMO motivo que `landing`, y su ausencia era un
+    // defecto: una conversación escalada sin curso, sin precio, sin ventana, sin
+    // antigüedad y sin preview calculaba la marca y no dibujaba el renglón — el
+    // chip desaparecía justo en la tarjeta más pobre, que es donde más falta hace.
+    // ⚠️ `asignacion` entra por lo mismo que `bot` y `landing`: una tarjeta sin
+    // ningún otro chip calcularía «Sin asignar» y no lo dibujaría nunca.
+    // ⚠️ Un comentario entra por lo mismo: sus pastillas (ADR 0121) viven en ese
+    // renglón. La de quién lo tiene abierto llega después y puede no dibujar nada,
+    // así que el renglón lleva `empty:hidden` y no ocupa lugar si queda vacío.
+    // En campaña el preview va en su propio renglón (abajo), así que no cuenta acá.
+    curso || bot || asignacion || precioEnviado || ventana || antiguedad || (!esDeCampana && preview) || onCotizar || c.canal === 'landing' || idComentario !== null,
   );
 
   return (
@@ -253,9 +351,23 @@ export function TarjetaEmbudo({
         }, 0);
         alTerminar();
       }}
+      data-luz={luz}
       className={
-        'group cursor-grab rounded-xl border-l-2 bg-card px-2.5 py-1.5 shadow-[0_1px_2px_rgba(14,42,82,0.06)] transition-[box-shadow,opacity,transform] duration-200 ease-house hover:shadow-panel active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
-        tempBorde(c.referencia) +
+        // ⚠️ EL SEMÁFORO REEMPLAZA A `tempBorde` ACÁ (D1, 8-sep-2026): ya no
+        // es un filete izquierdo de temperatura, es un degradado de fondo en
+        // toda la tarjeta (`fondoSemaforo`) con el borde entero (no solo el
+        // izquierdo) tintado a juego (`.tarjeta-semaforo--*` en index.css).
+        // `tempBorde` sigue viviendo en `lib/formato.ts` para el kanban del
+        // Dashboard, que es de otro frente.
+        // 🔴 EN CAMPAÑA vuelve el filete (13-sep-2026), ahora de la LUZ: tarjeta
+        // blanca, el borde casi invisible y el color sólo a la izquierda.
+        (esDeCampana
+          ? 'group cursor-grab rounded-xl border border-l-[3px] border-border bg-card py-2 pl-2.5 pr-2 shadow-[0_1px_2px_rgba(14,42,82,0.05)] transition-[box-shadow,opacity,transform] duration-200 ease-house hover:shadow-panel active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
+            FILETE_DE_LUZ[luz]
+          : 'group cursor-grab rounded-xl border bg-card px-2.5 py-1.5 shadow-[0_1px_2px_rgba(14,42,82,0.06)] transition-[box-shadow,opacity,transform] duration-200 ease-house hover:shadow-panel active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
+            fondoSemaforo(c.luz)) +
+        ' ' +
+        bordePropuestaSemaforo(c.origen_semaforo) +
         (arrastrando ? ' scale-[0.98] opacity-40' : '') +
         (rebotada ? ' ring-1 ring-temp-frio' : '') +
         // De cuál se está leyendo la ficha. Navy y no oro: acá no hay ningún
@@ -273,9 +385,11 @@ export function TarjetaEmbudo({
             conFoto={conFoto}
             className="size-7 rounded-full bg-secondary text-[10px] font-bold text-navy-ink"
           />
-          <span className="absolute -bottom-1 -right-1 scale-90">
-            <BadgeCanal canal={c.canal} tipo={c.tipo} />
-          </span>
+          {!esDeCampana && (
+            <span className="absolute -bottom-1 -right-1 scale-90">
+              <BadgeCanal canal={c.canal} tipo={c.tipo} />
+            </span>
+          )}
         </span>
 
         <span className="flex min-w-0 flex-1 items-center gap-1">
@@ -295,6 +409,17 @@ export function TarjetaEmbudo({
               aria-label="Nombre del formulario que llenó"
             />
           )}
+          {canalJuntoAlNombre && (
+            <span
+              role="img"
+              aria-label={canalJuntoAlNombre.nombre}
+              title={canalJuntoAlNombre.nombre}
+              className="flex shrink-0"
+              style={{ color: canalJuntoAlNombre.color }}
+            >
+              <LogoDeCanal canal={canalJuntoAlNombre.logo} soloGlifo size={11} />
+            </span>
+          )}
         </span>
 
         {turno === 'vencido' ? (
@@ -311,7 +436,10 @@ export function TarjetaEmbudo({
               hace(horas)
             }
             className={
-              'inline-flex shrink-0 items-center gap-1 font-mono text-[11px] tabular-nums ' +
+              // En campaña, sin monoespaciada: «5 m» en mono le quitaba al nombre el
+              // ancho que lo dejaba en «Javier Per…» (lo mostró la captura).
+              'inline-flex shrink-0 items-center gap-1 text-[11px] tabular-nums ' +
+              (esDeCampana ? '' : 'font-mono ') +
               (apremia ? 'font-bold text-temp-fresco' : tempClass(c.referencia))
             }
           >
@@ -331,9 +459,48 @@ export function TarjetaEmbudo({
         <BotonAbrirChat c={c} lineas={lineas} onAbrir={onAbrir} />
       </div>
 
+      {/* ── EL SEMÁFORO, EN PALABRAS (ADR 0095) ──
+          La evidencia de la luz: por qué esta tarjeta se pintó así. Va en una
+          línea bajo el nombre, alineada con él (pl-9, el mismo hueco que deja
+          el avatar de size-7 + su gap-2). El `title` es el tooltip nativo —
+          la frase completa al pasar el cursor, como pide el dueño («usemos
+          los tooltips para comunicar»).
+          ⚠️ Sólo cuando cuenta algo que la luz sola no dice (`porqueDestacable`):
+          los tres porqués de relleno iban en el 90 % de las tarjetas de
+          «Saben el precio» y «Contestaron» (medido el 10-sep-2026), y un renglón
+          idéntico en miles de tarjetas es la lección de ADR 0016 con el preview.
+          🔴 En campaña tampoco se dicen los de PRECIO (regla del dueño, 13-sep-2026). */}
+      {porqueDestacable(c.porque, { esDeCampana }) && (
+        <p
+          title={c.porque ?? undefined}
+          className="mt-0.5 truncate pl-9 text-[11.5px] text-muted-foreground"
+        >
+          {c.porque}
+        </p>
+      )}
+
+      {/* EN CAMPAÑA EL PREVIEW TIENE SU RENGLÓN (la maqueta del dueño): una línea gris
+          y truncada, debajo del nombre. Metido entre los chips quedaba en «Ya no
+          necesito qu…» al lado de la antigüedad. */}
+      {esDeCampana && preview && (
+        <p title={preview} className="mt-1 truncate pl-9 text-xs text-muted-foreground">
+          {preview}
+        </p>
+      )}
+
       {/* ── DE QUÉ, Y QUÉ FALTA PARA COBRARLO ── */}
       {haySegundoRenglon && (
-        <div className="mt-1 flex items-center gap-1.5 pl-9">
+        /*
+         * 🔴 `flex-wrap`, y no es cosmética: sin él los chips que no entraban se
+         * CORTABAN EN SILENCIO. Con «Precio» y la ventana ya puestos, agregar el
+         * del bot dejaba «Pr…» y el reloj a medias — o sea que la tarjeta perdía
+         * un dato para mostrar otro, sin decirlo. Envolver es lo que esta tarjeta
+         * ya declara que hace: «CRECE CON LO QUE TIENE QUE DECIR».
+         *
+         * Sólo cambia las tarjetas que YA estaban perdiendo información; una con
+         * uno o dos chips se dibuja idéntica.
+         */
+        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 pl-9 empty:hidden">
           {/*
             🔴 SIN CONVERSACIÓN — la marca que separa dos trabajos OPUESTOS que
             comparten columna. A quien te escribió le contestas y es gratis; a
@@ -348,12 +515,54 @@ export function TarjetaEmbudo({
             Se decide por `canal` y no por el prefijo de la clave: el canal es el
             dato, la clave es plomería.
           */}
+          {/*
+            VA PRIMERO, y es lo único de esta fila de chips que pide una acción
+            AHORA: una escalada es un lead sin bot y sin persona. Aparece poco
+            —sólo escalada o caliente—, así que estar adelante no le quita lugar
+            a nada en la tarjeta promedio.
+          */}
+          {bot && (
+            <Chip
+              icono={<Bot size={10} className="shrink-0" aria-hidden="true" />}
+              tono={TONO_BOT[bot.tono]}
+              titulo={bot.titulo}
+            >
+              {bot.texto}
+            </Chip>
+          )}
+          {/* ¿Ya está respondido? ¿Quién lo tiene abierto? Sólo en comentarios, las mismas pastillas que la cola (ADR 0121). */}
+          {idComentario !== null && c.respondida && <PastillaRespondido en="tarjeta" />}
+          {idComentario !== null && <PastillaTieneAbierto interactionId={idComentario} en="tarjeta" />}
           {c.canal === 'landing' && (
             <Chip
               tono="neutro"
               titulo="Llenó el formulario y todavía no existe conversación: hay que abrirla"
             >
               Formulario
+            </Chip>
+          )}
+          {/*
+            «CLIENTE» — el chip que ANTES no estaba en el Pipeline, y por eso
+            este cambio no se podía hacer sin él.
+            🔴 Hasta el 9-set-2026 «ya compró» era una LUZ VERDE del semáforo, y
+            era el 79 % de los verdes (2.542 de 3.272): en una campaña a alumnos
+            pintaba la lista entera por construcción y escondía a los ~24 que sí
+            preguntaron el precio. Sacarla de la luz es correcto —haber comprado
+            antes no es intención de comprar hoy— pero el dato NO se puede
+            perder: es el lead más barato de convertir que hay. En la cola ya lo
+            decía esta misma píldora (`FilaConversacion`); acá no existía, así
+            que sacar la luz sin agregar el chip le habría quitado el dato al
+            Pipeline en vez de dejar de repetirlo.
+            Mismo `marcaDeCliente` que la fila: una sola definición de qué se
+            dice, para que las dos pantallas no puedan decir cosas distintas.
+          */}
+          {marca && (
+            <Chip
+              tono="verde"
+              icono={<BadgeCheck size={10} className="shrink-0" />}
+              titulo={marca.titulo}
+            >
+              {marca.texto}
             </Chip>
           )}
           {curso && (
@@ -378,7 +587,7 @@ export function TarjetaEmbudo({
               {curso.nombre}
             </Chip>
           )}
-          {c.precio_enviado && (
+          {precioEnviado && (
             <Chip
               icono={<BadgeDollarSign size={10} className="shrink-0" />}
               titulo="Ya le mandaste el precio o la forma de pagar"
@@ -417,13 +626,36 @@ export function TarjetaEmbudo({
             neutra, con el reloj de HISTORIAL — que la distingue del reloj de
             ARENA de la ventana, justo al lado, que sí es una cuenta regresiva.
           */}
+          {/* En campaña la dueña va a la izquierda y la antigüedad al extremo derecho,
+              en una píldora clara: el orden de la maqueta. */}
+          {esDeCampana && asignacion && <PildoraAsignacion marca={asignacion} />}
           {antiguedad && (
-            <Chip icono={<History size={10} className="shrink-0" />} titulo={antiguedad.ayuda}>
+            <Chip
+              icono={<History size={10} className="shrink-0" />}
+              titulo={antiguedad.ayuda}
+              tono={esDeCampana ? 'suave' : 'neutro'}
+              alFinal={esDeCampana}
+            >
               {antiguedad.texto}
             </Chip>
           )}
-          {!curso && !c.precio_enviado && preview && (
-            <p className="min-w-0 flex-1 truncate text-xs text-foreground">{preview}</p>
+          {/*
+            A QUIÉN ESTÁ ASIGNADA — sólo para quien supervisa. Neutro y sin oro:
+            no apura nada, dice de quién es. «Sin asignar» va con el contorno
+            PUNTEADO, la forma que la casa ya usa para «esto no lo tiene nadie
+            todavía» (`dominio/origen.ts`), y mide lo mismo que la píldora llena
+            (borde + `py-px` en las dos) para que la tarjeta no salte de alto.
+            ⚠️ Va ANTES del preview: el preview es `flex-1` y cede el ancho, así
+            que un chip detrás lo dejaba en una sola letra («1 sem M Sin
+            asignar»). Lo mostró la captura, no un test.
+          */}
+          {!esDeCampana && asignacion && <PildoraAsignacion marca={asignacion} />}
+          {/* `min-w-[5rem]` y no `min-w-0`: con varios chips delante, `min-w-0`
+              dejaba el preview en UNA letra al borde de la tarjeta («Sin asignar
+              M»). Con piso, cuando no entra baja al renglón siguiente — que es lo
+              que esta fila ya hace con los chips (`flex-wrap`). */}
+          {!esDeCampana && !curso && !precioEnviado && preview && (
+            <p className="min-w-[5rem] flex-1 truncate text-xs text-foreground">{preview}</p>
           )}
           {onCotizar && (
             <button

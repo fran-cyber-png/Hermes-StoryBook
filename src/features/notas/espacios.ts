@@ -25,6 +25,19 @@ export interface Espacio {
   /** `null` = vivo. Ausente en `GET /` (esa ruta ni sirve archivados —
    *  siempre sería `null`); presente en `GET /mios` (26-ago-2026). */
   archivadoAt?: string | null;
+  /**
+   * CUÁNTAS PÁGINAS VIVAS tiene, para "Tus espacios" en la barra lateral
+   * (03-sep-2026) — de CUALQUIER miembro, no solo las tuyas: es un dato del
+   * lugar. **Solo en `GET /`** (la lista para navegar): `GET /mios` — el
+   * modal de administrar — no lo pide, así que viene `undefined` ahí.
+   */
+  paginas?: number;
+  /**
+   * UNA CLAVE del set curado (`iconosDeEspacio.ts`), o `null`/ausente para el
+   * ícono por defecto (`Users`, el de siempre). `undefined` puede pasar en
+   * respuestas viejas de caché — se trata igual que `null`.
+   */
+  icono?: string | null;
 }
 
 /**
@@ -34,6 +47,29 @@ export interface Espacio {
  * traducción en el medio que se pueda equivocar.
  */
 export type DondeEstoy = number | null;
+
+/**
+ * QUÉ SE ESTÁ MIRANDO EN EL RIEL (03-sep-2026) — reemplaza al viejo
+ * "Mi libreta"/espacio de dos valores por CUATRO: las tres vistas de "MI
+ * LIBRETA" ("solo tú" — nunca cruzan a un espacio) más un espacio puntual.
+ *
+ * ⚠️ `'todas'` NO es un cuarto lugar nuevo: es, carácter por carácter, lo que
+ * antes se llamaba simplemente "Mi libreta" (`espacioId === null`, sin
+ * filtrar). No hay una fila de "Mi libreta" aparte de "Todas las páginas" —
+ * sería la misma pregunta hecha dos veces.
+ */
+export type VistaLibreta = { tipo: 'todas' } | { tipo: 'favoritas' } | { tipo: 'papelera' } | { tipo: 'espacio'; id: number };
+
+/** El `DondeEstoy`/`espacioId` que le corresponde a una vista — las tres de "MI LIBRETA" son SIEMPRE la libreta privada. */
+export function dondeDeVista(vista: VistaLibreta): DondeEstoy {
+  return vista.tipo === 'espacio' ? vista.id : null;
+}
+
+/** ¿Es la MISMA vista? — lo que decide si un clic en el riel cambia de lugar o solo hace toggle del panel. */
+export function mismaVista(a: VistaLibreta, b: VistaLibreta): boolean {
+  if (a.tipo !== b.tipo) return false;
+  return a.tipo === 'espacio' && b.tipo === 'espacio' ? a.id === b.id : true;
+}
 
 /**
  * ⚠️ **EL MISMO HUMANO TIENE DOS GRAFÍAS VIVAS EN PRODUCCIÓN.** Cerberus empuja
@@ -146,6 +182,19 @@ export function useMutacionesEspacios() {
     onSuccess: invalidar,
   });
 
+  /**
+   * EL ÍCONO (03-sep-2026). `icono: null` vuelve al de siempre — ver el
+   * docblock de `Espacio.icono` y de la ruta en el server.
+   */
+  const cambiarIcono = useMutation({
+    mutationFn: (v: { espacioId: number; icono: string | null }) =>
+      api<{ ok: true; espacio: Espacio }>(`/api/espacios/${v.espacioId}/icono`, {
+        method: 'PATCH',
+        body: JSON.stringify({ icono: v.icono }),
+      }),
+    onSuccess: invalidar,
+  });
+
   const archivar = useMutation({
     mutationFn: (espacioId: number) =>
       api<{ ok: true }>(`/api/espacios/${espacioId}/archivar`, { method: 'PATCH' }),
@@ -159,5 +208,5 @@ export function useMutacionesEspacios() {
     onSuccess: invalidar,
   });
 
-  return { crear, renombrar, agregarMiembro, sacarMiembro, archivar, desarchivar };
+  return { crear, renombrar, cambiarIcono, agregarMiembro, sacarMiembro, archivar, desarchivar };
 }

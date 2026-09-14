@@ -1,81 +1,29 @@
-import { useState } from 'react';
-import { Check, Columns2, Link2, Lock, MoveRight, Users } from 'lucide-react';
-import { AuditoriaDeLink } from './AuditoriaDeLink';
-import { ModalDeLink } from './ModalDeLink';
+import { Columns2 } from 'lucide-react';
 import { TituloEditable } from './TituloEditable';
-import type { DondeEstoy, Espacio } from './espacios';
-import type { Alcance, Nota, Permiso } from './notas';
+import type { Nota } from './notas';
 
 /**
- * QUÉ SE PUEDE HACER CON UNA PÁGINA — mover de lugar y compartirla con un link
- * (ADR 0047).
+ * QUÉ SE PUEDE HACER CON UNA PÁGINA ABIERTA — nombrar un documento y dividir
+ * pantalla.
  *
- * Va arriba del editor y no en la fila de la lista: las dos acciones se deciden
- * **con la página a la vista**, después de leer lo que dice. En la fila, «mover» y
- * «compartir» serían dos clics sobre un título de tres palabras.
+ * ⚠️ **Hasta el 04-sep-2026 acá vivían también «Mover» y «Compartir con
+ * link»** (ADR 0047): la razón de entonces era que esas dos acciones se
+ * decidían «con la página a la vista, después de leer lo que dice». A pedido
+ * explícito del dueño se mudaron al menú `⋮` de la fila (`MenuDeFila.tsx`,
+ * ver ADR 0093): se pueden mover o compartir sin abrir la página primero, y
+ * «Compartir con link» pasó a llamarse, a secas, «Compartir». Lo que queda
+ * acá es lo que de verdad necesita la página ABIERTA a la vista — nombrar un
+ * documento (mira su propio contenido) y dividir pantalla (arma el panel de
+ * al lado).
  */
-
-/**
- * EL AVISO QUE NADIE ESPERA.
- *
- * Traer una página del espacio a tu libreta privada **se la saca a todos los
- * demás**, y en la pantalla de ellos simplemente desaparece. Por eso se nombra a
- * la gente en vez de preguntar «¿estás segura?», que no dice nada.
- */
-function ConfirmarSacarDelEquipo({
-  espacio,
-  vendedoraId,
-  onSi,
-  onNo,
-}: {
-  espacio: Espacio;
-  vendedoraId?: string | null;
-  onSi: () => void;
-  onNo: () => void;
-}) {
-  const otros = espacio.miembros.filter((m) => m.trim().toLowerCase() !== (vendedoraId ?? '').trim().toLowerCase());
-
-  return (
-    <div role="alertdialog" className="rounded-lg border border-border bg-card p-3 text-sm">
-      <p className="font-medium text-foreground">Traerla a tu libreta la saca del espacio</p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {otros.length > 0
-          ? `${otros.join(', ')} dejan de verla.`
-          : 'Nadie más la está viendo, así que no le saca nada a nadie.'}
-      </p>
-      <div className="mt-2 flex gap-1.5">
-        <button
-          type="button"
-          onClick={onSi}
-          className="rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary-hover"
-        >
-          Traerla igual
-        </button>
-        <button type="button" onClick={onNo} className="rounded-lg px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted">
-          Dejarla acá
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export function AccionesDePagina({
   nota,
-  donde,
-  espacios,
-  vendedoraId,
   dividiendo,
-  onMover,
-  onAbrirLink,
-  onCortarLink,
   onTocarDividir,
   onCortarDivision,
   onRenombrar,
 }: {
   nota: Nota;
-  donde: DondeEstoy;
-  espacios: Espacio[];
-  vendedoraId?: string | null;
   /**
    * ¿HAY UNA PANTALLA DIVIDIDA A LA VISTA AHORA MISMO? No es lo mismo que
    * `nota.paginaDivididaId`: esto también es `true` mientras se está ELIGIENDO
@@ -85,48 +33,21 @@ export function AccionesDePagina({
    * persistida (ver `Libreta.tsx`).
    */
   dividiendo: boolean;
-  onMover: (destino: DondeEstoy) => void;
-  onAbrirLink: (v: { alcance: Alcance; permiso: Permiso; venceAt: string | null }) => void;
-  onCortarLink: () => void;
   /** Abre el selector de la pantalla dividida, en el panel de al lado. */
   onTocarDividir: () => void;
   /** Cierra la pantalla dividida — eligiendo o ya persistida, las dos. */
   onCortarDivision: () => void;
   /**
-   * NOMBRAR UN DIAGRAMA O UN DOCUMENTO (19-ago-2026, ampliado 26-ago-2026).
-   * Ninguna de las dos clases tiene «primera línea de texto» de la que sacar
-   * un título solo —React Flow tiene nodos, no prosa; un archivo adjuntado
-   * nace con el nombre del archivo, que puede no ser el que la vendedora
-   * quiere ver en su lista—, así que son las únicas dos que necesitan
-   * ponerlo a mano. Manda `texto` por el mismo `PATCH /api/notas/:id` que ya
-   * usa todo lo demás — el server no distingue por `tipo` al editar, ver
-   * `editarNota`.
+   * NOMBRAR UN DOCUMENTO (19-ago-2026, ampliado 26-ago-2026). Un archivo
+   * adjuntado no tiene «primera línea de texto» de la que sacar un título
+   * solo —nace con el nombre del archivo, que puede no ser el que la
+   * vendedora quiere ver en su lista—, así que es la única clase que
+   * necesita ponerlo a mano. Manda `texto` por el mismo `PATCH /api/notas/:id`
+   * que ya usa todo lo demás — el server no distingue por `tipo` al editar,
+   * ver `editarNota`.
    */
   onRenombrar: (texto: string) => void;
 }) {
-  /**
-   * `link` abre el modal de configuración y `registro` el Audit Log. Son estados
-   * del MISMO selector y no dos banderas sueltas: con dos booleanos se pueden
-   * abrir los dos a la vez, y los dos escuchan Escape en captura — el segundo se
-   * comería el del primero (ADR 0024).
-   */
-  const [abierto, setAbierto] = useState<'mover' | 'link' | 'registro' | null>(null);
-  const [confirmar, setConfirmar] = useState<DondeEstoy | 'no'>('no');
-
-  const espacioActual = espacios.find((e) => e.id === donde) ?? null;
-  const token = nota.token ?? null;
-
-  function pedirMover(destino: DondeEstoy) {
-    // Sacar del equipo es lo único que se pregunta. Compartir hacia un espacio no
-    // le quita nada a nadie, así que preguntarlo sería un clic de peaje.
-    if (donde !== null && destino === null) {
-      setConfirmar(destino);
-      return;
-    }
-    onMover(destino);
-    setAbierto(null);
-  }
-
   return (
     // 🔴 SIN `mb-4` PROPIO (19-ago-2026): el espacio antes de la hoja lo pone
     // el wrapper de `Libreta.tsx`/`PantallaDividida.tsx` (`pb-4`), para que
@@ -135,54 +56,21 @@ export function AccionesDePagina({
     // altura. `min-h-7` es la otra mitad de ese acuerdo: el renglón mide lo
     // mismo tenga botones (con borde, más altos) o solo texto.
     <div className="flex min-h-7 flex-wrap items-center gap-1.5">
-      {/* NOMBRAR EL DIAGRAMA O EL DOCUMENTO — las dos clases de página sin un
-          primer renglón de texto del que sacar un título solo. `flex-1` para
-          que empuje los botones a la derecha, como el título de la mitad
-          derecha en la pantalla dividida. */}
-      {(nota.tipo === 'diagrama' || nota.tipo === 'archivo') && (
-        <TituloEditable
-          valor={nota.texto}
-          placeholder={nota.tipo === 'diagrama' ? 'Nombra el diagrama' : 'Nombra el documento'}
-          onGuardar={onRenombrar}
-        />
+      {/* NOMBRAR EL DOCUMENTO — la clase de página sin un primer renglón de
+          texto del que sacar un título solo. `flex-1` para que empuje los
+          botones a la derecha, como el título de la mitad derecha en la
+          pantalla dividida. */}
+      {nota.tipo === 'archivo' && (
+        <TituloEditable valor={nota.texto} placeholder="Nombra el documento" onGuardar={onRenombrar} />
       )}
 
       {/*
-        🔴 `ml-auto`, y no solo el `flex-1` del título de arriba (26-ago-2026):
-        una página de TEXTO no tiene título acá (nace de la primera línea, no
-        de este campo), así que sin esto los tres botones se quedaban pegados
-        al borde IZQUIERDO en una página de texto y saltaban al borde DERECHO
-        en un diagrama o un documento — la misma barra cambiando de lugar
-        según de qué página se tratara es justo lo que se reportó como
-        «desordenado». Con `ml-auto` en el grupo (no en cada botón), los tres
-        quedan pegados a la derecha SIEMPRE, haya título al lado o no.
+        `ml-auto` (26-ago-2026): una página de TEXTO no tiene título acá (nace
+        de la primera línea, no de este campo), así que sin esto el botón se
+        quedaba pegado al borde IZQUIERDO en una página de texto y saltaba al
+        borde DERECHO en un documento.
       */}
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          onClick={() => setAbierto(abierto === 'mover' ? null : 'mover')}
-          className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
-        >
-          <MoveRight className="size-3.5" />
-          Mover
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setAbierto(abierto === 'link' ? null : 'link')}
-          aria-pressed={Boolean(token)}
-          className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition ${
-            token
-              ? // Compartida: se dice, y se dice siempre. Una página que está afuera y
-                // no lo parece es la peor forma de tener esta función.
-                'border-primary bg-secondary text-foreground'
-              : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-        >
-          <Link2 className="size-3.5" />
-          {token ? 'Compartida con link' : 'Compartir con link'}
-        </button>
-
         {/*
           DIVIDIR PANTALLA (17-ago-2026). Un TOGGLE, y de verdad: un segundo
           toque vuelve a una sola pantalla desde CUALQUIER momento de la
@@ -191,8 +79,7 @@ export function AccionesDePagina({
           quedaba mudo mientras se elegía: un segundo toque no hacía nada, y
           solo la ✕ de adentro del panel cerraba). Sin nada abierto, ABRE el
           selector en el panel de al lado (vive en `Libreta.tsx`, no acá: es
-          una columna entera, no un dropdown de 19rem). El mismo molde que
-          «Compartida con link», que también se dice siempre y no se esconde.
+          una columna entera, no un dropdown de 19rem).
         */}
         <button
           type="button"
@@ -208,95 +95,6 @@ export function AccionesDePagina({
           {dividiendo ? 'Pantalla dividida' : 'Dividir pantalla'}
         </button>
       </div>
-
-      {confirmar !== 'no' && espacioActual && (
-        <div className="w-full">
-          <ConfirmarSacarDelEquipo
-            espacio={espacioActual}
-            vendedoraId={vendedoraId}
-            onSi={() => {
-              onMover(confirmar);
-              setConfirmar('no');
-              setAbierto(null);
-            }}
-            onNo={() => setConfirmar('no')}
-          />
-        </div>
-      )}
-
-      {abierto === 'mover' && confirmar === 'no' && (
-        <div className="w-full rounded-lg border border-border bg-card p-2">
-          <p className="mb-1 px-1 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
-            Llevarla a
-          </p>
-          <div className="space-y-0.5">
-            {/* La libreta privada va primera y siempre existe, como en el selector. */}
-            <button
-              type="button"
-              disabled={donde === null}
-              onClick={() => pedirMover(null)}
-              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
-            >
-              <Lock className="size-3.5 shrink-0" />
-              <span className="flex-1 truncate">Mi libreta</span>
-              {donde === null && <Check className="size-3.5" />}
-            </button>
-
-            {espacios.map((e) => (
-              <button
-                key={e.id}
-                type="button"
-                disabled={donde === e.id}
-                onClick={() => pedirMover(e.id)}
-                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
-              >
-                <Users className="size-3.5 shrink-0" />
-                <span className="flex-1 truncate">{e.nombre}</span>
-                {donde === e.id && <Check className="size-3.5" />}
-              </button>
-            ))}
-
-            {espacios.length === 0 && (
-              <p className="px-2 py-1 text-xs text-muted-foreground">
-                Todavía no tienes espacios. Crea uno para compartir páginas.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {abierto === 'link' && (
-        <ModalDeLink
-          nota={nota}
-          onCerrar={() => setAbierto(null)}
-          /**
-           * 🔴 **GENERAR EL LINK NO CIERRA EL MODAL, y cerrarlo era un defecto.**
-           *
-           * Quien aprieta «Generar el link» quiere **el link**: la URL para copiar
-           * y pegar. Cerrando ahí, la pantalla hacía justo lo contrario de lo que
-           * le pidieron — el link se creaba bien y quedaba invisible, y había que
-           * volver a abrir el modal para copiarlo. De paso escondía el acceso al
-           * registro, que solo aparece cuando ya hay un link del que hablar.
-           *
-           * Queda abierto y se repinta solo: la mutación invalida la lista, la
-           * página vuelve con su `token`, y el modal pasa a mostrar la URL, el
-           * «Ver el registro» y «Cortar el link». Cerrar es de `Cancelar` y de la ✕.
-           */
-          onGuardar={onAbrirLink}
-          onCortar={() => {
-            onCortarLink();
-            setAbierto(null);
-          }}
-          // 🔴 Reemplaza el modal en vez de abrirse encima, y no es estética: los
-          // dos registran Escape EN CAPTURA, así que apilados el de arriba se come
-          // el del de abajo y quedaría una pantalla que no se cierra con la tecla
-          // que toda la app usa para eso (ADR 0024).
-          onVerRegistro={() => setAbierto('registro')}
-        />
-      )}
-
-      {abierto === 'registro' && <AuditoriaDeLink notaId={nota.id} onCerrar={() => setAbierto('link')} />}
-
     </div>
   );
 }

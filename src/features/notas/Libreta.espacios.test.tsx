@@ -8,18 +8,25 @@ import { Libreta } from './Libreta';
  *
  * Las reglas ya están fijadas puras (`espacios.test.ts`) y contra base
  * (`espacios/visibilidad.paridad.test.db.ts`). Lo que queda, y es la lección de
- * ADR 0024, es lo que solo se ve MONTANDO: los dos defectos de abajo no rompen
+ * ADR 0024, es lo que solo se ve MONTANDO: los defectos de abajo no rompen
  * nada, no tiran ninguna excepción y en pantalla se ven bien.
  *
- *   1. **Cambiar de espacio y que la página abierta se quede abierta.** El id de
- *      una página es de la tabla entera, así que el editor seguiría mostrando
- *      —y AUTOGUARDANDO, a los 800 ms— una página del espacio anterior, con el
- *      nombre del nuevo arriba.
- *   2. **La bienvenida comiéndose la pantalla adentro de un espacio vacío.** Se
+ *   1. **La bienvenida comiéndose la pantalla adentro de un espacio vacío.** Se
  *      lleva el selector con ella, así que la vendedora queda ENCERRADA en un
  *      lugar vacío: el único camino de vuelta a «Mi libreta» es recargar la app.
  *      Un espacio recién creado está vacío por definición, siempre — o sea que
  *      es el primer estado que ve quien usa el frente.
+ *
+ * 🔴 **«Cambiar de espacio CIERRA la página abierta» se probaba acá y era al
+ * revés de lo que se quería (04-sep-2026, a pedido explícito).** Tocar un
+ * espacio del riel para MIRAR su lista no tiene por qué tirar abajo lo que ya
+ * estabas leyendo o escribiendo — el panel de "Páginas" ya se superpone sin
+ * empujar nada (`absolute`, `Libreta.tsx`), y ahora tampoco tapa la página
+ * abierta. `alElegirVista` dejó de hacer `setSeleccion(null)`, y
+ * `paginaAbierta` aprendió a resolverse por `useNotaPorId` cuando la página ya
+ * no está en la lista de la vista actual (mismo seam que `PantallaDividida.tsx`
+ * y la barra de pestañas). El candado de abajo («YA NO cierra») prueba lo
+ * contrario de lo que este archivo probaba hasta ayer.
  */
 
 const ESPACIOS = [
@@ -64,6 +71,20 @@ beforeEach(() => {
       const u = String(url);
       if (u.includes('/api/espacios/padron')) return new Response(JSON.stringify({ personas: ['luz', 'sindy'] }));
       if (u.includes('/api/espacios')) return new Response(JSON.stringify({ espacios: espaciosDelServer }));
+      // `GET /api/notas/:id` — la trae `useNotaPorId`, ANTES del listado
+      // genérico de abajo (que también matchea por `includes`): la página
+      // abierta ya no cierra al cambiar de espacio (04-sep-2026), así que
+      // `paginaAbierta` puede pedirla por su cuenta aunque no esté en la
+      // lista de la vista actual.
+      const porId = u.match(/\/api\/notas\/(\d+)$/);
+      if (porId) {
+        const id = Number(porId[1]);
+        const nota = Object.values(PAGINAS)
+          .flat()
+          .find((n): n is { id: number } => typeof n === 'object' && n !== null && (n as { id?: number }).id === id);
+        if (!nota) return new Response(JSON.stringify({ ok: false }), { status: 404 });
+        return new Response(JSON.stringify({ ok: true, nota }));
+      }
       if (u.includes('/api/notas')) {
         const espacio = new URL(u, 'http://x').searchParams.get('espacio');
         return new Response(JSON.stringify({ notas: PAGINAS[espacio ?? 'privada'] ?? [] }));
@@ -100,8 +121,8 @@ test('al entrar, con un espacio disponible, arranca AHÍ y no en Mi libreta', as
   montado = montar(<Libreta vendedoraId="luz" />);
   await esperarA(cargoElEspacio(7), 'cargaron las páginas del espacio 7');
 
-  expect(botonQueDice('Mi libreta')).toBeTruthy();
-  expect(botonQueDice('Mi libreta')?.getAttribute('aria-current')).toBeNull();
+  expect(botonQueDice('Todas las páginas')).toBeTruthy();
+  expect(botonQueDice('Todas las páginas')?.getAttribute('aria-current')).toBeNull();
   expect(botonQueDice('Equipo de ventas')?.getAttribute('aria-current')).toBe('true');
 });
 
@@ -110,18 +131,22 @@ test('sin ningún espacio, se queda en Mi libreta — la Libreta de siempre', as
   // de equipo no puede quedar sin ningún lugar donde aterrizar.
   espaciosDelServer = [];
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  await esperarA(() => Boolean(botonQueDice('Todas las páginas')), 'llegó el riel');
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('mi página privada')), 'llegó la página privada');
 
-  expect(botonQueDice('Mi libreta')?.getAttribute('aria-current')).toBe('true');
+  expect(botonQueDice('Todas las páginas')?.getAttribute('aria-current')).toBe('true');
 });
 
-test('🔴 cambiar de espacio CIERRA la página abierta', async () => {
+test('🔴 cambiar de espacio YA NO cierra la página abierta', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
   await esperarA(cargoElEspacio(7), 'cargaron las páginas del espacio 7');
 
   // Vuelvo a la privada a mano para abrir una página de ahí — el redirect
   // automático solo corre una vez, al montar, así que no me trae de vuelta.
-  botonQueDice('Mi libreta')?.click();
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('mi página privada')), 'llegó la página privada');
 
   botonQueDice('mi página privada')?.click();
@@ -131,11 +156,18 @@ test('🔴 cambiar de espacio CIERRA la página abierta', async () => {
   await esperarA(() => Boolean(document.querySelector('[data-libreta-editor]')), 'se montó el editor');
   expect(document.querySelector('[data-libreta-editor]')).toBeTruthy();
 
-  // Salto al espacio compartido.
+  // Salto al espacio compartido — antes esto cerraba la página; ahora solo
+  // cambia qué lista muestra el panel, que se superpone sin tapar nada.
   botonQueDice('Equipo de ventas')?.click();
+  // `paginaAbierta` ya no la encuentra en la lista de "Equipo de ventas"
+  // (está vacía, `PAGINAS['7']`) y tiene que pedirla aparte por
+  // `useNotaPorId` — esperar a que ESE fetch concreto haya salido, mismo
+  // motivo que `cargoElEspacio` de más arriba.
+  await esperarA(() => pedidas.some((u) => /\/api\/notas\/1$/.test(u)), 'pidió la página abierta por su id');
   await reposar();
 
-  expect(document.querySelector('[data-libreta-editor]')).toBeNull();
+  expect(document.querySelector('[data-libreta-editor]')).toBeTruthy();
+  expect(botonQueDice('Equipo de ventas')?.getAttribute('aria-current')).toBe('true');
 });
 
 test('🔴 en un espacio VACÍO no aparece la bienvenida — no se queda encerrada', async () => {
@@ -146,9 +178,14 @@ test('🔴 en un espacio VACÍO no aparece la bienvenida — no se queda encerra
   // dice «es tuya, nadie más la ve» sobre un espacio que ve todo el equipo.
   expect(document.body.textContent).not.toContain('Tu libreta está en blanco');
   // Y el camino de vuelta sigue en pantalla, que es lo que importa de verdad.
-  expect(botonQueDice('Mi libreta')).toBeTruthy();
-  // El vacío se dice sin mentir sobre quién escribió.
-  expect(document.body.textContent).toContain('Nadie escribió nada acá todavía');
+  expect(botonQueDice('Todas las páginas')).toBeTruthy();
+
+  // El panel arranca cerrado — el vacío del espacio se dice ADENTRO de él.
+  botonQueDice('Equipo de ventas')?.click();
+  await esperarA(
+    () => Boolean(document.body.textContent?.includes('Nadie escribió nada acá todavía')),
+    'apareció el vacío del espacio',
+  );
 });
 
 test('el vacío de un espacio NO dice «nadie más del equipo la ve»', async () => {
@@ -168,11 +205,24 @@ test('🔴 «Administrar espacios» es FIJO — está en Mi libreta y en cualqui
   // (`ModalDeEspacios.tsx`), y ESE es quien decide qué se puede administrar —
   // ver `listarCreadosPor` del server, con su propio test de grafía
   // normalizada (`espacios/repositorio.test.db.ts`).
+  //
+  // 03-sep-2026: el disparador vive adentro del menú «Configuración» (se
+  // fusionó con «Configurar Respuestas Rápidas», que competía por el mismo
+  // lugar fijo al pie del riel) — hay que abrirlo para verlo.
   montado = montar(<Libreta vendedoraId="Luz" />);
   await esperarA(cargoElEspacio(7), 'cargaron las páginas del espacio 7');
+  botonQueDice('Configuración')?.click();
+  await reposar();
   expect(botonQueDice('Administrar espacios')).toBeTruthy();
 
-  botonQueDice('Mi libreta')?.click();
+  botonQueDice('Todas las páginas')?.click();
   await reposar();
+  // El clic de arriba no dispara `pointerdown` (es `.click()`, no `tocar()`),
+  // así que el menú puede haber quedado abierto o cerrado según el entorno —
+  // se abre solo si hace falta, en vez de asumir un estado.
+  if (!botonQueDice('Administrar espacios')) {
+    botonQueDice('Configuración')?.click();
+    await reposar();
+  }
   expect(botonQueDice('Administrar espacios')).toBeTruthy();
 });

@@ -80,3 +80,53 @@ export async function traerDocumento(archivo: string): Promise<Blob | null> {
     return null;
   }
 }
+
+/**
+ * UNA PÁGINA DE UN PDF, YA RENDERIZADA A PNG POR EL SERVER (08-sep-2026, ver
+ * `pdfARaster.ts` del server y ADR 0101, última sección). `null` ante
+ * CUALQUIER falla — de red, o el `422 pdf_no_renderizable` que el server
+ * contesta cuando PDFium no pudo con el archivo —: quien llama (`VisorPdf`)
+ * no distingue el motivo, porque en los dos casos hace lo mismo: caer al
+ * `<embed>` nativo con el blob crudo que ya tiene en memoria.
+ */
+export async function traerPaginaDePdf(
+  archivo: string,
+  numero: number,
+): Promise<{ blob: Blob; totalDePaginas: number } | null> {
+  try {
+    const token = tokenGuardado();
+    const res = await fetch(
+      `${API_URL}/api/notas/documentos/${encodeURIComponent(archivo)}/paginas/${numero}`,
+      { headers: token ? { authorization: `Bearer ${token}` } : {} },
+    );
+    if (!res.ok) return null;
+    const totalDePaginas = Number(res.headers.get('x-total-paginas') ?? '1');
+    const blob = await res.blob();
+    return { blob, totalDePaginas };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * DESCARGAR UN DOCUMENTO DESDE LA FILA (04-sep-2026) — sin tener la página
+ * abierta primero. `PaginaDocumento.tsx` ya tenía este `<a download>` a mano
+ * armado sobre un blob que YA estaba en memoria (la página estaba abierta y
+ * cargada); acá no hay ese blob, así que el primer paso es traerlo con
+ * `traerDocumento`. Devuelve si funcionó — quien llama decide qué avisar si
+ * no (`MenuDeFila` hoy no avisa nada: red caída acá es tan raro como al ver
+ * la página, y ese camino tampoco tenía un aviso propio, solo la pantalla de
+ * «no se pudo traer»).
+ */
+export async function descargarDocumento(archivo: { archivo: string; nombreOriginal: string }): Promise<boolean> {
+  const blob = await traerDocumento(archivo.archivo);
+  if (!blob) return false;
+
+  const url = URL.createObjectURL(blob);
+  const enlace = document.createElement('a');
+  enlace.href = url;
+  enlace.download = archivo.nombreOriginal;
+  enlace.click();
+  URL.revokeObjectURL(url);
+  return true;
+}

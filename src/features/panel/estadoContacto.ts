@@ -133,12 +133,22 @@ export function estadoDelContacto(e: EntradaEstadoContacto): EstadoContacto {
   // JAMÁS mostrar «no figura» cuando lo que pasó es que la API falló: son cosas
   // opuestas y la vendedora actúa distinto en cada una.
   if (e.error || e.ficha?.estado === 'error') {
+    /**
+     * 🔴 SIN CHIP (dueño, 13-sep-2026: «No se pudo saber… no me gusta»). El chip
+     * amarillo no le decía a la vendedora ni qué pasó ni qué hacer, y desde #1033
+     * mentía en el detalle: la ficha ya no le pregunta a Cerberus, la lee de la
+     * copia de Hermes. La cabecera no afirma nada —igual que en campaña— y la
+     * salida vive en el renglón de compras del Resumen, con «Reintentar».
+     *
+     * ⚠️ Sigue siendo `sin-saber` y no `nuevo`: quien lea el tono no puede
+     * confundir «no cargó» con «no compró».
+     */
     return {
       ...base,
       tono: 'sin-saber',
-      acento: 'alerta',
-      titulo: 'No se pudo saber',
-      detalle: 'Cerberus no respondió. No es que sea nueva: es que la ficha no cargó.',
+      acento: 'neutro',
+      titulo: '',
+      detalle: 'La ficha no cargó: no es que sea nueva.',
     };
   }
 

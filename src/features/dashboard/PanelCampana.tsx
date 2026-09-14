@@ -1,12 +1,23 @@
+import { useState } from 'react';
 import { Columnas, type PuntoDia } from '../../components/graficos/Columnas';
 import { sectionLabel } from '../../lib/styles';
+import { raizDePanel, tarjetasAngostas, terceraTarjetaAngosta } from './disposicion';
 import {
+  canalEfectivo,
   esperaEnPalabras,
+  explicacionDelUniverso,
   franjaEnProblemas,
+  nadieRespondio,
+  nombreDeOperador,
+  numero,
+  operadorSinAlta,
+  porcentajeQueNoEscribioNada,
   ROTULO_FRANJA,
+  type CanalEscucha,
   type DatosCampana,
   type PuntoFranja,
 } from './campana';
+import { ChipsDeCanal, PanelEscucha } from './PanelEscucha';
 
 /**
  * EL PANEL DE LA CAMPAÑA — la tercera lectura del Dashboard, sólo del módulo
@@ -24,7 +35,10 @@ import {
  *       no depende del volumen, depende de la HORA. Cuatro barras y se ve.
  *   C · LA PAUTA — quién abrió el chat desde un anuncio y se quedó sin que le
  *       preguntaran nada.
- *   D · QUIÉN ATIENDE + la serie diaria.
+ *   D · LA ESCUCHA (4-sep-2026) — qué piden, desde qué provincia y con qué
+ *       ánimo. Va DESPUÉS de la operación porque se lee, no se acciona: primero
+ *       a quién hay que contestarle hoy, después qué está diciendo la región.
+ *   E · QUIÉN ATIENDE + la serie diaria.
  *
  * ⚠️ **La cifra héroe es la única de la vista**, igual que en «El negocio»: dos
  * números gigantes compitiendo no son dos titulares, son ninguno.
@@ -36,7 +50,7 @@ function Vacio({ children }: { children: React.ReactNode }) {
 
 function Cifra({ n, className = '' }: { n: number; className?: string }) {
   return (
-    <span className={'font-mono tabular-nums text-foreground ' + className}>{n.toLocaleString('es-PE')}</span>
+    <span className={'font-mono tabular-nums text-foreground ' + className}>{numero(n)}</span>
   );
 }
 
@@ -83,6 +97,22 @@ export function PanelCampana({
   const franjas = datos?.franjas ?? [];
   const maxEspera = Math.max(1, ...franjas.map((f) => f.demora_mediana_min ?? 0));
   const apertura = datos?.aperturas[0];
+  const sinEscribir = apertura ? porcentajeQueNoEscribioNada(apertura) : null;
+  /**
+   * El canal elegido para la escucha. Vive acá y no en la URL: el Dashboard no
+   * tiene router (ADR 0002), y un filtro que sobrevive a un cambio de vista
+   * confundiría más de lo que ayuda — se vuelve a «Todos» cada vez.
+   */
+  const [canal, setCanal] = useState<CanalEscucha>('todas');
+  /**
+   * 🔴 EL CANAL QUE SE DIBUJA NO ES SIEMPRE EL ELEGIDO. Un canal con mensajes en
+   * «90 días» puede no tener ninguno en «Hoy», y entonces su chip deja de
+   * ofrecerse mientras la elección sigue viva en el estado: quedaban las tres
+   * tarjetas en cero, ningún chip prendido y nada que explicara el vacío. Se
+   * deriva —no se corrige con un `useEffect`— así que volver al período donde el
+   * canal sí tiene algo devuelve la elección intacta. Ver `canalEfectivo`.
+   */
+  const canalVisible = canalEfectivo(datos?.escucha, canal);
   const dias: PuntoDia[] = (datos?.dias ?? []).map((d) => ({
     dia: d.dia,
     total: d.entrantes,
@@ -102,9 +132,12 @@ export function PanelCampana({
   }
 
   return (
-    <div className={'flex min-h-0 flex-1 flex-col gap-2.5 transition-opacity ' + (actualizando ? 'opacity-60' : '')}>
+    // Angosto, el panel toma su alto y la vista hace scroll (`disposicion.ts`, #968).
+    <div className={raizDePanel + (actualizando ? ' opacity-60' : '')}>
       {/* ═══ A · LA GENTE ═══ */}
-      <section aria-label="La gente" className="grid shrink-0 grid-cols-[minmax(190px,0.85fr)_minmax(210px,1fr)_1.5fr] gap-2.5">
+      {/* Una columna en el teléfono, dos en sm y las tres de siempre desde md (#968): con las
+          tres fijas, a 390 px la tercera tarjeta quedaba fuera de la pantalla. */}
+      <section aria-label="La gente" className={`${tarjetasAngostas} md:grid-cols-[minmax(190px,0.85fr)_minmax(210px,1fr)_1.5fr]`}>
         <article className="rounded-2xl bg-card p-3.5 shadow-panel">
           <h3 className={sectionLabel}>Siguen sin respuesta</h3>
           {cargando ? (
@@ -115,7 +148,9 @@ export function PanelCampana({
                 {/* Rojo, no oro: acá el tiempo no se está acabando, ya se acabó. */}
                 <span className="size-2 shrink-0 rounded-full bg-destructive" />
                 <span className="font-heading text-[44px] font-bold leading-none text-foreground">
-                  {g?.sin_responder ?? 0}
+                  {/* La cifra más grande de la vista tampoco se escapa de `numero`:
+                      con la línea de Betto en 90 días son cuatro dígitos. */}
+                  {numero(g?.sin_responder ?? 0)}
                 </span>
               </p>
               <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -144,14 +179,22 @@ export function PanelCampana({
               {[0, 1, 2, 3].map((i) => <div key={i} className="h-6 animate-pulse rounded bg-muted" />)}
             </div>
           ) : (
-            <div className="mt-2 flex flex-col gap-2.5">
-              {franjas.map((p) => <BarraDeFranja key={p.franja} p={p} max={maxEspera} />)}
-            </div>
+            <>
+              {nadieRespondio(franjas) && (
+                <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                  Nadie contestó en el período, así que no hay ninguna espera que medir: las cuatro
+                  franjas van en «—» a propósito.
+                </p>
+              )}
+              <div className="mt-2 flex flex-col gap-2.5">
+                {franjas.map((p) => <BarraDeFranja key={p.franja} p={p} max={maxEspera} />)}
+              </div>
+            </>
           )}
         </article>
 
         {/* C · LA PAUTA — el embudo de la apertura repetida. */}
-        <article className="flex flex-col rounded-2xl bg-card p-3.5 shadow-panel">
+        <article className={`flex flex-col rounded-2xl bg-card p-3.5 shadow-panel ${terceraTarjetaAngosta}`}>
           <h3 className={sectionLabel}>Los que llegaron por un anuncio</h3>
           {cargando ? (
             <div className="mt-3 h-16 animate-pulse rounded bg-muted" />
@@ -168,7 +211,23 @@ export function PanelCampana({
                 <div className="flex items-center gap-1.5">
                   <span className="size-1.5 shrink-0 rounded-full bg-gold-ink" />
                   <dt className="text-muted-foreground">No escribieron nada más</dt>
-                  <dd className="ml-auto"><Cifra n={apertura.solo_eso} className="font-semibold" /></dd>
+                  <dd className="ml-auto">
+                    {/*
+                      🔴 LA PROPORCIÓN, NO SÓLO EL NÚMERO. Medido el 4-sep-2026 en la
+                      campaña de Betto: 161 de 224, o sea el **72 %**. «161» a secas no
+                      dice si eso es mucho o poco; «72 %» dice que el mecanismo de
+                      captación está perdiendo a siete de cada diez que quisieron hablar,
+                      y eso es lo más barato que esta pantalla tiene para arreglar.
+                    */}
+                    <Cifra n={apertura.solo_eso} className="font-semibold" />
+                    {sinEscribir !== null && (
+                      // El separador NO es cosmética: sin él se lee «6 29 %», que
+                      // parece un número solo y no dos cifras distintas.
+                      <span className="ml-1.5 border-l border-border pl-1.5 font-mono text-[11px] tabular-nums text-gold-ink">
+                        {sinEscribir} %
+                      </span>
+                    )}
+                  </dd>
                 </div>
               </dl>
               <p className="mt-2 border-t border-border pt-2 text-[10px] leading-relaxed text-muted-foreground">
@@ -185,8 +244,32 @@ export function PanelCampana({
         </article>
       </section>
 
-      {/* ═══ D · QUIÉN ATIENDE + LA SERIE ═══ */}
-      <section aria-label="La operación" className="grid min-h-0 flex-1 grid-cols-[1.4fr_1fr] gap-2.5">
+      {/* ═══ D · LA ESCUCHA — qué piden, desde dónde, con qué ánimo ═══ */}
+      {datos?.escucha?.estado === 'ok' && (
+        <div className="flex shrink-0 items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className={sectionLabel}>Qué está diciendo la región</h3>
+            {/*
+              🔴 SIN ESTA LÍNEA, LOS DOS UNIVERSOS SE LEEN COMO UN ERROR. Arriba
+              dice «3 recibidos» y acá abajo el chip «Todos» dice 116, en la
+              misma pantalla y sin nada en el medio: el primer reflejo es que uno
+              de los dos está mal. No lo está — que sean dos universos es
+              deliberado (ADR 0092): meter los 4.543 comentarios del muro en
+              «Siguen sin respuesta» la volvería una alarma de 4.000 que nadie
+              puede accionar, porque un muro no se contesta comentario por
+              comentario. Lo que faltaba era decirlo donde se ve la diferencia.
+            */}
+            <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+              {explicacionDelUniverso(datos.escucha)}
+            </p>
+          </div>
+          <ChipsDeCanal escucha={datos.escucha} canal={canalVisible} onCanal={setCanal} />
+        </div>
+      )}
+      <PanelEscucha escucha={datos?.escucha} canal={canalVisible} cargando={cargando} />
+
+      {/* ═══ E · QUIÉN ATIENDE + LA SERIE ═══ */}
+      <section aria-label="La operación" className="grid min-h-0 flex-1 grid-cols-1 gap-2.5 md:grid-cols-[1.4fr_1fr]">
         <article className="flex min-h-0 flex-col rounded-2xl bg-card p-3.5 shadow-panel">
           <h3 className={sectionLabel}>Quién atiende</h3>
           {cargando ? (
@@ -207,8 +290,31 @@ export function PanelCampana({
                 <tbody>
                   {datos.equipo.map((e) => (
                     <tr key={e.operador} className="border-t border-border/60">
+                      {/*
+                        El `title` lleva el id SIEMPRE: el nombre es para
+                        reconocer a la persona, el id es lo que hay que buscar
+                        cuando algo no cuadra y alguien va a mirar la base.
+                      */}
                       <td className="truncate py-1.5 pr-2 text-foreground" title={e.operador}>
-                        {e.operador}
+                        {/*
+                          🔴 QUIEN NO TIENE ALTA SE MUESTRA EN MONOESPACIADA, y
+                          no con un símbolo al lado. Un nombre se ve como nombre
+                          («Andrea»); un usuario se ve como lo que es, un
+                          identificador («usuario4»). La diferencia se lee sin
+                          leyenda y sin tooltip.
+
+                          ⚠️ La primera versión ponía un «·» y la galería mostró
+                          por qué no servía: `bot` no tiene alta Y manda
+                          automáticos, así que salía **«bot·· 49 automáticos»**
+                          — dos puntos pegados, uno de cada cosa. Un símbolo
+                          suelto compite con los separadores que ya existen.
+                        */}
+                        <span
+                          className={operadorSinAlta(e) ? 'font-mono text-muted-foreground' : ''}
+                          title={operadorSinAlta(e) ? 'No está dado de alta en el equipo: se muestra su usuario' : undefined}
+                        >
+                          {nombreDeOperador(e)}
+                        </span>
                         {e.automaticos > 0 && (
                           <span className="ml-1.5 text-muted-foreground">· {e.automaticos} automáticos</span>
                         )}
@@ -235,7 +341,9 @@ export function PanelCampana({
               <Columnas
                 puntos={dias}
                 unidad="mensajes"
-                resumen={`${datos?.mensajes.entrantes ?? 0} recibidos y ${datos?.mensajes.salientes ?? 0} enviados en el período.`}
+                // Con `numero`, igual que las demás cifras del panel: acá se leía
+                // «1372 recibidos» al lado de un «1,372» en el chip de WhatsApp.
+                resumen={`${numero(datos?.mensajes.entrantes ?? 0)} recibidos y ${numero(datos?.mensajes.salientes ?? 0)} enviados en el período.`}
               />
               {(datos?.mensajes.entrantes_sin_texto ?? 0) > 0 && (
                 <p className="mt-2 border-t border-border pt-2 text-[10px] leading-relaxed text-muted-foreground">

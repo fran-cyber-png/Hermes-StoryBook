@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, Undo2, X } from 'lucide-react';
 import { ErrorApi } from '../../lib/datos/cliente';
-import { hace, horasDesde } from '../../lib/formato';
+import { cifra, hace, horasDesde } from '../../lib/formato';
 import { useDeshacerUltimaTanda, useUltimaTanda, type ResultadoDeshacer } from './padron';
 
 /**
@@ -101,7 +101,7 @@ export function TiraDeshacer({ deshacer }: { deshacer: Deshacer }) {
         <Undo2 size={13} className="shrink-0 opacity-50" />
         <span>
           El reparto de {hace(tanda.cuando)} ya no tiene nada para deshacer — a esos{' '}
-          {tanda.total?.toLocaleString('es')} ya los movió alguien después.
+          {cifra(tanda.total ?? 0)} ya los movió alguien después.
         </span>
       </div>
     );
@@ -119,7 +119,7 @@ export function TiraDeshacer({ deshacer }: { deshacer: Deshacer }) {
       >
         {vieja ? <AlertTriangle size={13} className="shrink-0" /> : <Undo2 size={13} className="shrink-0" />}
         <span title={new Date(tanda.cuando).toLocaleString('es')}>
-          Deshacer el reparto de {hace(tanda.cuando)} · {tanda.total?.toLocaleString('es')} contactos
+          Deshacer el reparto de {hace(tanda.cuando)} · {cifra(tanda.total ?? 0)} contactos
         </span>
         <button
           type="button"
@@ -192,7 +192,7 @@ function ConfirmacionDeshacer({ deshacer }: { deshacer: Deshacer }) {
               ¿Deshacer el reparto de {hace(tanda.cuando)}?
             </p>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Eran <span className="font-bold tabular-nums text-foreground">{tanda.total?.toLocaleString('es')}</span>{' '}
+              Eran <span className="font-bold tabular-nums text-foreground">{cifra(tanda.total ?? 0)}</span>{' '}
               contactos. Los que nadie tocó después vuelven a como estaban; quien los tenía deja de verlos.
             </p>
             {vieja && (
@@ -219,7 +219,7 @@ function ConfirmacionDeshacer({ deshacer }: { deshacer: Deshacer }) {
               className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-navy py-2.5 text-sm font-bold text-white transition-[background-color,transform] duration-200 ease-house hover:bg-navy/90 active:scale-[0.98] disabled:opacity-50"
             >
               {trabajando ? <Loader2 size={15} className="animate-spin" /> : <Undo2 size={15} />}
-              Sí, deshacer {tanda.total?.toLocaleString('es')}
+              Sí, deshacer {cifra(tanda.total ?? 0)}
             </button>
           </footer>
         </div>
@@ -248,16 +248,16 @@ function ResultadoDeshacerVista({ deshacer }: { deshacer: Deshacer }) {
         {nadaQueDeshacer ? (
           `No se deshizo nada: ya los había movido alguien después.`
         ) : restaurados > 0 && devueltos > 0 ? (
-          `Deshecho: ${restaurados.toLocaleString('es')} volvieron a quien los tenía antes, ${devueltos.toLocaleString('es')} quedaron sin nadie.`
+          `Deshecho: ${cifra(restaurados)} volvieron a quien los tenía antes, ${cifra(devueltos)} quedaron sin nadie.`
         ) : restaurados > 0 ? (
-          `Deshecho: los ${restaurados.toLocaleString('es')} volvieron a quien los tenía antes.`
+          `Deshecho: los ${cifra(restaurados)} volvieron a quien los tenía antes.`
         ) : (
-          `Deshecho: los ${devueltos.toLocaleString('es')} quedaron sin nadie de nuevo.`
+          `Deshecho: los ${cifra(devueltos)} quedaron sin nadie de nuevo.`
         )}
       </span>
       {!nadaQueDeshacer && omitidosPorCambioPosterior > 0 && (
         <span className="text-success/80">
-          {omitidosPorCambioPosterior.toLocaleString('es')} ya los movió alguien después y no se tocaron.
+          {cifra(omitidosPorCambioPosterior)} ya los movió alguien después y no se tocaron.
         </span>
       )}
       <button

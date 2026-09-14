@@ -304,9 +304,22 @@ function trazarLazo(ctx: CanvasRenderingContext2D, c: Caja): void {
 }
 
 export interface OpcionesDePintado {
-  ancho: number;
-  alto: number;
   dpr: number;
+  /**
+   * EL ENCUADRE: cuánto se agranda el documento antes de pintar (1 = tamaño
+   * real, lo que usa el canvas grande) y hacia dónde se corre el origen —en
+   * píxeles de CSS, antes del `dpr` y de esta misma escala. Lo usa
+   * `MiniaturaDeCapa` para centrar el contenido de una capa sea donde sea que
+   * esté en la página; sin nada propio que encuadrar, quedan en `1`/`[0, 0]`.
+   */
+  escala?: number;
+  desplazamiento?: Punto;
+  /**
+   * Con `false` no se limpia el buffer antes de pintar — para cuando el
+   * llamador ya puso un fondo propio (el damero de una capa vacía, en
+   * `MiniaturaDeCapa`) y este pintado tiene que caer ENCIMA sin borrarlo.
+   */
+  limpiar?: boolean;
   /** Los ids elegidos. Vacío = nada seleccionado. */
   seleccionadas?: readonly string[];
   /** Si se está arrastrando el rectángulo de selección múltiple. */
@@ -331,10 +344,35 @@ export interface OpcionesDePintado {
  * hasta mover el mouse).
  */
 export function pintar(ctx: CanvasRenderingContext2D, figuras: Figura[], opciones: OpcionesDePintado): void {
-  const { ancho, alto, dpr, seleccionadas = [], lazo = null, conAdornos = true, opacidadDe } = opciones;
+  const {
+    dpr,
+    escala = 1,
+    desplazamiento = [0, 0],
+    limpiar = true,
+    seleccionadas = [],
+    lazo = null,
+    conAdornos = true,
+    opacidadDe,
+  } = opciones;
 
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, ancho, alto);
+  /**
+   * 🔴 EL CLEAR VA SIN NINGÚN TRANSFORM PUESTO, contra el buffer FÍSICO
+   * (`ctx.canvas`) — nunca contra un `ancho`/`alto` en las coordenadas que sea
+   * que venga el encuadre de más abajo. `setTransform` REEMPLAZA la matriz
+   * entera en vez de componerla con la que ya había: un `clearRect` hecho
+   * DESPUÉS de correr y escalar el origen limpiaría un rectángulo corrido y
+   * escalado, no el buffer entero — quedarían franjas del cuadro anterior sin
+   * borrar. Medido: la miniatura de una capa mostraba la imagen en sus
+   * coordenadas CRUDAS de la página (sin centrar) porque este mismo
+   * `setTransform`, puesto sin este cuidado, pisaba el encuadre que el
+   * llamador ya había armado con `ctx.translate`/`ctx.scale`.
+   */
+  if (limpiar) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+
+  ctx.setTransform(dpr * escala, 0, 0, dpr * escala, desplazamiento[0] * dpr, desplazamiento[1] * dpr);
 
   // Puntas y uniones redondeadas: es lo que hace que un trazo grueso se vea como
   // tinta y no como una tubería con las esquinas cortadas en escuadra. El

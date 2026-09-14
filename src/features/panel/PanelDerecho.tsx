@@ -1,37 +1,56 @@
-import { useState } from 'react';
-import { Clock, IdCard, MessageCircle } from 'lucide-react';
+import { lazy, Suspense, useState } from 'react';
+import { Clock, MessageCircle, UserRound } from 'lucide-react';
 import { encabezadoSeccion } from './estiloSeccion';
 import type { Conversacion } from '../../dominio/conversaciones';
 import { marcaDeCliente } from '../../dominio/cliente';
-import { useFicha } from '../cerberus/useFicha';
 import { BloqueTerritorio } from '../territorio/BloqueTerritorio';
 import type { Ficha } from '../cerberus/ficha';
-import { useLeadForm } from '../cerberus/BloqueLeadForm';
 import { useIntereses } from '../gestion/Intereses';
 import { useSenales } from '../senales/senales';
 import { useEventos, useMutacionesEventos } from '../eventos/eventos';
 import { useAgenda } from '../agenda/agenda';
-import { useFichaLocal } from './fichaLocal';
+import { PRIORIDADES, useFichaLocal } from './fichaLocal';
 import { RegistrarEvento } from '../eventos/RegistrarEvento';
 import { FichaRapida } from './FichaRapida';
-import { QuienEs } from './QuienEs';
+import { useUnificado } from '../identidad/enlaces';
+import { BuscadorContactos } from '../identidad/BuscadorContactos';
+import { etiquetaDeOrigen } from '../identidad/etiquetaOrigen';
+import { nombreCanal } from '../../components/BadgeCanal';
+import { paisDelContacto, paisDelNumero } from '../../dominio/pais';
+import { LoQueDijoElBot } from './LoQueDijoElBot';
 import { HistorialVacio } from './HistorialVacio';
 import { useCategorias, useEtiquetasDe } from '../gestion/categorias';
+import { useHistorialDeGestiones } from '../gestion/historialDeGestiones';
 import { estadoDelContacto } from './estadoContacto';
-import { nombreDelContacto } from './identidad';
+import { correoDelContacto, nombreDelContacto, procedenciaDelNombre } from './identidad';
 import { ensamblarTimeline } from './timeline';
-import { EncabezadoTimeline } from './EncabezadoTimeline';
+import { EncabezadoTimeline, type IdentidadDeCabecera } from './EncabezadoTimeline';
 import { EventoLinea } from './EventoLinea';
 import { PieAccionTimeline } from './PieAccionTimeline';
 import { FichaContacto } from '../cerberus/FichaContacto';
-import { VentaDesdeElPanel } from '../venta/VentaDesdeElPanel';
 import { CarritoDeseado } from './CarritoDeseado';
 import type { ProductoElegido } from '../venta/useVenta';
-import { origenDeLead } from '../cerberus/leadForm';
+import { metaDelContacto } from './metaDeContacto';
+import { deDondeVino } from '../../dominio/origen';
+import { useOrigenWa } from '../whatsapp/conversacionWa';
 import { personaEsTelefono } from '../../dominio/canal';
 import type { DestinoCorreo } from '../../lib/puente';
 import { useHistorialLlamadas } from '../llamadas/useLlamadas';
-import { BotonLlamar } from '../llamadas/BotonLlamar';
+import { usePerfil } from './usePerfil';
+import { PanelLlamada } from '../llamadas/PanelLlamada';
+import { BarraSeccionesDetalle } from './BarraSeccionesDetalle';
+import { seccionInicial, type IdSeccionDetalle } from './pestanas';
+import { TilesResumen } from './TilesResumen';
+import { ultimaActividad } from './resumenDetalle';
+import { comprasUnificadas, ultimaCompra } from './comprasUnificadas';
+import { resumenDelContacto } from './resumenDelContacto';
+
+/**
+ * PEREZOSO: el cajón de la venta (`FormularioVenta` y lo suyo) sólo se monta
+ * después de tocar «Registrar venta». Estático le sumaba al arranque, que está
+ * al tope (`scripts/presupuesto-de-chunks.mjs`).
+ */
+const VentaDesdeElPanel = lazy(() => import('../venta/VentaDesdeElPanel').then((m) => ({ default: m.VentaDesdeElPanel })));
 
 function fichaDeCliente(f: Ficha | undefined): Extract<Ficha, { estado: 'cliente' }> | null {
   return f?.estado === 'cliente' ? f : null;
@@ -47,15 +66,31 @@ function fichaDeCliente(f: Ficha | undefined): Extract<Ficha, { estado: 'cliente
  * La versión vieja asumía que esos primeros dos dígitos SIEMPRE eran el
  * código de país y los cortaba, mostrando «+51 876 542 3» — un teléfono
  * ajeno, con dos dígitos de menos, no el que estaba guardado.
+ *
+ * 🔴 **13-SEP-2026 — Y EL CÓDIGO NO ES «LO QUE SOBRA ANTES DE LOS ÚLTIMOS 9».**
+ * Eso vale para Perú y rompía todo país con un local de otro largo: una
+ * dominicana salía «+18 097 961 936» en vez de «+1 809 796 1936». Desde que el
+ * número va grande en su propio renglón de la cabecera, se leía a primera vista.
+ * El código sale ahora de la lista de países (`dominio/pais.ts`), y un local de
+ * 10 dígitos se agrupa 3-3-4, que es como se dicta.
  */
 export function formatearTelefono(raw: string): string {
   const digitos = raw.replace(/\D/g, '');
   if (digitos.length < 8) return raw;
   const tieneCodigoPais = digitos.length > 9;
-  const cc = tieneCodigoPais ? digitos.slice(0, digitos.length - 9) : '51';
+  const cc = tieneCodigoPais ? codigoDePais(digitos) : '51';
   const resto = tieneCodigoPais ? digitos.slice(cc.length) : digitos;
-  const grupos = resto.match(/.{1,3}/g) ?? [resto];
+  const grupos = resto.length === 10 ? [resto.slice(0, 3), resto.slice(3, 6), resto.slice(6)] : (resto.match(/.{1,3}/g) ?? [resto]);
   return '+' + [cc, ...grupos].join(' ');
+}
+
+function codigoDePais(digitos: string): string {
+  const conocido = paisDelNumero(digitos)?.codigo;
+  if (conocido) return conocido;
+  // Un +1 que no es de República Dominicana: `paisDelNumero` no adivina si es Estados
+  // Unidos o Canadá, pero el código de un dígito y el local de 10 sí se saben.
+  if (digitos.length === 11 && digitos.startsWith('1')) return '1';
+  return digitos.slice(0, digitos.length - 9);
 }
 
 export function PanelDerecho({
@@ -88,10 +123,11 @@ export function PanelDerecho({
   /**
    * ¿Quien mira trabaja en el módulo de CAMPAÑAS? (`modulos/modulo.ts`).
    *
-   * 🔴 **Apaga las consultas, no sólo el dibujo.** Tres de los bloques de este
-   * panel —la ficha de Cerberus, el lead del formulario y los intereses— salen
-   * de rutas que para campaña son **403**: sin esto la pantalla se llenaría de
-   * errores por pedir cosas que el server ya decidió que no le tocan.
+   * 🔴 **Apaga las consultas, no sólo el dibujo.** Dos de los bloques de este
+   * panel —el perfil (la ficha de Cerberus, el lead del formulario y el padrón)
+   * y los intereses— salen de rutas que para campaña son **403**: sin esto la
+   * pantalla se llenaría de errores por pedir cosas que el server ya decidió
+   * que no le tocan.
    *
    * ⚠️ Viaja como PROP y no llamando a `useSesion()` acá: ese hook hace su
    * propio fetch al montar, y este panel se monta en tres lugares.
@@ -128,6 +164,12 @@ export function PanelDerecho({
    * este panel se abre como hoja, no había ninguna forma de anotar la ficha.
    */
   const [anotandoFicha, setAnotandoFicha] = useState(false);
+  /**
+   * «UNIR CON OTRA FICHA», abierto desde el ícono de la cabecera. Vivía adentro de
+   * «Quién es», en la pestaña «Datos», que se fue el 13-sep-2026: el buscador se
+   * monta acá, al lado de la ficha rápida, por el mismo motivo que ella.
+   */
+  const [uniendo, setUniendo] = useState(false);
   /**
    * El carrito de la ficha (`CarritoDeseado`): qué quiere llevarse el cliente,
    * armado ANTES de registrar la venta. Vive acá y no en `CarritoDeseado`
@@ -172,6 +214,18 @@ export function PanelDerecho({
     setMonedasPorConversacion((prev) => ({ ...prev, [conversacion.clave]: monedaId }));
   }
   /**
+   * #887 — QUÉ SECCIÓN DEL DETALLE ESTÁ ABIERTA (Resumen · Actividad · Compras;
+   * «Datos» se fue a la cabecera el 13-sep-2026), UNA POR CONVERSACIÓN — mismo criterio que el carrito: el panel no
+   * se remonta al cambiar de conversación, así que un único `useState` habría
+   * mostrado la pestaña de UN contacto en la de cualquier otro.
+   */
+  const [seccionPorConversacion, setSeccionPorConversacion] = useState<Record<string, IdSeccionDetalle>>({});
+  // En campaña «Compras» no existe, y una preferencia por ella cae en Resumen (`pestanas.ts`).
+  const seccion = seccionInicial(seccionPorConversacion[conversacion.clave] ?? null, { esDeCampana });
+  function setSeccion(id: IdSeccionDetalle) {
+    setSeccionPorConversacion((prev) => ({ ...prev, [conversacion.clave]: id }));
+  }
+  /**
    * 🔴 ACÁ LA PREGUNTA ES «¿HAY TELÉFONO?», NO «¿ES WHATSAPP?» — y se llamaba
    * `esWa`, que es lo que rompió la ficha de los leads de formulario.
    *
@@ -189,17 +243,79 @@ export function PanelDerecho({
   const telefono = conversacion.persona_id;
 
   /**
-   * 🔴 LAS TRES DE CERBERUS SE APAGAN EN CAMPAÑA, y `senales` NO.
+   * 🔴 LO DE CERBERUS SE APAGA EN CAMPAÑA, y `senales` NO.
    *
-   * `/api/contactos` y `/api/gestiones/intereses` son superficies de `ventas`
-   * (`modulos/modulo.ts`): pedirlas desde campaña es un 403 garantizado.
+   * `/api/contactos/perfil` y `/api/gestiones/intereses` son superficies de
+   * `ventas` (`modulos/modulo.ts`): pedirlas desde campaña es un 403 garantizado.
    * `/api/senales` no lo es —«ya le mandaron el precio», «se enfrió» se derivan
    * del hilo y no tocan Cerberus— así que sigue andando para los dos módulos.
    * Que la línea esté acá y no en cada hook es a propósito: es UNA decisión.
    */
   const conCerberus = !esDeCampana;
-  const ficha = useFicha(telefono, tieneTelefono && conCerberus);
-  const lead = useLeadForm(telefono, tieneTelefono && conCerberus);
+  /**
+   * #1033 — EL PERFIL, UNA SOLA CONSULTA ARMADA EN HERMES.
+   *
+   * Reemplaza a las tres que este panel pedía al abrirse: la ficha EN VIVO de
+   * Cerberus (techo de 12 s, y «sin verificar» para todo cliente porque el
+   * detalle da 302), el formulario y el padrón de icarus (F.1). El server las
+   * arma con lo que Hermes ya guardó y devuelve las tres formas de siempre, así
+   * que lo que las dibuja no cambia (`panel/usePerfil.ts`).
+   *
+   * ⚠️ `padronDelPerfil` y no `padron`: ese nombre ya lo usa `marcaDeCliente`
+   * más abajo (el chip «Ya compró» de la cola, la copia de `clientes_padron`
+   * que deliberadamente no tiene nombre ni correo) — otra cosa.
+   *
+   * ⚠️ Registrar una venta sigue preguntando en vivo, dentro de
+   * `VentaDesdeElPanel`: ahí un «no está en la copia» no puede terminar en crear
+   * un cliente duplicado en el ERP.
+   */
+  const perfil = usePerfil(telefono, tieneTelefono && conCerberus);
+  const fichaCerberus = perfil.data?.ficha;
+  const leadDelPerfil = perfil.data?.lead ?? null;
+  const padronDelPerfil = perfil.data?.padron ?? null;
+  /**
+   * DE DÓNDE VINO, con los nombres de Meta puestos — y es lo que los PONE.
+   *
+   * ⚠️ **No se apaga en campaña.** El perfil se apaga porque `/api/contactos/perfil`
+   * y `/api/gestiones/intereses` son superficies de `ventas` y darían 403; ésta
+   * es el hilo de WhatsApp, que las dos mitades ya piden. Y la pregunta «¿de
+   * dónde vino esta persona?» tampoco es de un módulo: Betto también compra
+   * pauta.
+   *
+   * ⚠️ **`numero_propio ?? undefined`** y no la cadena vacía: `useOrigenWa` la
+   * usa para armar la MISMA clave de caché que el chat, y `''` es una línea
+   * distinta de «ninguna» — con la cadena, el panel pediría el hilo por su
+   * cuenta con el chat abierto al lado.
+   */
+  /* ⚠️ **Un lead de formulario NO pide el hilo**: `personaEsTelefono` dice que sí
+     para `canal = 'landing'` (tiene teléfono, por eso se le puede escribir), pero
+     todavía no hay conversación — el server contestaría `origen: null` y
+     `deDondeVino` ya sabe la respuesta por el `tipo`. Es un pedido que no puede
+     cambiar nada, y este repo ya pagó caro los pedidos que no cambian nada. */
+  const origenWa = useOrigenWa(
+    tieneTelefono && conversacion.tipo !== 'lead' ? telefono : null,
+    conversacion.numero_propio ?? undefined,
+  );
+  /**
+   * DE DÓNDE VINO, ya resuelto por precedencia (`dominio/origen.ts`): lo que la
+   * ficha resolvió contra Meta primero —es lo único que trae los NOMBRES—,
+   * después el primer anuncio que la cola ya traía, y al final el «no sabemos».
+   */
+  const origenDelPanel = deDondeVino({
+    tipo: conversacion.tipo,
+    canal: conversacion.canal,
+    origen_anuncio: conversacion.origen_anuncio,
+    ultima_origen: conversacion.ultima_origen,
+    resuelto: origenWa.data ?? null,
+  });
+  /**
+   * ⚠️ **`isLoading` y no `isPending`, por el mismo motivo escrito abajo**: con
+   * la consulta apagada `isPending` es `true` para siempre y el skeleton no
+   * terminaría nunca. Se calcula acá arriba porque lo usan DOS props —el
+   * skeleton y la meta— y con la condición escrita dos veces el bloque podría
+   * dibujar valores a medio cargar mientras el skeleton dice que todavía carga.
+   */
+  const cargandoMeta = tieneTelefono && (perfil.isLoading || origenWa.isLoading);
   const { data: senales } = useSenales([conversacion.clave]);
   const { data: intereses } = useIntereses(conversacion.clave, conCerberus);
   const { data: delTimeline } = useEventos(conversacion.clave);
@@ -234,9 +350,9 @@ export function PanelDerecho({
   const llamadas = useHistorialLlamadas(conversacion.persona_id);
   const estado = estadoDelContacto({
     conTelefono: tieneTelefono,
-    cargando: ficha.isPending && tieneTelefono,
-    error: ficha.isError,
-    ficha: ficha.data,
+    cargando: perfil.isPending && tieneTelefono,
+    error: perfil.isError,
+    ficha: fichaCerberus,
     /**
      * ⚠️ `?.` DESPUÉS DE `senales`, TAMBIÉN.
      *
@@ -253,12 +369,13 @@ export function PanelDerecho({
     sinCerberus: esDeCampana,
   });
 
-  const cliente = fichaDeCliente(ficha.data);
+  const cliente = fichaDeCliente(fichaCerberus);
 
   const nombreData = nombreDelContacto({
     pushname: conversacion.persona_nombre,
-    leadNombre: lead.data?.lead?.nombre ?? null,
+    leadNombre: leadDelPerfil?.nombre ?? null,
     cerberusNombre: cliente?.nombre ?? null,
+    icarusNombre: padronDelPerfil?.nombre ?? null,
     // Lo que el equipo anotó a mano en «Registrar contacto» — sin esto, un
     // contacto de campaña recién creado (sin Cerberus ni lead-form) seguía
     // diciendo «Sin nombre» aunque ya estuviera guardado (`identidad.ts`).
@@ -266,14 +383,17 @@ export function PanelDerecho({
   });
 
   const timeline = ensamblarTimeline({
-    ficha: ficha.data,
+    ficha: fichaCerberus,
     intereses: intereses?.lista,
     senales: senales?.senales?.[conversacion.clave],
-    leadForm: lead.data?.lead ? { campana: lead.data.lead.campana ?? undefined, fecha: lead.data.lead.fecha } : undefined,
+    leadForm: leadDelPerfil ? { campana: leadDelPerfil.campana ?? undefined, fecha: leadDelPerfil.fecha } : undefined,
     conversacion: { persona_nombre: conversacion.persona_nombre ?? undefined, lead_nombre: conversacion.lead_nombre ?? undefined },
     // Para que el timeline no repita como «evento» el nombre que el encabezado
     // ya tiene escrito 30 px más arriba. Ver el docblock de `nombreMostrado`.
     nombreMostrado: nombreData.principal,
+    // #887 — el alias ya se muestra en la cabecera (más abajo); no hace
+    // falta repetirlo como un evento sin fecha en Actividad.
+    aliasMostrado: nombreData.alias,
     eventos: delTimeline?.eventos ?? [],
     correos: delTimeline?.correos ?? [],
     yo: miVendedora,
@@ -288,21 +408,140 @@ export function PanelDerecho({
 
   const nombre = nombreData.principal ?? 'Sin nombre';
 
+  // #887 — «Resumen»: los tres tiles se derivan de lo que YA se pidió (el
+  // timeline y las compras unificadas de F.5), sin una consulta más.
+  const comprasDelContacto = comprasUnificadas(fichaCerberus, padronDelPerfil?.compras);
+  // #1033 — la lista muestra todo lo que vino de Cerberus, marcado; los tiles
+  // cuentan sólo lo que es compra (`dominio/estadosVenta.ts`: 1, 2 y 9). Una
+  // cotización no es «la última compra» ni suma al total.
+  const comprasQueCuentan = comprasDelContacto.filter((c) => c.esCompra);
+  const laUltimaActividad = ultimaActividad(timeline.grupos);
+  const laUltimaCompra = ultimaCompra(comprasQueCuentan);
+
+  /**
+   * #1033 — PAÍS Y OCUPACIÓN, UN CAMPO POR HECHO: lo que el cliente declaró en
+   * Cerberus al comprar antes que el padrón de icarus. Nunca del prefijo del
+   * teléfono, que es una probabilidad y no un dato (`bot/identidad.ts`).
+   */
+  const paisDelPerfil = cliente?.pais || padronDelPerfil?.pais || null;
+  const ocupacionDelPerfil = cliente?.ocupacion || padronDelPerfil?.ocupacion || null;
+
+  /**
+   * ══ LA TARJETA DE IDENTIDAD DE LA CABECERA (dueño, 13-sep-2026) ══════════════
+   *
+   * «Apartado Datos ya no existirá, lo pondremos de forma elegante arriba: 1
+   * número, 1 correo, 1 nombre, 1 país.» Todo lo que vivía en «Quién es» se
+   * resuelve acá UNA vez y la cabecera sólo lo dibuja:
+   *
+   *   · el país, como bandera: el declarado (Cerberus, icarus) o, si no hay, el del
+   *     código del número, avisado (`dominio/pais.ts`);
+   *   · el correo por precedencia, con su fuente al pasar el mouse
+   *     (`correoDelContacto`);
+   *   · ocupación y empresa junto al país; las fichas unidas en un renglón;
+   *   · Editar y Unir como íconos; el código de cliente y el DNI en el `title` del
+   *     chip «Cliente».
+   *
+   * ⚠️ Nada de esto le agrega una consulta al panel: son los mismos datos que ya
+   * se pedían para «Quién es».
+   */
+  const { data: unificado } = useUnificado(conversacion.clave);
+  const origenesUnidos = unificado?.origenes ?? [];
+  const correoDeLaCabecera = correoDelContacto({
+    anotado: fichaLocal.data?.email,
+    cerberus: cliente?.correo,
+    icarus: padronDelPerfil?.correo,
+    lead: leadDelPerfil,
+  });
+  const paisDeclarado = cliente?.pais
+    ? { valor: cliente.pais, fuente: 'de Cerberus' }
+    : padronDelPerfil?.pais
+      ? { valor: padronDelPerfil.pais, fuente: 'de icarus' }
+      : null;
+  const prioridad = PRIORIDADES.find((p) => p.id === fichaLocal.data?.prioridad);
+  const identidad: IdentidadDeCabecera = {
+    procedenciaNombre: procedenciaDelNombre(nombreData),
+    alias: nombreData.alias,
+    pais: paisDelContacto({ declarado: paisDeclarado?.valor, telefono: tieneTelefono ? telefono : null }),
+    fuentePais: paisDeclarado?.fuente ?? null,
+    // «Empresa» no se ofrece en campaña (tampoco en el drawer): mostrarla sería un dato
+    // que el operador ve y no puede corregir desde ningún lado.
+    detalles: [ocupacionDelPerfil, esDeCampana ? null : fichaLocal.data?.empresa].filter(
+      (d): d is string => Boolean(d?.trim()),
+    ),
+    correo: correoDeLaCabecera,
+    cargandoCorreo: fichaLocal.isLoading || (conCerberus && perfil.isLoading),
+    // 🔴 UN SOLO «Escribirle», en el renglón que tiene el correo (el candado es
+    // `QuienEs.test.tsx`). La `clave` viaja para que el correo quede en el timeline
+    // de ESTA conversación (`lib/puente.ts`).
+    // ⚠️ `escribirCorreo` y no `on…Correo`: el candado de `puenteCorreo.test.ts` lee cada
+    // `on…Correo:` después de `export function PanelDerecho` como una prop del panel.
+    escribirCorreo:
+      onMandarCorreo && correoDeLaCabecera.valor
+        ? () =>
+            onMandarCorreo({
+              para: correoDeLaCabecera.valor,
+              clave: conversacion.clave,
+              nombre: nombreData.principal ?? undefined,
+            })
+        : undefined,
+    // `etiquetaDeOrigen` es la MISMA que usa `PersonaUnificada`: con dos reglas, la
+    // misma ficha unida se llamaría distinto en dos lugares.
+    tambien: origenesUnidos.map((o) => `${nombreCanal(o.canal)} · ${etiquetaDeOrigen(o.canal, o.personaId, o.nombre)}`),
+    detalleEstado: cliente
+      ? ['Cliente de Cerberus', cliente.codigo, cliente.dni && `DNI ${cliente.dni}`].filter(Boolean).join(' · ')
+      : null,
+    // En campaña el lápiz no va: «Anotar quién es» ya está en el pie, y dos puertas
+    // al mismo drawer en la misma pantalla son una de más.
+    onEditar: esDeCampana ? undefined : () => setAnotandoFicha(true),
+    onUnir: conversacion.clave.startsWith('conv:') ? () => setUniendo(true) : undefined,
+    // Sin `llamar`: la llamada es `PanelLlamada`, debajo de la cabecera (ADR 0123).
+    // Interés es superficie de `ventas` (`/api/gestiones/intereses` es 403 en campaña):
+    // en campaña no hay renglón, en ventas está aunque esté vacío.
+    interes: esDeCampana ? undefined : (intereses?.lista?.map((i) => i.curso) ?? []),
+    prioridad: prioridad ? { rotulo: prioridad.rotulo, punto: prioridad.punto } : null,
+  };
+
+  /**
+   * #1033 — EL PERFIL EN UNA FRASE, con lo verificado y sin LLM
+   * (`resumenDelContacto.ts`). Se arma con lo que el panel ya tiene: no pide
+   * nada más.
+   *
+   * 🔴 Sólo en ventas: es la ficha de Goberna, no la de Betto ni la de Américo
+   * (dueño, 13-sep-2026). En campaña la etapa y la última actividad alcanzaban
+   * para armar una frase igual; el candado es `PanelDerecho.campana.test.tsx`.
+   */
+  const textoDelPerfil = esDeCampana
+    ? null
+    : resumenDelContacto({
+        esCliente: Boolean(cliente),
+        pais: paisDelPerfil,
+        ocupacion: ocupacionDelPerfil,
+        compras: comprasDelContacto,
+        intereses: intereses?.lista?.map((i) => i.curso) ?? [],
+        etapa: conversacion.etapa_efectiva ?? null,
+        ultimaActividad: laUltimaActividad,
+      });
+
   const chips: string[] = [];
   if (padron?.nivel === 'vip') {
     chips.push('VIP');
   }
 
+  // Por qué se perdió (ADR 0107): se pide sólo si está en «Dijo que no», que es rara.
+  const historialDeGestiones = useHistorialDeGestiones(conversacion.clave, conversacion.etapa_efectiva === 'perdido');
+
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-card shadow-panel">
       <EncabezadoTimeline
         nombre={nombre}
+        identidad={identidad}
         telefono={tieneTelefono && telefono ? formatearTelefono(telefono) : ''}
         canal={conversacion.canal}
         tipoDeFila={conversacion.tipo}
         telefonoCrudo={tieneTelefono ? telefono : null}
         numeroPropio={conversacion.numero_propio}
         etapa={conversacion.etapa_efectiva}
+        perdida={historialDeGestiones.data?.perdida ?? null}
         etiquetas={etiquetas}
         categorias={categorias}
         acento={estado.acento}
@@ -315,9 +554,9 @@ export function PanelDerecho({
          *
          * En React Query **v5** el estado `idle` no existe: una query con
          * `enabled: false` se queda en `status: 'pending'` **para siempre**. Y
-         * `useLeadForm` está apagada en campaña (`conCerberus`), así que
-         * `lead.isPending` era `true` eterno y las dos barras de
-         * `BloqueMetaSkeleton` pulsaban hasta que la vendedora cerrara la ficha.
+         * el perfil está apagado en campaña (`conCerberus`), así que
+         * `perfil.isPending` sería `true` eterno y las dos barras de
+         * `BloqueMetaSkeleton` pulsarían hasta que la vendedora cerrara la ficha.
          * Se reportó como «el detalle del contacto se demora tanto en cargar»;
          * no se demoraba, no iba a cargar.
          *
@@ -327,71 +566,107 @@ export function PanelDerecho({
          * módulo — con el `&&`, el próximo que apague una query se come el mismo
          * skeleton eterno sin un solo síntoma.
          */
-        cargandoMeta={tieneTelefono && lead.isLoading}
-        meta={
-          lead.data?.lead
-            ? {
-                // La MISMA palabra que la fila del radar (`origenDeLead`): acá
-                // decía «Web» y la fila «Landing», sobre el mismo hecho.
-                origen: origenDeLead(lead.data.lead.fuente),
-                campana: lead.data.lead.campana ?? lead.data.lead.anuncio ?? '',
-                primerContacto: lead.data.lead.fecha,
-              }
-            : null
-        }
+        cargandoMeta={cargandoMeta}
+        /**
+         * ══ «ORIGEN» AHORA SE DIBUJA SIEMPRE, Y SE RESUELVE POR PRECEDENCIA ══
+         *
+         * 🔴 **Antes este bloque entero era `null` sin lead de formulario**, o
+         * sea que la ficha de la enorme mayoría de las conversaciones —11.016
+         * personas escribieron en 90 días, 3.257 traen anuncio— no decía una
+         * palabra sobre de dónde venían. Ni «vino de un anuncio», que Hermes
+         * sabía, ni «no sabemos», que es la otra respuesta legítima. Ese
+         * silencio es lo que se leyó como «no vino de ningún lado» el
+         * 6-sep-2026.
+         *
+         * Y no se arregla poniendo un bloque nuevo al lado: **un campo por
+         * hecho, resuelto por precedencia, con la fuente anotada** — la regla
+         * que `identidad.ts` documenta y que este bloque estaba salteando. El
+         * anuncio de Click-to-WhatsApp gana porque es lo más específico que
+         * hay (sabemos el creativo y la campaña); el formulario respalda; si no
+         * hay ninguno de los dos, «Sin origen» **lo dice** y el `title` explica
+         * los dos motivos por los que puede faltar.
+         *
+         * ⚠️ La precedencia entera vive en `metaDeContacto.ts` y no acá adentro
+         * porque la galería de evidencia arma la MISMA cabecera: con la cuenta
+         * escrita en el JSX, la galería tendría que copiarla, y una galería que
+         * calcula por su cuenta puede verse bien con la app rota (regla dura
+         * #10). La palabra del formulario sale de `origenDeLead`, la misma que
+         * la fila del radar: acá decía «Web» y la fila «Landing» sobre el mismo
+         * hecho.
+         */
+        meta={cargandoMeta ? null : metaDelContacto(origenDelPanel, leadDelPerfil)}
         resumenIa={null}
       />
+      {/* #887 — LA CABECERA PERSISTENTE, la misma en todas las pestañas. Desde el
+          13-sep-2026 es entera de `EncabezadoTimeline`: la identidad, la tarjeta
+          «Contacto» y la tarjeta «De dónde viene» (con el interés y la prioridad
+          como renglones). 🔴 #1033 — «Cerberus · sin verificar» se fue: la ficha
+          sale de la copia local, verificada por construcción.
+          La llamada NO es un ícono de la tarjeta: es `PanelLlamada` (ADR 0123),
+          que consulta el permiso a Meta antes de pedirlo. El `BotonLlamar` que
+          iba de ícono se retiró como predecesor (#1049, #1050). */}
+      {tieneTelefono && <PanelLlamada conversacion={conversacion} />}
+      <BarraSeccionesDetalle activa={seccion} onCambiar={setSeccion} esDeCampana={esDeCampana} />
+      {/* 🔴 **`hidden`, NUNCA un `&&` que desmonta.** `RegistrarEvento` (en
+          Actividad) escucha `senalAbrir` — un contador que sube desde el shell
+          con el atajo `N` — y React sólo puede reaccionar a un prop en un
+          componente MONTADO. Desmontar la sección al cambiar de pestaña
+          rompía el atajo apenas la vendedora no estaba parada en Actividad,
+          sin un solo error: `senalNotas` subía y no había quién lo escuchara. */}
       <div className="min-h-0 flex-1 overflow-y-auto border-t border-border">
-        {/* ══ DÓNDE VOTA (ADR 0063) ═══════════════════════════════════════════
-            Sólo en campaña, y ARRIBA del timeline: el timeline narra qué pasó y
-            esto decide qué hacer — es el equivalente de «Qué quiere» en el panel
-            de ventas. El componente se apaga solo con `activo={false}`, así que
-            en ventas no se monta ni pide nada. */}
-        {/* ══ QUIÉN ES (la ficha rápida, ADR 0060) ═══════════════════════════
-            Va PRIMERO —antes que el territorio y que el timeline— porque es la
-            pregunta 1 del panel (ADR 0017) y porque hasta hoy no se dibujaba en
-            ninguna parte: el panel pedía la ficha entera y usaba un campo.
-            En los DOS módulos: `contacto_ficha` es una tabla de Hermes y desde
-            ADR 0080 es CRM genérico. */}
-        {/* ══ «POR COMPLETAR» SE RETIRÓ, Y NO POR ESPACIO ═══════════════════
-            🔴 **Era inerte, medido.** `ZonaPendientes` listaba «Nombre completo»
-            e «Interés específico» y llevaba un porcentaje. Completar **las dos**
-            cosas dejaba la lista igual y el número en **0 %**: `pendientes` sale
-            de `ficha.estado !== 'cliente'` y de nada más, y `progreso` sólo
-            cuenta eventos `confirmado` — mientras que llenar la ficha o
-            registrar un interés produce eventos `manual`. O sea que el
-            indicador no podía responder a las acciones que él mismo pedía.
-
-            Es el defecto que ADR 0080 nombró al sacar esta lista de campaña
-            —«un indicador de avance que no avanza enseña a no mirarlo»— y que
-            allá se cerró sólo para su mitad. Acá los mismos dos campos se
-            dibujan en «Quién es» con su valor cuando existe, con la forma del
-            hueco cuando no, y con el botón que los llena. */}
-        <QuienEs
-          clave={conversacion.clave}
-          nombreActual={nombreData.principal ?? telefono ?? 'este contacto'}
-          ficha={fichaLocal.data}
-          cerberus={ficha.data}
-          lead={lead.data?.lead}
-          cargando={fichaLocal.isLoading}
-          esDeCampana={esDeCampana}
-          intereses={intereses?.lista?.map((i) => i.curso)}
-          // Sólo campaña (candidatos, autenticados vía Centurión/auth-goberna): en esa vista el
-          // botón "Anotar" de arriba se retira a propósito — "Anotar quién es" abajo sigue.
-          onEditar={esDeCampana ? undefined : () => setAnotandoFicha(true)}
-          onCorreo={
-            onMandarCorreo
-              ? (destino) =>
-                  onMandarCorreo({
-                    ...destino,
-                    clave: destino.clave ?? conversacion.clave,
-                    nombre: destino.nombre ?? nombreData.principal ?? undefined,
-                  })
-              : undefined
-          }
-        />
-        <BloqueTerritorio clave={conversacion.clave} activo={esDeCampana} />
-        {/* El MISMO ritmo vertical que «Quién es» y «Dónde vota» (`px-4 py-3`):
+        <div className={seccion === 'resumen' ? '' : 'hidden'}>
+          {/* ══ RESUMEN, COMPACTO (dueño, 13-sep-2026, sobre una referencia) ══════
+              Una tarjeta —la última actividad y las compras, con el producto que
+              compró a la vista— y debajo el perfil en la suya. «Registrar
+              actividad» ya no se repite acá: la puerta es la de Actividad, y la tecla
+              `N` la abre desde cualquier pestaña. */}
+          <div className="space-y-2.5 px-4 py-3">
+            {/* 🔴 En campaña, sin renglón de compras (regla del dueño, 11-sep-2026):
+                el detalle de campaña no habla de ventas. Ver `TilesResumen`. */}
+            <TilesResumen
+              actividad={laUltimaActividad}
+              compra={laUltimaCompra}
+              totalCompras={comprasQueCuentan.length}
+              montoTotal={esDeCampana ? null : estado.compras}
+              /* La verdad de la ficha, no un cero: mientras viaja no hay «Sin
+                 compras», y si no cargó el renglón lo dice y ofrece reintentar
+                 (reemplaza al chip «No se pudo saber», 13-sep-2026). */
+              estadoCompras={
+                !tieneTelefono
+                  ? 'listo'
+                  : perfil.isError || fichaCerberus?.estado === 'error'
+                    ? 'error'
+                    : perfil.isPending
+                      ? 'cargando'
+                      : 'listo'
+              }
+              onReintentar={() => void perfil.refetch()}
+              onVerTodasLasCompras={comprasDelContacto.length > 0 ? () => setSeccion('compras') : undefined}
+              conCompras={!esDeCampana}
+            />
+            {/* #1033 — el perfil en una frase. Sin nada verificado que decir no se dibuja:
+                un hueco permanente enseña a no mirarlo (ADR 0080). */}
+            {textoDelPerfil && (
+              <section aria-label="Perfil" className="rounded-xl border border-border/80 bg-muted/30 px-3 py-2.5">
+                <h3 className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                  <UserRound size={12} aria-hidden /> Perfil
+                </h3>
+                <p className="text-[12.5px] leading-relaxed text-foreground">{textoDelPerfil}</p>
+              </section>
+            )}
+          </div>
+          {/* ══ LO QUE VIVÍA EN «DATOS», REUBICADO SIN PERDER NADA (13-sep-2026) ══
+              La identidad subió a la cabecera; lo que no es un dato de identidad
+              sino algo que el sistema ya sabe o decide viene a Resumen:
+              · «Lo que dijo el bot» — sólo si el bot dijo algo; en campaña la
+                columna llega nula y no aparece.
+              · «Dónde vota» (ADR 0063) — sólo en campaña: se apaga solo con
+                `activo={false}`, así que en ventas no se monta ni pide nada. */}
+          <LoQueDijoElBot conversacion={conversacion} />
+          <BloqueTerritorio clave={conversacion.clave} activo={esDeCampana} />
+        </div>
+        <div className={seccion === 'actividad' ? '' : 'hidden'}>
+        {/* El MISMO ritmo vertical que «Quién es» y «Locación» (`px-4 py-3`):
             eran tres paddings distintos —2.5, 3 y 3.5— en tres secciones
             apiladas de la misma columna, y esa clase de deriva no se ve de a una
             pero hace que el conjunto se lea desprolijo. */}
@@ -404,11 +679,6 @@ export function PanelDerecho({
             >
               <MessageCircle size={13} /> Escribirle
             </button>
-          )}
-          {tieneTelefono && conversacion.canal === 'whatsapp' && telefono && (
-            <div className="mb-3">
-              <BotonLlamar telefono={telefono} />
-            </div>
           )}
           <h3 className={encabezadoSeccion}>
             {/* «Qué pasó», no «Timeline»: es la única palabra en inglés que
@@ -455,11 +725,21 @@ export function PanelDerecho({
           <div className="mt-3">
             <RegistrarEvento
               clave={conversacion.clave}
-              senalAbrir={senalNotas}
+              senalAbrir={senalNotas ?? 0}
               esDeCampana={esDeCampana}
+              rotuloBoton="Registrar actividad"
             />
           </div>
-
+        </div>
+        </div>
+        {/* 🔴 En campaña la sección entera NO SE MONTA, no sólo se esconde: el
+            DOM oculto con `hidden` sigue siendo parte de la pantalla (lectores,
+            búsqueda del navegador) y el detalle de campaña no lleva nada de
+            compras. Acá desmontar es seguro — lo que obliga a `hidden` en las
+            otras secciones es `RegistrarEvento`, que vive en Actividad. */}
+        {!esDeCampana && (
+        <div className={seccion === 'compras' ? '' : 'hidden'}>
+        <div className="px-4 py-3">
           {/* ══ LA FICHA DE CERBERUS ══════════════════════════════════════
               `FichaContacto` estaba HUÉRFANO: el componente que muestra DNI,
               correo, código de cliente y los folios con estado, fecha y monto
@@ -486,15 +766,10 @@ export function PanelDerecho({
               consulta viaja o si falló: ahí el esqueleto y el «Buscar de nuevo»
               SON el contenido. Con `nuevo` no se dibuja nada, que es la verdad:
               esta persona no compró y no hay una lista que enseñar. */}
-          {conCerberus && (ficha.isPending || ficha.isError || ficha.data?.estado !== 'nuevo') && (
-          <div className="mt-3 border-t border-border pt-3">
-            {/* El encabezado ya no dice «Ficha de Cerberus»: la FICHA —quién
-                es— se unificó arriba en «Quién es», y lo que queda acá son las
-                compras y el carrito. Un rótulo que promete una ficha sobre una
-                lista de folios manda a buscar el DNI donde ya no está. */}
-            <h3 className={encabezadoSeccion}>
-              <IdCard size={14} className="text-muted-foreground" /> Lo que compró
-            </h3>
+          {conCerberus && (perfil.isPending || perfil.isError || fichaCerberus?.estado !== 'nuevo') && (
+          <div>
+            {/* Sin encabezado propio (13-sep-2026): «Lo que compró» iba arriba de
+                «Compras», que `FichaContacto` ya dibuja. Dos títulos para una lista. */}
             {/* 🔴 EL SEGUNDO PUENTE MUERTO DE ESTE MISMO COMPONENTE, y el
                 diagnóstico es idéntico al de tres líneas más arriba: hasta hoy
                 `grep 'onCorreo=' src/` daba **CERO**. `FichaContacto` declaraba
@@ -512,9 +787,20 @@ export function PanelDerecho({
                 sólo el panel sabe DE QUÉ conversación salió. Sin eso el correo
                 se guarda con `clave = NULL` y desaparece del timeline de esta
                 misma persona (ver `lib/puente.ts`). */}
+            {/* 🔴 #1033 — `datos`: la pestaña está MONTADA aunque no se vea
+                (`hidden`), así que sin esto `FichaContacto` volvería a pedirle a
+                Cerberus en vivo en cada apertura, que es justo lo que el perfil
+                vino a sacar. */}
             <FichaContacto
               conversacion={conversacion}
               embebida
+              datos={{
+                ficha: fichaCerberus,
+                cargando: perfil.isPending,
+                error: perfil.isError,
+                padron: padronDelPerfil,
+                lead: leadDelPerfil,
+              }}
               onCorreo={
                 onMandarCorreo
                   ? (destino) =>
@@ -547,6 +833,8 @@ export function PanelDerecho({
           </div>
           )}
         </div>
+        </div>
+        )}
       </div>
       {/* ⚠️ EL `onVender` ES LO QUE FALTABA. Sin él, `PieAccionTimeline` no
           dibuja nada —por diseño: nunca un no-op— y el botón de registrar la
@@ -574,14 +862,26 @@ export function PanelDerecho({
           onCerrar={() => setAnotandoFicha(false)}
         />
       )}
-      {vendiendo && (
-        <VentaDesdeElPanel
-          conversacion={conversacion}
-          onCerrar={() => setVendiendo(false)}
-          carritoInicial={carrito}
-          monedaInicial={monedaCarrito}
-          onMonedaCambiar={setMonedaCarrito}
+      {uniendo && (
+        <BuscadorContactos
+          clave={conversacion.clave}
+          nombreActual={nombreData.principal ?? telefono ?? 'este contacto'}
+          yaEnlazadas={origenesUnidos.flatMap((o) => o.claves)}
+          onCerrar={() => setUniendo(false)}
         />
+      )}
+      {/* Su propio Suspense, como la barra de la llamada: el cajón sólo existe
+          después de tocar «Registrar venta», así que no paga el arranque. */}
+      {vendiendo && (
+        <Suspense fallback={null}>
+          <VentaDesdeElPanel
+            conversacion={conversacion}
+            onCerrar={() => setVendiendo(false)}
+            carritoInicial={carrito}
+            monedaInicial={monedaCarrito}
+            onMonedaCambiar={setMonedaCarrito}
+          />
+        </Suspense>
       )}
     </div>
   );

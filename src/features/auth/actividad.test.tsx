@@ -3,7 +3,7 @@ import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { montar, type Montado } from '../../pruebas/dom';
 import { api } from '../../lib/datos/cliente';
-import { useActividadDeSesion } from './actividad';
+import { useEstadoDeActividad, useLatidoDeSesion } from './actividad';
 
 /**
  * EL LATIDO, MONTADO — mismo motivo que `useAutoguardado.test.tsx`: lo que hay
@@ -26,8 +26,14 @@ async function correrElReloj(ms: number) {
   });
 }
 
+/**
+ * La sonda cablea los DOS hooks, que es lo que hace la app: la raíz late y el
+ * modal cronometra. Los casos de abajo no cambiaron de exigencia — lo que se
+ * mide sigue siendo el cronómetro y el heartbeat.
+ */
 function Sonda({ id }: { id: string | null }) {
-  const { activo, transcurrido } = useActividadDeSesion(id);
+  const fuente = useLatidoDeSesion(id);
+  const { activo, transcurrido } = useEstadoDeActividad(fuente);
   return (
     <div>
       <p data-activo>{String(activo)}</p>
@@ -168,5 +174,65 @@ describe('limpieza al desmontar / cambiar de sesión', () => {
 
     expect(leer(montado, 'transcurrido')).toBe('00:00:00');
     expect(api).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * ══ 🔴 EL CANDADO QUE ESTE FRENTE VINO A PONER (8-sep-2026) ═════════════════
+ *
+ * `useActividadDeSesion` era UN hook con un `setInterval` de un segundo adentro,
+ * y `AppAutenticada` lo llamaba en la raíz: **toda la app se re-renderizaba una
+ * vez por segundo, todo el día**, para animar el `HH:mm:ss` de un modal cerrado.
+ *
+ * Lo que se afirma acá es lo único que impide que vuelva: el hook de la RAÍZ no
+ * puede re-renderizar por tiempo. Si alguien le devuelve el tick, este test se
+ * pone rojo con un número enorme de renders.
+ *
+ * ⚠️ Se cuentan los renders de un componente que llama SOLO al latido — que es
+ * exactamente el papel que `AppAutenticada` tiene.
+ */
+describe('🔴 el latido de la raíz no re-renderiza por tiempo', () => {
+  it('cinco minutos de reloj no agregan ni un render', async () => {
+    relojDeMentira();
+    vi.mocked(api).mockImplementation(() => Promise.resolve({ iniciadaEn: new Date().toISOString() }));
+
+    let renders = 0;
+    function SondaRaiz() {
+      renders++;
+      useLatidoDeSesion('luz');
+      return null;
+    }
+
+    montado = montar(<SondaRaiz />);
+    await correrElReloj(0); // deja resolver el latido inicial (setIniciadaEn)
+    const trasElArranque = renders;
+
+    await correrElReloj(5 * 60_000);
+
+    expect(
+      renders,
+      `la raíz se re-renderizó ${renders - trasElArranque} veces en 5 minutos: el tick volvió a subir`,
+    ).toBe(trasElArranque);
+  });
+
+  it('y el cronómetro, apagado con `corriendo: false`, tampoco', async () => {
+    relojDeMentira();
+    vi.mocked(api).mockImplementation(() => Promise.resolve({ iniciadaEn: new Date().toISOString() }));
+
+    let renders = 0;
+    function SondaApagada() {
+      renders++;
+      const fuente = useLatidoDeSesion('luz');
+      useEstadoDeActividad(fuente, false);
+      return null;
+    }
+
+    montado = montar(<SondaApagada />);
+    await correrElReloj(0);
+    const trasElArranque = renders;
+
+    await correrElReloj(60_000);
+
+    expect(renders).toBe(trasElArranque);
   });
 });

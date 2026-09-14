@@ -76,7 +76,14 @@ afterEach(() => {
  * afirmación se INVIRTIÓ en vez de borrarse: hay un caso propio que exige que la
  * ficha rápida se pida en LOS DOS módulos. Ver «la ficha rápida es de los dos».
  */
-const DE_VENTAS = ['/api/contactos/ficha', '/api/contactos/lead', '/api/gestiones/intereses'];
+/*
+ * 🔴 #1033 (12-sep-2026): `/api/contactos/ficha` y `/api/contactos/lead` SALIERON
+ * de esta lista porque el panel ya no las pide al abrirse — las reemplaza UNA
+ * consulta de perfil armada en Hermes, que sigue siendo de `ventas`. La
+ * afirmación no se aflojó: cambió de ruta, y `PanelDerecho.perfil.test.tsx`
+ * fija además que las tres viejas no vuelvan.
+ */
+const DE_VENTAS = ['/api/contactos/perfil', '/api/gestiones/intereses'];
 
 /** Lo que se pide en los dos lados: CRM genérico, sin ERP detrás. */
 const DE_LOS_DOS = ['/api/contactos/registro', '/api/senales'];
@@ -129,6 +136,28 @@ describe('el panel derecho en campaña', () => {
   });
 
   /**
+   * 🔴 #1033 — EL PERFIL ES DE VENTAS DE GOBERNA, no de Betto ni de Américo
+   * (pedido del dueño, 13-sep-2026).
+   *
+   * Aunque en campaña la consulta de perfil no sale, el bloque se armaba igual con
+   * la etapa y la última actividad: «Perfil · Está en «Simpatiza».» en el panel de
+   * un operador de campaña. Dos mitades: si el bloque desapareciera para todos,
+   * «no está en campaña» pasaría en verde igual.
+   */
+  it('🔴 el bloque «Perfil» no se dibuja en campaña, y en ventas sí', async () => {
+    vista = montar(
+      <PanelDerecho conversacion={{ ...CONTACTO, etapa_efectiva: 'simpatiza' }} miVendedora="centurion:betto.romero" esDeCampana />,
+    );
+    await reposar();
+    expect(vista.contenedor.querySelector('section[aria-label="Perfil"]'), 'en campaña no hay perfil de ventas').toBeNull();
+    vista.desmontar();
+
+    vista = montar(<PanelDerecho conversacion={{ ...CONTACTO, etapa_efectiva: 'interesado' }} miVendedora="luz" />);
+    await reposar();
+    expect(vista.contenedor.querySelector('section[aria-label="Perfil"]'), 'en ventas el perfil tiene que estar').not.toBeNull();
+  });
+
+  /**
    * ⚠️ El estado de la banda **no puede decir «no figura en Cerberus»**: sería
    * cierto por casualidad y engañoso, porque nadie preguntó. Tampoco puede
    * decir que el canal no trae teléfono, con el teléfono ahí al lado.
@@ -155,17 +184,41 @@ describe('el panel derecho en campaña', () => {
    * `fetch` que **nunca resuelve**, o sea la query EN VUELO de verdad. Sin ella,
    * «no hay skeleton en campaña» pasaría también si alguien borrara el skeleton
    * del panel — y entonces en ventas nadie vería que la ficha está cargando.
+   *
+   * 🔴 **LA MITAD DE CAMPAÑA CAMBIÓ DE CONTACTO EL 7-SEP-2026, Y ESO LA HACE
+   * MÁS FUERTE, NO MÁS FLOJA.** Decía «en campaña el lead-form no se pide, así
+   * que no puede haber un skeleton suyo», y esa frase daba por sentado que el
+   * bloque de meta salía SÓLO del formulario. Desde que «Origen» se dibuja
+   * siempre (`dominio/origen.ts`), el bloque también espera al hilo de WhatsApp
+   * —que en campaña **sí** se pide, porque no toca Cerberus—, así que ahí un
+   * esqueleto es correcto: hay una consulta en vuelo de verdad y termina.
+   *
+   * Lo que se fija ahora es **exactamente la propiedad que causó el bug**: una
+   * consulta APAGADA no puede dibujar un esqueleto. Por eso el caso de campaña
+   * usa un comentario de Facebook, donde `useLeadForm` y `useOrigenWa` están
+   * las DOS apagadas (sin teléfono no hay a quién preguntarle) — con la lectura
+   * vieja de `isPending`, ese panel se quedaría pulsando para siempre. Antes el
+   * candado cubría una consulta apagada; ahora cubre dos.
    */
   it('🔴 en campaña NO hay skeleton eterno, y en ventas el skeleton sí aparece mientras carga', async () => {
     // Un server que acepta la request y no contesta jamás: la query queda
     // `pending` + `fetching`, que es «cargando» de verdad.
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
 
-    vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="centurion:betto.romero" esDeCampana />);
+    /** Sin teléfono: las dos consultas del bloque de meta quedan apagadas. */
+    const SIN_TELEFONO: Conversacion = {
+      ...CONTACTO,
+      clave: 'int:9001',
+      canal: 'facebook',
+      tipo: 'comentario',
+      persona_id: '77001',
+      numero_propio: null,
+    };
+    vista = montar(<PanelDerecho conversacion={SIN_TELEFONO} miVendedora="centurion:betto.romero" esDeCampana />);
     await reposar();
     expect(
       vista.contenedor.querySelectorAll('[data-esqueleto="meta"]'),
-      'en campaña el lead-form no se pide, así que no puede haber un skeleton suyo',
+      'las dos consultas del bloque están APAGADAS: un esqueleto acá no espera a nadie',
     ).toHaveLength(0);
     vista.desmontar();
 
@@ -175,6 +228,49 @@ describe('el panel derecho en campaña', () => {
       vista.contenedor.querySelectorAll('[data-esqueleto="meta"]').length,
       'en ventas, con la ficha en vuelo, el skeleton tiene que verse',
     ).toBeGreaterThan(0);
+  });
+
+  /**
+   * 🔴 **LA TERCERA MITAD, y existe porque cambiar el contacto del caso de
+   * arriba dejó de mirar el que sí tiene teléfono.** En campaña, con teléfono,
+   * ahora SÍ hay una consulta en vuelo legítima (el hilo de WhatsApp, que no
+   * toca Cerberus), así que el esqueleto es correcto — lo que no puede ser
+   * correcto es que **sobreviva a que esa consulta conteste**. Con la lectura
+   * vieja (`isPending`) el de campaña no terminaba nunca; con `isLoading`
+   * termina, y eso es lo que se fija acá.
+   */
+  it('🔴 en campaña CON teléfono el esqueleto aparece y después se va', async () => {
+    let contestar: ((r: Response) => void) | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: unknown) =>
+        String(url).includes('/api/whatsapp/conversacion/')
+          ? new Promise<Response>((listo) => {
+              contestar = listo;
+            })
+          : Promise.reject(new Error('sin server en el test')),
+      ),
+    );
+
+    vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="centurion:betto.romero" esDeCampana />);
+    await reposar();
+    expect(
+      vista.contenedor.querySelectorAll('[data-esqueleto="meta"]').length,
+      'con el hilo en vuelo, el bloque de meta todavía no sabe qué decir',
+    ).toBeGreaterThan(0);
+
+    contestar!(
+      new Response(JSON.stringify({ telefono: CONTACTO.persona_id, mensajes: [], origen: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await esperarA(
+      () => vista!.contenedor.querySelectorAll('[data-esqueleto="meta"]').length === 0,
+      'que el esqueleto del bloque de meta se vaya cuando el hilo contesta',
+    );
+    // Y lo que queda dicho es la respuesta, no un hueco.
+    expect(vista.contenedor.textContent).toContain('Sin origen');
   });
 
   /**
@@ -258,30 +354,51 @@ describe('el panel derecho en campaña', () => {
    * ⚠️ **LA LISTA YA NO EXISTE EN NINGUNO DE LOS DOS (24-ago-2026), y por eso
    * este test cambió de SUJETO sin cambiar de intención.** Se midió que también
    * en ventas era inerte: completar los dos campos dejaba el 0 % y la lista
-   * igual. Lo que la reemplaza es «Quién es», que dibuja los mismos campos con
-   * su valor o con la forma del hueco.
+   * igual. Lo que la reemplazó fue «Quién es», y desde el 13-sep-2026 la
+   * tarjeta de identidad de la cabecera (la pestaña «Datos» se fue).
    *
    * Lo que se sigue fijando es lo de siempre —**a campaña no se le pide lo que
-   * no puede hacer**— sobre los campos que ahora lo dicen: «Interés» y
-   * «Empresa» son de ventas, y las DOS mitades importan (sin la de ventas, este
-   * test pasaría también si alguien borrara el bloque entero).
+   * no puede hacer**—: «Interés» es de ventas, y el lápiz de la ficha rápida no
+   * va en campaña porque ahí la puerta es «Anotar quién es», en el pie. Las DOS
+   * mitades importan: sin la de ventas, este test pasaría también si alguien
+   * borrara la cabecera entera.
    */
-  it('🔴 en campaña no se pide lo imposible, y en ventas esos campos siguen', async () => {
+  it('🔴 en campaña no se pide lo imposible, y en ventas eso sigue', async () => {
     vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="centurion:betto.romero" esDeCampana />);
     await reposar();
     const enCampana = vista.contenedor.textContent ?? '';
     expect(enCampana).not.toContain('Por completar');
     expect(enCampana, 'el interés es 403 en campaña: no se pide ni se dibuja').not.toContain('Interés');
     expect(enCampana, 'la empresa no se ofrece en campaña ni en el drawer').not.toContain('Empresa');
-    // Pero el bloque SÍ está: lo que se recorta son dos campos, no la sección.
-    expect(enCampana, 'en campaña «Quién es» sigue existiendo').toContain('Quién es');
+    expect(vista.contenedor.querySelector('button[aria-label="Editar la ficha"]'), 'en campaña la puerta es el pie').toBeNull();
+    // Pero la identidad SÍ está: el número se lee y se copia.
+    expect(vista.contenedor.querySelector('button[aria-label="Copiar el número"]'), 'en campaña la cabecera tiene el número').not.toBeNull();
     vista.desmontar();
 
     vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="luz" />);
     await reposar();
-    const enVentas = vista.contenedor.textContent ?? '';
-    expect(enVentas, 'en ventas el interés sigue estando').toContain('Interés');
-    expect(enVentas, 'en ventas la empresa sigue estando').toContain('Empresa');
+    expect(vista.contenedor.querySelector('button[aria-label="Editar la ficha"]'), 'en ventas el lápiz está').not.toBeNull();
+  });
+
+  /**
+   * 🔴 LA CABECERA DE CAMPAÑA NO DICE NADA DE CERBERUS NI DE COMPRAS (dueño, 13-sep-2026):
+   * sin país declarado —en campaña no hay perfil—, la bandera sale del código del
+   * número y lo avisa. Las dos mitades: en ventas, la misma persona sin perfil
+   * también tiene su bandera, así que la ausencia de Cerberus no es un panel roto.
+   */
+  it('🔴 en campaña la bandera sale del número y la cabecera no nombra a Cerberus', async () => {
+    vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="centurion:betto.romero" esDeCampana />);
+    await reposar();
+    const bandera = vista.contenedor.querySelector('[data-bandera]');
+    expect(bandera?.getAttribute('data-bandera'), 'el +51 del número').toBe('PE');
+    expect(vista.contenedor.querySelector('[data-pais="PE"]')?.getAttribute('title')).toContain('código del número');
+    const titulos = [...vista.contenedor.querySelectorAll('[title]')].map((e) => e.getAttribute('title') ?? '').join(' ');
+    expect(`${vista.contenedor.textContent} ${titulos}`, 'la cabecera de campaña nombró a Cerberus').not.toContain('Cerberus');
+    vista.desmontar();
+
+    vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="luz" />);
+    await reposar();
+    expect(vista.contenedor.querySelector('[data-bandera]')?.getAttribute('data-bandera')).toBe('PE');
   });
 
   it('LA OTRA MITAD: en ventas sí las pide — si no, esto pasaría con el panel roto', async () => {
@@ -322,5 +439,47 @@ describe('el panel derecho en campaña', () => {
     vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="centurion:betto.romero" esDeCampana />);
     await reposar();
     expect(pedidos.filter((p) => p.includes('/api/senales')).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * 🔴 **EL DETALLE DE CAMPAÑA NO HABLA DE VENTAS NI DE COMPRAS** (regla del
+   * dueño, 11-sep-2026). Apagar las consultas de Cerberus no alcanzaba: la
+   * pestaña «Compras» y los tiles «Última compra» / «Total de compras» se
+   * dibujan con lo que haya, y sin ficha decían «Sin compras» y un 0 — o sea,
+   * le afirmaban a un comando de campaña que su contacto nunca compró, sobre un
+   * negocio que no es el suyo. Lo reportó el alta de Américo en producción.
+   *
+   * Se mira el DOM entero y no sólo lo visible: las secciones del detalle se
+   * esconden con `hidden`, no se desmontan, así que una pestaña oculta con
+   * compras adentro también cuenta como rastro.
+   *
+   * ⚠️ **Las dos mitades**: sin la de ventas, este test pasaría en verde con el
+   * Resumen roto para todo el mundo.
+   */
+  it('🔴 en campaña no hay pestaña Compras ni tiles de compra, y en ventas sí', async () => {
+    const rotulos = () =>
+      [...(vista?.contenedor.querySelectorAll('[role="tab"]') ?? [])].map((t) => t.textContent?.trim());
+
+    vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="centurion:betto.romero" esDeCampana />);
+    await reposar();
+    expect(rotulos(), 'campaña tiene Resumen y Actividad — nada de compras').toEqual(['Resumen', 'Actividad']);
+    const enCampana = vista.contenedor.textContent ?? '';
+    for (const rastro of ['Compras', 'Monto total', 'Total comprado', 'Sin compras', 'Registrar venta']) {
+      expect(enCampana, `«${rastro}» es de ventas y apareció en el detalle de campaña`).not.toContain(rastro);
+    }
+    // Lo que NO es de ventas se queda: la última actividad es del contacto, no del ERP.
+    expect(enCampana, 'la última actividad sigue en el Resumen de campaña').toContain('Última actividad');
+    vista.desmontar();
+
+    vista = montar(<PanelDerecho conversacion={CONTACTO} miVendedora="luz" />);
+    await reposar();
+    expect(rotulos()).toEqual(['Resumen', 'Actividad', 'Compras']);
+    const enVentas = vista.contenedor.textContent ?? '';
+    const resumen = vista.contenedor.querySelector('section[aria-label="Resumen del contacto"]');
+    expect(resumen?.textContent, 'en ventas el resumen tiene su renglón de compras').toContain('Compras');
+    // Acá todo `fetch` falla: la ficha NO cargó, así que decir «Sin compras» sería
+    // afirmar lo que no se sabe (y así fue hasta el 13-sep-2026). Tampoco se grita.
+    expect(enVentas, 'una ficha que no cargó no es «sin compras»').not.toContain('Sin compras');
+    expect(enVentas, 'ni «No se pudo saber» en la cabecera').not.toContain('No se pudo saber');
   });
 });

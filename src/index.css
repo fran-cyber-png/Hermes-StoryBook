@@ -47,7 +47,7 @@
   --radius: 0.75rem;
 
   /* El riel de las barras de scroll. Token y no literal: en el tema oscuro un
-     gris claro sobre #0F1419 es una cicatriz que cruza la pantalla. */
+     gris claro sobre #0D1117 es una cicatriz que cruza la pantalla. */
   --riel: #C9D4E5;
   --riel-activo: var(--navy);
 
@@ -100,12 +100,25 @@
   --temp-tibio: #CAA106;    /* < 3 días — se está yendo */
   --temp-frio: #C2410C;     /* < 14 días — difícil */
   --temp-helado: #64748B;   /* 14+ días — prácticamente perdido */
+
+  /* EL SEMÁFORO DEL LEAD (#826, S.1/S.2) — cuánto quiere comprar, no cuánto
+     tiempo pasó (decisión del dueño, 8-sep-2026). Reemplaza a `--temp-*` como
+     el color de la tarjeta del Pipeline y de la banda de la cola.
+     ⚠️ `--sem-ambar` es `#D97706`, NUNCA `--gold`/`--gold-ink`: el dorado
+     significa solo «tiempo que se acaba» (regla dura de la marca) y un
+     degradado dorado de fondo diría que toda la tarjeta vence. La misma
+     tinta vale en claro y en oscuro — lo que cambia por tema es el color de
+     fondo con el que se mezcla, no el matiz del semáforo. */
+  --sem-rojo: #DC2626;
+  --sem-ambar: #D97706;
+  --sem-verde: #16A34A;
+  --sem-gris: #94A3B8;
 }
 
 /* ── EL TEMA OSCURO — UNA SOLA LISTA ──────────────────────────────────────────
    Vive bajo `[data-theme="dark"]` y en ningún otro lado. El atributo lo estampa
-   `src/lib/tema.ts` sobre `<html>`, y `main.tsx` lo llama ANTES de montar React:
-   para cuando hay algo que pintar, el tema ya está resuelto.
+   el script del `<head>` de `index.html`, antes de la primera pintura: para
+   cuando hay algo que pintar, el tema ya está resuelto.
 
    🔴 POR QUÉ NO HAY UNA SEGUNDA COPIA ADENTRO DE `@media`. La había. El commit
    546645f dejó la paleta oscura DUPLICADA —una copia en la media query y otra
@@ -116,26 +129,76 @@
 
    La media query de abajo NO es la paleta: son los dos únicos tokens que se
    pintan antes de que corra un byte de JS (el fondo del `<body>` todavía
-   vacío). Sin ella, quien tiene el sistema en oscuro abre Hermes con un
-   fogonazo blanco. Todo lo demás espera al atributo, que llega antes que el
-   contenido. */
+   vacío). Todo lo demás espera al atributo.
+
+   ⚠️ **Y YA NO ES ELLA LA QUE EVITA EL FOGONAZO — es la red, no el mecanismo**
+   (3-sep-2026). Nunca pudo serlo del todo: el CSS no sabe leer localStorage,
+   así que cubría a quien SIGUE al sistema y no a quien ELIGIÓ. Con el sistema
+   en claro y «oscuro» guardado, el fondo claro se pintaba hasta que terminara
+   de cargar el chunk de entrada. Quien llega a tiempo ahora es el script
+   clásico del `<head>` de `index.html`. Esto queda para el caso en que ese
+   script no corra. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --background: #0F1419;
-    --foreground: #F1F5F9;
+    --background: #0D1117;
+    --foreground: #F0F6FC;
   }
 }
 
-:root[data-theme="dark"] {
-  --background: #0F1419;
-  --foreground: #F1F5F9;
+/* ── DE DÓNDE SALEN ESTOS GRISES (1-sep-2026) ─────────────────────────────────
+   No están elegidos a ojo ni copiados de un blog: son los tokens Primer del tema
+   oscuro de GitHub, cosechados del navegador con `npm run paleta:github` y
+   congelados en `docs/referencia/paleta-github.json`.
 
-  --card: #1A2332;
-  --card-foreground: #F1F5F9;
+     --background  ← --bgColor-default     #0D1117
+     --card        ← --bgColor-muted       #151B23
+     --secondary   ← --bgColor-disabled    #212830
+     --border      ← --borderColor-default #3D444D
+     --foreground  ← --fgColor-default     #F0F6FC
+     --texto-tenue ← --fgColor-muted       #9198A1
+
+   ⚠️ EL COLOR NO SE PUEDE LEER DE AFUERA, y por eso el script usa un navegador.
+   Una custom property NO se computa: `getPropertyValue` devuelve el texto
+   declarado, y hay sitios que lo escriben con `calc()` sin evaluar. Hay que
+   pintar `var(--token)` sobre un nodo real y leer el computado de vuelta. El
+   paso a hex va por canvas, porque el motor devuelve el valor en el espacio en
+   que se declaró y una regex de `rgb()` tira las mesas en `oklab()`.
+
+   ⚠️ `#3D444D` ES BORDE, NO SUPERFICIE. En GitHub ese token es
+   `--borderColor-default`; usarlo de mesa levantada es el error fácil y es donde
+   `--muted-foreground` se caía del mínimo de contraste. Vive en `--border`.
+
+   🔴 LA TINTA SECUNDARIA NO ES LA DE GITHUB, porque el candado la rechazó.
+   `--fgColor-muted` (#9198A1) da 4,19:1 sobre `--sup-4`, bajo el mínimo de
+   texto. No es que GitHub se equivoque: Hermes apoya texto secundario en
+   superficies levantadas que GitHub no tiene. Así que ese color bajó un papel,
+   a `--texto-tenue` (donde 4,19 sí pasa), y `--muted-foreground` toma un
+   escalón derivado — 7,74 sobre `--card` y 5,46 sobre `--sup-4`, con 2,05 de
+   separación contra `--foreground`.
+
+   ⚠️ DOS ESCALONES DE `--sup-*` SON DERIVADOS, no tokens de GitHub: `--sup-2`
+   entre `--bgColor-muted` y `--bgColor-disabled`, y `--sup-4` entre
+   `--bgColor-disabled` y `--bgColor-emphasis`. GitHub no tiene tantas
+   superficies como Hermes necesita. `--sup-3` sí es suyo tal cual.
+
+   ⚠️ LOS `--tinte-*` SE RECALCULARON, y no es cosmética: son el color semántico
+   compuesto sobre `--card` a ~10 %/20 %. Con la mesa vieja (#1A2332) esos
+   composites quedaban más CLAROS que la mesa nueva (#151B23), o sea que cada
+   realce se habría leído mal. Se resolvió el alfa de cada uno y se recompuso.
+
+   ⚠️ LO QUE **NO** SE TRAJO: la marca. `--navy`, `--gold`, las ocho `--cat-*` y
+   las cuatro `--temp-*` siguen siendo las de Goberna. El dorado significa tiempo
+   que se acaba y el azul de GitHub no significa nada acá. */
+:root[data-theme="dark"] {
+  --background: #0D1117;
+  --foreground: #F0F6FC;
+
+  --card: #151B23;
+  --card-foreground: #F0F6FC;
 
   /* 🔴 LA TINTA DE ADVERTENCIA SE ACLARA, y es una corrección con número: en
      claro `--warning-foreground` es `#78350F` (marrón), que sobre esta mesa
-     oscura da **1,74:1** — o sea invisible. Se veía en el aviso «Cerberus cortó
+     oscura da **1,91:1** — o sea invisible. Se veía en el aviso «Cerberus cortó
      la consulta» del panel de contacto, que es justo el mensaje que hay que
      poder leer cuando algo falla.
 
@@ -146,61 +209,72 @@
      ⚠️ Ámbar y NO oro: el dorado significa tiempo que se acaba y nada más
      (arriba en este archivo). Éste es el ámbar de la familia `--warning`, que ya
      existía como fondo — lo que cambia es que ahora su tinta se lee. */
-  --warning-foreground: #FBBF24;
-  --popover: #1A2332;
-  --popover-foreground: #F1F5F9;
+  --warning-foreground: #D29922;
+  --popover: #151B23;
+  --popover-foreground: #F0F6FC;
 
-  --primary: #3B82F6;
-  --primary-hover: #60A5FA;
-  --primary-foreground: #F1F5F9;
+  --primary: #1F6FEB;
+  --primary-hover: #4493F8;
+  --primary-foreground: #FFFFFF;
 
-  --secondary: #1E293B;
-  --secondary-foreground: #CBD5E1;
+  --secondary: #212830;
+  --secondary-foreground: #B7BDC8;
 
-  --muted: #334155;
-  /* 🔴 SUBE UN ESCALÓN RESPECTO DEL CLARO, y es la corrección del reporte de
-     «texto secundario que se pierde». Valía #94A3B8, que sobre `--card` da
-     6,16:1 pero sobre las superficies LEVANTADAS (`--sup-3`, `--sup-4`, abajo)
-     cae a 5,06 y 4,62 — el borde del mínimo. #A6B3C7 es el mismo gris azulado
-     un paso más claro: 7,44 sobre `--card` y 5,58 en la peor superficie de la
-     app. Sigue siendo GRIS, no blanco: contra `--foreground` (#F1F5F9) mantiene
-     1,94 de separación, así que la jerarquía se ve. */
-  --muted-foreground: #A6B3C7;
+  --muted: #212830;
+  /* 🔴 NO ES LA TINTA SECUNDARIA DE GITHUB: ES DERIVADA, Y EL CANDADO LO DECIDIÓ.
+     Lo natural era traer `--fgColor-muted` (#9198A1), que allá hace justo este
+     papel. `temaOscuroLegible.test.ts` lo rechazó: da **4,19:1** sobre `--sup-4`,
+     bajo el mínimo de texto. No es que GitHub se equivoque — es que Hermes apoya
+     texto secundario en superficies levantadas que GitHub no tiene.
 
-  --accent: #1E293B;
-  --accent-foreground: #CBD5E1;
+     Así que #9198A1 bajó un papel, a `--texto-tenue` (donde 4,19 sí pasa), y acá
+     va un escalón derivado: **7,74** sobre `--card` y **5,46** en la peor
+     superficie de la app. Sigue siendo GRIS, no blanco: contra `--foreground`
+     (#F0F6FC) mantiene **2,05** de separación, sobre el piso de 1,5 que fija el
+     candado, así que la jerarquía se ve. */
+  --muted-foreground: #A7AEB8;
 
-  --border: #2D3A4A;
-  --input: #2D3A4A;
+  --accent: #212830;
+  --accent-foreground: #B7BDC8;
 
-  --navy-muted: #334155;
+  --border: #3D444D;
+  --input: #3D444D;
+
+  --navy-muted: #212830;
 
   /* 🔴 `--navy` NO SE INVIERTE, y es a propósito: sus más de 200 usos son
      superficie (`bg-navy text-white`, los velos de los modales, bordes y
      anillos) y ahí tiene que seguir siendo oscuro. El que se da vuelta es el
      token de TINTA: sin esto, los `text-navy-ink` de la app —empezando por el
      título de CADA pantalla, que va sobre `bg-card`— darían #0E2A52 sobre
-     #1A2332, contraste 1.1:1. Un título que ocupa su lugar y no se lee.
+     #151B23, contraste 1,21:1. Un título que ocupa su lugar y no se lee.
      Lo mide `src/temaOscuroLegible.test.ts`. */
-  --navy-ink: #DCE7F7;
+  --navy-ink: #F0F6FC;
 
-  --riel: #334155;
-  --riel-activo: #64748B;
+  --riel: #3D444D;
+  --riel-activo: #656C76;
 
   --selection-ink: #0E2A52;
 
   /* ── EL TERCER NIVEL DE TINTA: lo tenue, que ya no es «lo invisible» ───────
      La jerarquía del tema oscuro son TRES tonos sólidos, no una rampa de
      opacidades: `--foreground` (principal) · `--muted-foreground` (secundario)
-     · éste (deshabilitado). Sobre `--card` da 4,56:1 — sigue siendo el más
-     apagado de los tres, pero se lee. El alfa que reemplaza daba 2,13. */
-  --texto-tenue: #7C8BA1;
+     · éste (deshabilitado). Sobre `--card` da **5,94:1** y sobre la peor
+     superficie (`--sup-4`) **4,19** — sigue siendo el más apagado de los tres,
+     pero se lee. El alfa que reemplazó daba 2,13.
+
+     ⚠️ ES EL `--fgColor-muted` DE GITHUB TAL CUAL, y lo interesante es DÓNDE
+     entra: allá es la tinta secundaria, acá cae un papel más abajo, porque
+     nuestras superficies levantadas son más claras que las suyas. El mismo
+     color, otro trabajo. */
+  --texto-tenue: #9198A1;
 
   /* ── LA ESCALERA DE SUPERFICIES SÓLIDAS ───────────────────────────────────
-     Los valores NO están elegidos a ojo: son el color que HOY produce cada
-     `bg-muted/NN` al componerse sobre `--card`, redondeado a un escalón. Por
-     eso el tema se ve igual — lo que cambia es que el color ya no depende de
-     lo que haya debajo.
+     Los valores NO están elegidos a ojo, pero tampoco son todos de GitHub:
+     `--sup-3` es su `--bgColor-disabled` tal cual, y los otros dos están
+     DERIVADOS entre dos tokens reales, porque GitHub no tiene tantos escalones
+     de superficie como Hermes necesita. Antes salían de componer `bg-muted/NN`
+     sobre la `--card` vieja; al mover la mesa hubo que moverlos con ella.
 
      🔴 EL PORQUÉ. Un fondo con alfa no tiene un color: tiene el de lo que
      tenga detrás. La misma tarjeta compone #242F40 sobre `--card` y #1D2631
@@ -216,36 +290,36 @@
      más texto de 9-11 px a la vez, así que el mismo gris flojo se nota más.
      La dependencia del fondo es real como MECANISMO y por eso el sólido es
      mejor; simplemente no era la causa del síntoma reportado. */
-  --sup-2: #212C3C; /* el realce sutil  — era bg-secondary/*, bg-muted/20-30 */
-  --sup-3: #263243; /* el realce medio  — era bg-muted/40-50 */
-  --sup-4: #2C384B; /* el realce fuerte — era bg-muted/60-80 */
+  --sup-2: #1C222B; /* el realce sutil  — era bg-secondary/*, bg-muted/20-30 */
+  --sup-3: #212830; /* el realce medio  — era bg-muted/40-50 */
+  --sup-4: #2F363F; /* el realce fuerte — era bg-muted/60-80 */
 
   /* Los tintes semánticos, también sólidos. Mismo método: el composite de hoy
      sobre `--card`, congelado. */
-  --tinte-destructive: #2D2331;
-  --tinte-destructive-fuerte: #412430;
-  --tinte-warning: #302F2E;
-  --tinte-warning-fuerte: #463C2A;
-  --tinte-success: #1A3034;
-  --tinte-success-fuerte: #193D37;
-  --tinte-primary: #1D2D46;
-  --tinte-primary-fuerte: #213659;
-  --tinte-gold: #31342D;
+  --tinte-destructive: #281C23;
+  --tinte-destructive-fuerte: #3D1D24;
+  --tinte-warning: #2B2821;
+  --tinte-warning-fuerte: #42361E;
+  --tinte-success: #152827;
+  --tinte-success-fuerte: #15372B;
+  --tinte-primary: #192538;
+  --tinte-primary-fuerte: #1D304E;
+  --tinte-gold: #2D2C1F;
 
   /* Las ocho categorías y las cuatro temperaturas. `/10` y `/12` estaban a un
      punto de distancia y no se distinguían: un solo tono por familia. */
-  --tinte-cat-pizarra: #222C3C;
-  --tinte-cat-rojo: #2F2331;
-  --tinte-cat-naranja: #31292E;
-  --tinte-cat-verde: #1A3135;
-  --tinte-cat-azul: #1B2A46;
-  --tinte-cat-cian: #182F40;
-  --tinte-cat-morado: #252647;
-  --tinte-cat-rosa: #2F233A;
-  --tinte-temp-fresco: #1A3135;
-  --tinte-temp-tibio: #2D312D;
-  --tinte-temp-frio: #2C262E;
-  --tinte-temp-helado: #222C3C;
+  --tinte-cat-pizarra: #1E252E;
+  --tinte-cat-rojo: #2B1C23;
+  --tinte-cat-naranja: #2C2220;
+  --tinte-cat-verde: #152B28;
+  --tinte-cat-azul: #172339;
+  --tinte-cat-cian: #142833;
+  --tinte-cat-morado: #211F3B;
+  --tinte-cat-rosa: #2B1C2C;
+  --tinte-temp-fresco: #152B28;
+  --tinte-temp-tibio: #292A20;
+  --tinte-temp-frio: #271F21;
+  --tinte-temp-helado: #1E252E;
 }
 
 /* ── SÓLIDOS EN VEZ DE ALFA — LA TRADUCCIÓN, SÓLO EN OSCURO ───────────────────
@@ -289,7 +363,7 @@
     color: var(--muted-foreground);
   }
 
-  /* Deshabilitado — el más tenue de los tres, pero legible (4,56 sobre card).
+  /* Deshabilitado — el más tenue de los tres, pero legible (5,94 sobre card).
      `/25` es el día deshabilitado de `SelectorFechaHora` y `/40` los días de
      otro mes y los «sin dato»: mismo papel, mismo tono. */
   :where(html[data-theme='dark'])
@@ -316,7 +390,7 @@
     color: var(--muted-foreground);
   }
 
-  /* El conteo adentro de la píldora de filtro ACTIVA: #F1F5F9 al 70 % sobre el
+  /* El conteo adentro de la píldora de filtro ACTIVA: #F0F6FC al 70 % sobre el
      azul daba 2,40:1. Sólido, llega a 3,36 — el techo lo pone el color del
      fondo, no el alfa, y ése es otro asunto (la paleta). */
   :where(html[data-theme='dark']) .text-primary-foreground\/70:not(svg) {
@@ -431,6 +505,53 @@
   }
 }
 
+/* ── EL FONDO DE LA TARJETA DEL SEMÁFORO (D1, 8-sep-2026) ────────────────────
+   «Que agarre presencia de fondo»: reemplaza al filete de `tempBorde` por un
+   degradado suave del tinte a `--card`, con el nombre y los chips encima en
+   tinta plena (`--foreground`/`--card-foreground`, sin tocar). Gris (el
+   default: todos llegan grises) no lleva clase — la tarjeta queda en
+   `bg-card`, como hoy.
+
+   Valores de la referencia visual de hermes-b6 (artifact «El semáforo del
+   lead — mockups de referencia», 8-sep-2026, sección 1): `linear-gradient`
+   a 100deg, tinte al 20 % (22 % en rojo) hasta el 72 %, borde con el mismo
+   tinte al 32 % (35 % en rojo) sobre `--line`. `in srgb` y no `in oklab`,
+   igual que `.hoja-a4` más arriba en este archivo — es el espacio que ya usa
+   el resto de la app para `color-mix`.
+
+   `color-mix(..., var(--card))` y NO `color-mix(..., transparent)`: a
+   diferencia de `.hoja-a4`, acá el ancla es un color FIJO, no lo que haya
+   detrás — es justo la propiedad que hace que el contraste del texto sea el
+   mismo sin importar dónde se monte la tarjeta, y por eso el mismo
+   `color-mix` resuelve solo en los dos temas: `--card` ya vale distinto en
+   claro (#FFFFFF) y oscuro (#1A2332), así que no hace falta un
+   `--tinte-sem-*` congelado como el de `--tinte-destructive` — ESE problema
+   era de mezclar con `transparent` (depende del padre), y acá no aplica.
+
+   Contraste validado con el método del skill `dataviz` (WCAG contra
+   `--foreground`/`--card-foreground`, que nunca cambian de color, solo el
+   fondo): al 20-22 % el peor caso mide 9,3:1 en oscuro y 11,7:1 en claro —
+   muy por encima del piso AA de 4.5:1, con margen de sobra hasta 28 %. */
+.tarjeta-semaforo--verde {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--sem-verde) 20%, var(--card)) 0%, var(--card) 72%);
+  border-color: color-mix(in srgb, var(--sem-verde) 32%, var(--border));
+}
+.tarjeta-semaforo--ambar {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--sem-ambar) 20%, var(--card)) 0%, var(--card) 72%);
+  border-color: color-mix(in srgb, var(--sem-ambar) 32%, var(--border));
+}
+.tarjeta-semaforo--rojo {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--sem-rojo) 22%, var(--card)) 0%, var(--card) 72%);
+  border-color: color-mix(in srgb, var(--sem-rojo) 35%, var(--border));
+}
+
+/* La propuesta de la máquina (bot/LLM, #792) se dibuja PUNTEADA hasta que
+   #797 destape la regla — mismo criterio que ADR 0095 (borde = quién lo
+   afirmó). Solo el trazo cambia; el degradado de arriba se queda igual. */
+.tarjeta-semaforo--propuesta {
+  border-style: dashed;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -475,6 +596,10 @@
   --color-temp-tibio: var(--temp-tibio);
   --color-temp-frio: var(--temp-frio);
   --color-temp-helado: var(--temp-helado);
+  --color-sem-rojo: var(--sem-rojo);
+  --color-sem-ambar: var(--sem-ambar);
+  --color-sem-verde: var(--sem-verde);
+  --color-sem-gris: var(--sem-gris);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -494,11 +619,29 @@
 @theme {
   --ease-house: cubic-bezier(0.32, 0.72, 0, 1);
   --animate-entrar: entrar 240ms var(--ease-house) both;
+  /* La tarjeta de un modal (más pesada que un popover) suma una escala —
+     `entrar` no alcanza para eso, y no se le agrega porque el popover no la
+     pide. Usada por `ConfiguracionPerfil` (la tarjeta) y su velo. */
+  --animate-modal-entrar: modal-entrar 240ms var(--ease-house) both;
+  --animate-velo-entrar: velo-entrar 180ms ease both;
 
   @keyframes entrar {
     from {
       opacity: 0;
       transform: translateY(4px);
+    }
+  }
+
+  @keyframes modal-entrar {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(8px);
+    }
+  }
+
+  @keyframes velo-entrar {
+    from {
+      opacity: 0;
     }
   }
 }
@@ -583,6 +726,40 @@
     box-shadow:
       0 1px 2px rgba(14, 42, 82, 0.04),
       0 14px 34px -18px rgba(14, 42, 82, 0.12);
+  }
+
+  /* El halo de la foto grande del popover de cuenta (`PanelUsuario`): la
+     identidad carga el mismo verde/rojo que ya dice `PuntoDeConexion`, sin
+     agregar un ícono nuevo. Mismo mecanismo que `.tarjeta-semaforo` — un
+     `color-mix` contra transparent, no un tinte congelado — así resuelve
+     solo en los dos temas.
+
+     🔴 SUBIDO DE INTENSIDAD (10-sep-2026, reporte del dueño con una foto
+     real): el primer intento mezclaba el color a 14-16 % — un anillo tan
+     tenue que una foto con blancos cerca del borde (el pelaje claro de un
+     husky, en el caso reportado) se lo comía entero. Ahora es un anillo tipo
+     «story» de Instagram: un mate del color de la tarjeta separa la foto del
+     color (para que el color se lea aparte de lo que haya EN la foto, sea
+     cual sea).
+
+     🔴 Y EL RESPLANDOR TENÍA OFFSET VERTICAL (`14px`), Y ESO ES EL BUG —
+     segunda vuelta, mismo día: con desplazamiento hacia abajo, el halo se
+     comportaba como una sombra normal (todo el peso abajo, casi nada a los
+     costados o arriba), así que lo único parejo alrededor del círculo era la
+     línea — y por eso la línea ganaba. Sin offset (`0 0`) el blur crece IGUAL
+     para los cuatro lados: ahora es el resplandor el que rodea la foto entera,
+     y la línea baja de ancho y opacidad para no competirle protagonismo. */
+  .halo-conexion--on {
+    box-shadow:
+      0 0 0 3px var(--card),
+      0 0 0 4px color-mix(in srgb, var(--success) 55%, transparent),
+      0 0 28px 8px color-mix(in srgb, var(--success) 50%, transparent);
+  }
+  .halo-conexion--off {
+    box-shadow:
+      0 0 0 3px var(--card),
+      0 0 0 4px color-mix(in srgb, var(--destructive) 55%, transparent),
+      0 0 28px 8px color-mix(in srgb, var(--destructive) 50%, transparent);
   }
 }
 
@@ -718,26 +895,46 @@
   font-family: Arial, Helvetica, sans-serif;
   font-size: 16px;
   /* Alto disponible, para que el clic en el vacío de abajo entre al editor en
-     vez de caer en el contenedor y no hacer nada. */
-  min-height: 60vh;
+     vez de caer en el contenedor y no hacer nada.
+     ⚠️ `100%` y no un `vh` fijo (04-sep-2026): `.hoja-a4` ahora tiene una
+     altura FIJA (ver su docblock) y `.bn-container` —su padre inmediato— se
+     estira a llenarla entera (`.hoja-a4 > *`, `flex: 1`). Un `60vh` seguía
+     midiendo contra el VIEWPORT, no contra esa caja, y se quedaba corto en
+     la pantalla dividida (margen más angosto = más alto visible que llenar)
+     — la franja que faltaba no entraba al editor con un clic. `100%` hereda
+     lo que `.bn-container` ya tiene resuelto, sea cual sea el contexto. */
+  min-height: 100%;
 }
 
 /* LA HOJA A4 (19-ago-2026, a pedido del dueño; achicada a proporción para la
-   PANTALLA DIVIDIDA el mismo día): la forma real de una hoja de Word —210:297,
-   la proporción de A4— con sus márgenes por default —2,5cm—, no una
-   aproximación en rem.
+   PANTALLA DIVIDIDA el mismo día): el ANCHO real de una hoja de Word —21cm—
+   con sus márgenes por default —2,5cm—, no una aproximación en rem.
 
-   ⚠️ `aspect-ratio`, NO `width: 21cm` fijo. Dos hojas de 21cm de ancho no
-   entran una al lado de la otra en casi ninguna laptop — por eso la pantalla
-   dividida pide «tamaños CASI A4 que aprovechen el espacio libre», no A4
-   literal. `width: 100%; max-width: 21cm` le da el tamaño real de Word
-   cuando hay sitio (la vista simple, casi siempre) y la encoge MANTENIENDO
-   LA FORMA cuando no (cada mitad de la pantalla dividida) — nunca se
-   deforma en una columna angosta y alta, ni se desborda del panel.
+   🔴 **LA ALTURA YA NO SALE DE `aspect-ratio` (04-sep-2026, a pedido
+   explícito).** Reportado con captura: una hoja de texto al lado de un
+   documento (PDF/Word/txt, `PaginaDocumento.tsx`) se veía DESALINEADA — la
+   hoja crecía o se achicaba con el 210:297 de una A4 de verdad, mientras el
+   documento ya tiene su propia altura fija anclada al viewport
+   (`ALTO_VISOR` en `PaginaDocumento.tsx`, `calc(100dvh - 17.5rem)`). Se
+   pidió lo contrario de lo que el comentario de abajo describía como
+   correcto: no «se ve como una A4 de verdad», sino «mide lo mismo que el
+   documento de al lado». `height` explícita ACÁ hace que `aspect-ratio` deje
+   de tener efecto (la propiedad solo entra a tallar cuando falta una de las
+   dos dimensiones) — no hizo falta sacarla a mano, alcanzó con dejar de
+   depender de ella.
+   ⚠️ **17.5rem es el MISMO número que `ALTO_VISOR`, a mano y no por una
+   variable compartida** — mismo criterio que ya usan el ancho (21cm) y el
+   margen (2.5cm) de acá abajo: si cambia uno, mirar el otro.
+   ⚠️ **`overflow-y: auto`, no «la caja crece»** — antes, si el texto no
+   entraba, la hoja crecía más alta que el resto del panel (`height: auto`
+   de toda la vida); con una altura fija eso ya no puede pasar, así que el
+   texto que no entra scrollea ADENTRO de la hoja — mismo trato que ya
+   reciben los tres visores de documento.
 
-   Si el texto no entra en una hoja, la caja CRECE más alta que el `aspect-
-   ratio` en vez de recortarlo — es el comportamiento estándar de un bloque
-   con `height: auto` y contenido más largo que la proporción preferida.
+   ⚠️ `width: 100%; max-width: 21cm` sigue igual: le da el ANCHO real de Word
+   cuando hay sitio (la vista simple, casi siempre) y lo encoge cuando no
+   (cada mitad de la pantalla dividida) — nunca se desborda del panel. Es
+   solo el ALTO el que dejó de seguirlo en proporción.
 
    El fondo es `--secondary`, EL MISMO que ya usa «Mi libreta» cuando está
    activa (`SelectorDeEspacio.tsx`): la superficie de «acá se escribe»,
@@ -769,11 +966,58 @@
   box-sizing: border-box;
   width: 100%;
   max-width: 21cm;
-  aspect-ratio: 210 / 297;
+  height: calc(100dvh - 17.5rem);
+  min-height: 420px;
+  overflow-y: auto;
+  /* `relative`: desde el 08-sep-2026 es también el contenedor de la capa de
+     dibujo (`CapaDeAnotaciones`), que se porta acá adentro con `createPortal`
+     — es ESTA caja la que scrollea de verdad su contenido (arriba), y un
+     dibujo posicionado afuera de ella (como estaba antes) se queda quieto
+     mientras el texto se escapa por su propio scroll. Ver el docblock de
+     `CapaDeAnotaciones.tsx`. */
+  position: relative;
   padding: 2.5cm;
+  /* `display: flex` — para que BlockNote (`.bn-container`, el único hijo
+     directo) pueda estirarse a ocupar el alto que le queda, en vez de medir
+     lo que su CONTENIDO mide. Con altura fija arriba, ya no alcanza con que
+     el hijo herede «lo que sea» — necesita un padre flex que se lo REPARTA.
+     Ver el porqué completo en `.hoja-a4 > *`, más abajo. */
+  display: flex;
+  flex-direction: column;
   background-color: color-mix(in srgb, var(--secondary) 60%, transparent);
   border: 1px solid var(--border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14), 0 10px 24px rgba(0, 0, 0, 0.08);
+}
+
+/* 🔴 EL HIJO DIRECTO DE LA HOJA TIENE QUE ESTIRARSE, o el clic en el vacío de
+   abajo deja de entrar al editor (04-sep-2026, reportado a mano probando
+   esta misma corrección: clic cerca del borde inferior de la hoja, en
+   pantalla dividida, activeElement daba `null` — el clic caía en `.hoja-a4`,
+   no en `.bn-editor`).
+
+   Antes, `.bn-editor` tenía su PROPIO `min-height: 60vh` (más abajo, en la
+   regla de `.bn-container .bn-editor.bn-default-styles`) para llenar el
+   vacío — y bastaba, porque `.hoja-a4` no tenía una altura fija: crecía con
+   su contenido, así que 60vh y «lo que la hoja mide» solían coincidir más o
+   menos. Con la altura de `.hoja-a4` fija (arriba) eso se rompió: en la
+   pantalla dividida el margen es más angosto (`.hoja-a4--dividida`,
+   1,27cm), así que el ALTO VISIBLE de contenido es MAYOR que en la vista
+   simple, y 60vh se queda corto — el editor termina antes de que la hoja
+   termine, y esa franja del medio (ni editor ni nada clickeable) cae
+   directo en el fondo de la hoja.
+
+   `flex: 1` en el hijo (`.bn-container`, el único directo — selector
+   genérico por si el día de mañana `ColumnaDeEscritura` envuelve otra cosa)
+   le pide al padre flex de arriba que le dé TODO el alto que sobra, sea cual
+   sea — no una fracción del viewport. `min-height: 0` es necesario para que
+   un flex item pueda de verdad encogerse por debajo de lo que su contenido
+   pediría (el default de flexbox es `min-height: auto`, que en la práctica
+   IGNORA `flex-shrink` para el contenido de texto largo) — sin esto, una
+   hoja con mucho texto empujaría a `.hoja-a4` a crecer de nuevo, el mismo
+   problema que la altura fija vino a resolver. */
+.hoja-a4 > * {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* MARGEN ANGOSTO PARA LA PANTALLA DIVIDIDA (19-ago-2026, a pedido del
@@ -796,7 +1040,6 @@
 .hoja-a4--dividida {
   padding: 1.27cm;
 }
-
 
 /* EL MENÚ DE «/» — tamaño fijo, en vez de estirarse hasta llenar la pantalla.
    `SuggestionMenuController` del paquete pone en el DIV de afuera (el que

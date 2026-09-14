@@ -1,11 +1,17 @@
 import { useMemo, useState } from 'react';
 import {
-  ChevronLeft,
-  ChevronRight,
+  type ColumnDef,
+  getCoreRowModel,
+  getPaginationRowModel,
+  useReactTable,
+} from '@tanstack/react-table';
+import {
   Flame,
   Layers,
   LayoutGrid,
   List,
+  Map as MapIcon,
+  MapPin,
   Megaphone,
   Search,
   Star,
@@ -14,11 +20,13 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { Paginador } from '../../components/Paginador';
 import {
   avisosDe,
   campanasDe,
   filtrarContactos,
   inicialesDe,
+  locacionDe,
   nombreVisible,
   productividad,
   puntoDePrioridad,
@@ -26,12 +34,12 @@ import {
   useContactosRegistrados,
   type ContactoRegistrado,
 } from './contactosRegistrados';
-import { NuevoContacto } from './NuevoContacto';
+import { PanelMapaContactos } from './PanelMapaContactos';
 import { PanelContacto } from './PanelContacto';
-import { BotonAsignarEtiqueta, useEtiquetasDeVarios } from './EtiquetasContacto';
+import { BotonAsignarEtiqueta, PildoraEtiqueta, useEtiquetasDeVarios } from './EtiquetasContacto';
 import { BotonFavorito } from './BotonFavorito';
 import { useCategorias } from '../gestion/categorias';
-import { claseBorde, CLASE_TEXTO, resolverColor } from '../../dominio/paletaCategorias';
+import { resolverColor } from '../../dominio/paletaCategorias';
 import { formatoTelefono } from '../../lib/formato';
 
 /**
@@ -50,16 +58,22 @@ import { formatoTelefono } from '../../lib/formato';
  *
  * Misma entrada del riel («Contactos»), DOS mundos según el módulo.
  */
+
+/**
+ * Columna única, sin celda: `useReactTable` la exige pero acá solo se usa la
+ * tabla como motor de PAGINACIÓN — las filas se siguen dibujando con
+ * `<FilaContacto>`/`<TarjetaContacto>`, no con `flexRender`. Fuera del
+ * componente para no recrearla en cada render.
+ */
+const COLUMNAS_CAMPANA: ColumnDef<ContactoRegistrado>[] = [{ accessorKey: 'clave' }];
+
 export function VistaContactosCampana({
-  esCandidato = false,
   onEscribir,
 }: {
-  /** ¿Es el candidato? Decide si ve «Nuevo contacto». El server niega de verdad. */
-  esCandidato?: boolean;
   /** Puente a Mensajes, para el botón «Mensaje» del panel. */
   onEscribir?: (telefono: string) => void;
 }) {
-  const { data, isLoading, isError } = useContactosRegistrados();
+  const { data, isLoading, isError, refetch } = useContactosRegistrados();
   const [busqueda, setBusqueda] = useState('');
   const [campana, setCampana] = useState('');
   const [aviso, setAviso] = useState('');
@@ -70,7 +84,10 @@ export function VistaContactosCampana({
   const [soloFavoritos, setSoloFavoritos] = useState(false);
   const [seleccionado, setSeleccionado] = useState<string | null>(null);
   const [vista, setVista] = useState<'lista' | 'cuadricula'>('lista');
-  const [pagina, setPagina] = useState(1);
+  /** 50 por página (pedido del 24-ago-2026). */
+  const TAMANO_PAGINA = 50;
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: TAMANO_PAGINA });
+  const [mapaAbierto, setMapaAbierto] = useState(false);
 
   const contactos = data?.contactos ?? [];
   const porTexto = useMemo(() => filtrarContactos(contactos, busqueda), [contactos, busqueda]);
@@ -115,14 +132,20 @@ export function VistaContactosCampana({
   const porPersona = useMemo(() => productividad(data?.porPersona ?? []), [data?.porPersona]);
   const contactoSeleccionado = visibles.find((c) => c.clave === seleccionado) ?? null;
 
-  /** 50 por página (pedido del 24-ago-2026) — clampeada */
-  const TAMANO_PAGINA = 50;
+  // Mismo clamp que antes (`paginaSegura`): un filtro que recorta la lista no
+  // resetea la página elegida, solo la muestra recortada mientras dure.
   const totalPaginas = Math.max(1, Math.ceil(visibles.length / TAMANO_PAGINA));
-  const paginaSegura = Math.min(Math.max(1, pagina), totalPaginas);
-  const visiblesPagina = useMemo(
-    () => visibles.slice((paginaSegura - 1) * TAMANO_PAGINA, paginaSegura * TAMANO_PAGINA),
-    [visibles, paginaSegura],
-  );
+  const pageIndexClamped = Math.min(pagination.pageIndex, totalPaginas - 1);
+
+  const tablaContactos = useReactTable({
+    data: visibles,
+    columns: COLUMNAS_CAMPANA,
+    state: { pagination: { ...pagination, pageIndex: pageIndexClamped } },
+    onPaginationChange: setPagination,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+  });
+  const visiblesPagina = tablaContactos.getRowModel().rows.map((r) => r.original);
 
   /** Quién registró o atendió a alguien, sin repetir */
   const registrantes = useMemo(() => {
@@ -164,13 +187,20 @@ export function VistaContactosCampana({
           <input
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Buscar por nombre, teléfono, campaña, aviso, prioridad o agente…"
+            placeholder="Buscar por nombre, teléfono, campaña, anuncio, prioridad o agente…"
             aria-label="Buscar contactos"
             className="w-full rounded-lg border border-border bg-card py-2.5 pl-9 pr-3 text-sm outline-none transition-colors focus:border-primary"
           />
         </div>
 
-        {esCandidato && <NuevoContacto />}
+        <button
+          type="button"
+          onClick={() => setMapaAbierto(true)}
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-xs font-medium text-foreground transition-colors hover:border-primary"
+        >
+          <MapIcon size={14} />
+          Detalles
+        </button>
 
         <span className="flex shrink-0 overflow-hidden rounded-lg border border-border">
           <button
@@ -194,7 +224,7 @@ export function VistaContactosCampana({
         </span>
       </div>
 
-      {/* Fila 2: Filtros específicos por Campaña, Aviso, Registro, Prioridad, Etiquetas, Agente, Favoritos */}
+      {/* Fila 2: Filtros específicos por Campaña, Anuncio, Registro, Prioridad, Etiquetas, Agente, Favoritos */}
       <div className="flex flex-wrap items-center gap-2">
         <SelectorFiltro
           icono={Megaphone}
@@ -210,20 +240,24 @@ export function VistaContactosCampana({
 
         <SelectorFiltro
           icono={Layers}
-          etiqueta="Aviso"
-          placeholder="Todos los avisos"
+          etiqueta="Anuncio"
+          placeholder="Todos los anuncios"
           valor={aviso}
           onCambiar={setAviso}
           opciones={avisos}
         />
 
-        <div className="flex shrink-0 items-center overflow-hidden rounded-lg border border-border bg-card p-0.5 text-xs">
+        {/* Mismo alto que los `SelectorFiltro` de al lado: su `<select>` lleva
+            `py-2`, así que estos botones lo copian — con el `p-0.5` que tenía
+            este contenedor quedaban 4px más bajos que sus vecinos. */}
+        <div className="flex shrink-0 items-center overflow-hidden rounded-lg border border-border bg-card text-xs">
           <button
             type="button"
             onClick={() => setEstadoRegistro('todos')}
             aria-pressed={estadoRegistro === 'todos'}
+            title="Todos los contactos: los registrados a mano y los que solo entraron por chat o anuncio"
             className={
-              'rounded-md px-2.5 py-1 text-xs font-medium transition-colors ' +
+              'px-2.5 py-2 text-xs font-medium transition-colors ' +
               (estadoRegistro === 'todos' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')
             }
           >
@@ -233,8 +267,9 @@ export function VistaContactosCampana({
             type="button"
             onClick={() => setEstadoRegistro('registrados')}
             aria-pressed={estadoRegistro === 'registrados'}
+            title="Contactos con ficha: alguien del equipo cargó sus datos a mano"
             className={
-              'rounded-md px-2.5 py-1 text-xs font-medium transition-colors ' +
+              'px-2.5 py-2 text-xs font-medium transition-colors ' +
               (estadoRegistro === 'registrados' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')
             }
           >
@@ -244,8 +279,9 @@ export function VistaContactosCampana({
             type="button"
             onClick={() => setEstadoRegistro('ingresados')}
             aria-pressed={estadoRegistro === 'ingresados'}
+            title="Contactos que solo entraron por chat o anuncio: todavía nadie cargó su ficha a mano"
             className={
-              'rounded-md px-2.5 py-1 text-xs font-medium transition-colors ' +
+              'px-2.5 py-2 text-xs font-medium transition-colors ' +
               (estadoRegistro === 'ingresados' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')
             }
           >
@@ -329,8 +365,8 @@ export function VistaContactosCampana({
             <Users size={22} className="text-muted-foreground" />
             <p className="text-sm font-semibold text-foreground">Todavía no registraron a nadie</p>
             <p className="max-w-sm text-xs text-muted-foreground">
-              Los contactos se registran desde el chat, con el botón «Contacto» de la barra
-              {esCandidato && ', o con «Nuevo contacto» acá arriba'}. Acá van apareciendo todos los del equipo.
+              Los contactos se registran desde el chat, con el botón «Contacto» de la barra. Acá
+              van apareciendo todos los del equipo.
             </p>
           </div>
         )}
@@ -343,10 +379,11 @@ export function VistaContactosCampana({
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
-                <th className="px-5 py-3 font-semibold w-[28%]">Contacto</th>
-                <th className="px-4 py-3 font-semibold w-[18%]">Teléfono</th>
-                <th className="px-4 py-3 font-semibold w-[20%]">Campaña</th>
-                <th className="px-4 py-3 font-semibold w-[20%]">Aviso</th>
+                <th className="px-5 py-3 font-semibold w-[24%]">Contacto</th>
+                <th className="px-4 py-3 font-semibold w-[14%]">Teléfono</th>
+                <th className="px-4 py-3 font-semibold w-[16%]">Campaña</th>
+                <th className="px-4 py-3 font-semibold w-[16%]">Anuncio</th>
+                <th className="px-4 py-3 font-semibold w-[16%]">Locación</th>
                 <th className="px-5 py-3 font-semibold w-[14%] text-right">Etiquetas</th>
               </tr>
             </thead>
@@ -381,27 +418,15 @@ export function VistaContactosCampana({
         )}
       </div>
 
-      <div className="flex shrink-0 items-center justify-center gap-3 border-t border-border bg-card px-4 py-2 text-xs">
-        <button
-          type="button"
-          disabled={paginaSegura <= 1}
-          onClick={() => setPagina(paginaSegura - 1)}
-          className="flex items-center gap-1 rounded-lg px-2 py-1 font-semibold text-foreground hover:bg-muted disabled:opacity-30"
-        >
-          <ChevronLeft size={13} /> Anterior
-        </button>
-        <span className="tabular-nums text-muted-foreground">
-          {paginaSegura} de {totalPaginas.toLocaleString('es')}
-        </span>
-        <button
-          type="button"
-          disabled={paginaSegura >= totalPaginas}
-          onClick={() => setPagina(paginaSegura + 1)}
-          className="flex items-center gap-1 rounded-lg px-2 py-1 font-semibold text-foreground hover:bg-muted disabled:opacity-30"
-        >
-          Siguiente <ChevronRight size={13} />
-        </button>
-      </div>
+      <Paginador
+        paginaActual={pageIndexClamped + 1}
+        totalPaginas={totalPaginas}
+        puedeAnterior={pageIndexClamped > 0}
+        puedeSiguiente={pageIndexClamped < totalPaginas - 1}
+        onAnterior={() => tablaContactos.previousPage()}
+        onSiguiente={() => tablaContactos.nextPage()}
+        onIrA={(n) => tablaContactos.setPageIndex(n - 1)}
+      />
       </div>
 
       {porPersona.length > 1 && (
@@ -421,6 +446,10 @@ export function VistaContactosCampana({
 
       {contactoSeleccionado && (
         <PanelContacto contacto={contactoSeleccionado} onCerrar={() => setSeleccionado(null)} onEscribir={onEscribir} />
+      )}
+
+      {mapaAbierto && (
+        <PanelMapaContactos contactos={visibles} onCerrar={() => setMapaAbierto(false)} onRefrescar={refetch} />
       )}
     </div>
   );
@@ -488,7 +517,7 @@ function FilaContacto({
       </td>
       <td className="px-4 py-3.5">
         {c.aviso ? (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground truncate max-w-[200px]" title={`Aviso: ${c.aviso}`}>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground truncate max-w-[200px]" title={`Anuncio: ${c.aviso}`}>
             <Layers size={12} className="shrink-0 text-muted-foreground/70" />
             <span className="truncate">{c.aviso}</span>
           </span>
@@ -496,24 +525,39 @@ function FilaContacto({
           <span className="text-xs text-muted-foreground/60">—</span>
         )}
       </td>
+      {/* La ubicación que CLASIFICÓ el mapa (ADR 0088) — la dirección completa
+          que se tipeó ahí vive en la ficha, no acá. Prioridad: el distrito
+          PROPIO de la campaña si el punto cayó ahí: es el dato específico por
+          el que se pregunta todos los días. Si no calzó con ninguno, la
+          geografía real (pedido del 1-sep-2026): «distrito, departamento» o
+          «provincia, departamento», nunca un nombre suelto — la columna no
+          puede quedar en «—» solo porque la campaña todavía no cargó el
+          distrito de esa zona. */}
+      <td className="px-4 py-3.5">
+        {/* El hover dice la DIRECCIÓN COMPLETA — la misma que la ficha y el
+            panel del chat — para que las tres pantallas cuenten lo mismo de
+            este contacto y la etiqueta corta no sea la única versión visible. */}
+        {locacionDe(c) ? (
+          <span
+            className="flex items-center gap-1.5 text-xs text-muted-foreground truncate max-w-[160px]"
+            title={c.direccion ? `${locacionDe(c)} — ${c.direccion}` : `Locación: ${locacionDe(c)}`}
+          >
+            <MapPin size={12} className="shrink-0 text-muted-foreground/70" />
+            <span className="truncate">{locacionDe(c)}</span>
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground/60">—</span>
+        )}
+      </td>
       <td className="px-5 py-3.5">
         <div className="flex flex-wrap items-center justify-end gap-1.5">
-          {etiquetas.map((etq) => {
-            const color = resolverColor(etq, categorias);
-            return (
-              <span
-                key={etq}
-                className={
-                  'inline-flex items-center rounded-full border bg-card px-2 py-0.5 text-[10px] font-semibold ' +
-                  claseBorde(color) +
-                  (color ? ' ' + CLASE_TEXTO[color] : ' text-muted-foreground')
-                }
-              >
-                {etq}
-              </span>
-            );
-          })}
-          <BotonAsignarEtiqueta clave={c.clave} asignadas={etiquetas} compacto />
+          {etiquetas.map((etq) => (
+            <PildoraEtiqueta key={etq} clave={c.clave} etiqueta={etq} color={resolverColor(etq, categorias)} compacto />
+          ))}
+          {/* Es la ÚLTIMA columna, pegada al borde derecho de la tabla: abrir
+              hacia la derecha (como la tarjeta) saca el popover del
+              `overflow-hidden` que envuelve la tabla y lo recorta. */}
+          <BotonAsignarEtiqueta clave={c.clave} asignadas={etiquetas} compacto abrirALaIzquierda />
           <BotonFavorito clave={c.clave} favorito={c.favorito} compacto />
         </div>
       </td>
@@ -567,7 +611,7 @@ function TarjetaContacto({
         </div>
       </div>
 
-      {(c.campanaNombre || c.aviso) && (
+      {(c.campanaNombre || c.aviso || locacionDe(c)) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-1.5 text-[10px]">
           {c.campanaNombre && (
             <span className="inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary" title={`Campaña: ${c.campanaNombre}`}>
@@ -576,30 +620,27 @@ function TarjetaContacto({
             </span>
           )}
           {c.aviso && (
-            <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-muted-foreground" title={`Aviso: ${c.aviso}`}>
+            <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-muted-foreground" title={`Anuncio: ${c.aviso}`}>
               <Layers size={10} className="shrink-0" />
               <span className="truncate max-w-[110px]">{c.aviso}</span>
+            </span>
+          )}
+          {locacionDe(c) && (
+            <span
+              className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-muted-foreground"
+              title={c.direccion ? `${locacionDe(c)} — ${c.direccion}` : `Locación: ${locacionDe(c)}`}
+            >
+              <MapPin size={10} className="shrink-0" />
+              <span className="truncate max-w-[110px]">{locacionDe(c)}</span>
             </span>
           )}
         </div>
       )}
 
       <div className="mt-2 flex flex-wrap items-center gap-1">
-        {etiquetas.map((etq) => {
-          const color = resolverColor(etq, categorias);
-          return (
-            <span
-              key={etq}
-              className={
-                'inline-flex items-center rounded-full border bg-card px-1.5 py-0.5 text-[10px] font-semibold ' +
-                claseBorde(color) +
-                (color ? ' ' + CLASE_TEXTO[color] : ' text-muted-foreground')
-              }
-            >
-              {etq}
-            </span>
-          );
-        })}
+        {etiquetas.map((etq) => (
+          <PildoraEtiqueta key={etq} clave={c.clave} etiqueta={etq} color={resolverColor(etq, categorias)} compacto />
+        ))}
         <BotonAsignarEtiqueta clave={c.clave} asignadas={etiquetas} compacto />
         <span className="ml-auto">
           <BotonFavorito clave={c.clave} favorito={c.favorito} compacto />
@@ -616,6 +657,8 @@ function SelectorFiltro({
   valor,
   opciones,
   onCambiar,
+  deshabilitado = false,
+  tituloDeshabilitado,
 }: {
   icono: LucideIcon;
   etiqueta: string;
@@ -623,15 +666,28 @@ function SelectorFiltro({
   valor: string;
   opciones: (string | { valor: string; rotulo: string })[];
   onCambiar: (v: string) => void;
+  /** Sin función todavía: el `<select>` queda inerte, con su propio cursor y hover. */
+  deshabilitado?: boolean;
+  /** El texto del hover cuando `deshabilitado` — va en el CONTENEDOR, no en el `<select>`: un
+      elemento `disabled` no siempre dispara el `title` nativo en todos los navegadores. */
+  tituloDeshabilitado?: string;
 }) {
   return (
-    <span className="relative">
+    // `shrink-0`: sin esto, en la fila apretada el `<select>` se angostaba por
+    // debajo del ancho de su propio texto antes de saltar de línea (el resto
+    // de los controles de esta fila —Favoritos, el contador— ya lo tenían) y
+    // su contenido se salía de la caja en vez de mostrarse completo.
+    <span className="relative shrink-0" title={deshabilitado ? tituloDeshabilitado : undefined}>
       <Icono size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
       <select
         value={valor}
         onChange={(e) => onCambiar(e.target.value)}
         aria-label={etiqueta}
-        className="appearance-none rounded-lg border border-border bg-card py-2 pl-7 pr-6 text-xs font-medium text-foreground outline-none transition-colors focus:border-primary"
+        disabled={deshabilitado}
+        className={
+          'appearance-none rounded-lg border border-border bg-card py-2 pl-7 pr-6 text-xs font-medium text-foreground outline-none transition-colors focus:border-primary ' +
+          (deshabilitado ? 'cursor-not-allowed opacity-60' : '')
+        }
       >
         <option value="">{placeholder}</option>
         {opciones.map((o) => {

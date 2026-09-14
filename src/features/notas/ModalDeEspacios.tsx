@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Archive, ArchiveRestore, Check, ChevronDown, Users, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, ChevronDown, X } from 'lucide-react';
 import { useEscape } from '../../lib/teclado/useEscape';
 import { TituloEditable } from './TituloEditable';
 import { mismoUsuario, nombreCorto, useEspaciosMios, useMutacionesEspacios, usePadron, type Espacio } from './espacios';
+import { SelectorDeIconoDeEspacio } from './SelectorDeIconoDeEspacio';
 
 /**
  * ADMINISTRAR TUS ESPACIOS — un modal, no un panel que se abre y se cierra
@@ -73,15 +74,27 @@ function FilaEspacio({
   miembrosAbiertos: boolean;
   onAlternarMiembros: () => void;
 }) {
-  const { renombrar, archivar, desarchivar } = useMutacionesEspacios();
+  const { renombrar, cambiarIcono, archivar, desarchivar } = useMutacionesEspacios();
   const archivado = Boolean(espacio.archivadoAt);
 
   return (
     <div className={`rounded-lg border p-3 ${archivado ? 'border-dashed border-border bg-muted/40' : 'border-border bg-card'}`}>
       <div className="flex items-center gap-2">
-        <span className="shrink-0 text-muted-foreground">
-          {archivado ? <Archive className="size-4" /> : <Users className="size-4" />}
-        </span>
+        {archivado ? (
+          // Un espacio archivado no cambia de ícono desde acá: ya nadie
+          // escribe ahí, y el `Archive` de estado es más importante de ver
+          // que su identidad — mismo criterio que el nombre, que tampoco se
+          // edita archivado.
+          <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+            <Archive className="size-4" />
+          </span>
+        ) : (
+          <SelectorDeIconoDeEspacio
+            valor={espacio.icono}
+            onElegir={(icono) => cambiarIcono.mutate({ espacioId: espacio.id, icono })}
+            deshabilitado={cambiarIcono.isPending}
+          />
+        )}
 
         {archivado ? (
           // Un espacio archivado no se renombra desde acá: ya nadie escribe
@@ -170,7 +183,9 @@ export function ModalDeEspacios({ onCerrar }: { onCerrar: () => void }) {
         <div className="flex items-start justify-between gap-3 px-6 pb-4 pt-6">
           <div className="min-w-0">
             <h2 className="text-lg font-semibold text-foreground">Tus espacios</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">Los que creaste — renómbralos, mira quién entra, o archívalos.</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Los que creaste — renómbralos, cámbiales el ícono, mira quién entra, o archívalos.
+            </p>
           </div>
           <button
             type="button"

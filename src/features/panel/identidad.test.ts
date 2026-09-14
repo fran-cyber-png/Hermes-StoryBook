@@ -56,4 +56,44 @@ describe('nombreDelContacto — el nombre real le gana al pushname', () => {
   it('el formulario le gana a la ficha: lo tipeó la propia persona, no alguien de oído', () => {
     expect(nombreDelContacto({ leadNombre: 'Javier Zeballos', fichaNombre: 'Javier Z' }).fuente).toBe('formulario');
   });
+
+  // 🔴 F.2 — el caso de Pedro López (José Francisco Lopez Fermin, icarus:23913):
+  // sin este escalón la ficha no tenía de dónde sacar su nombre real, y el
+  // panel mostraba el alias de WhatsApp como si fuera el nombre.
+  it('icarus (F.1) le gana al formulario y a la ficha — compró, aunque Cerberus todavía no lo diga', () => {
+    const n = nombreDelContacto({
+      pushname: 'Pedro López',
+      leadNombre: 'Pedro L',
+      fichaNombre: 'Pedro',
+      icarusNombre: 'José Francisco Lopez Fermin',
+    });
+    expect(n.principal).toBe('José Francisco Lopez Fermin');
+    expect(n.fuente).toBe('icarus');
+    expect(n.alias).toBe('Pedro López');
+  });
+
+  it('Cerberus le gana a icarus: firmó, no es solo un contacto sincronizado', () => {
+    const n = nombreDelContacto({
+      cerberusNombre: 'DR EN DERECHO IGNACIO ALEJANDRO VILA CHÁVEZ',
+      icarusNombre: 'Alejandro Vila',
+    });
+    expect(n.fuente).toBe('cerberus');
+  });
+
+  // 🔴 #1033 (12-sep-2026) — la cabecera de Luis Ángel decía «alias de WhatsApp: .».
+  // Un pushname de pura puntuación o sólo emojis no nombra a nadie: no es alias
+  // cuando hay un nombre real, y no es nombre cuando no hay otro.
+  it('un pushname sin letras ni dígitos no es alias: «.» debajo del nombre real no dice nada', () => {
+    expect(nombreDelContacto({ pushname: '.', cerberusNombre: 'Luis Ángel Llaguento Heredia' })).toEqual({
+      principal: 'Luis Ángel Llaguento Heredia',
+      alias: null,
+      fuente: 'cerberus',
+    });
+  });
+
+  it('un pushname sin letras ni dígitos tampoco es nombre cuando no hay otro', () => {
+    for (const push of ['.', '-', '...', '🦋🦋']) {
+      expect(nombreDelContacto({ pushname: push })).toEqual({ principal: null, alias: null, fuente: 'ninguna' });
+    }
+  });
 });

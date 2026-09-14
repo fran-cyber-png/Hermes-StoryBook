@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowDown,
   ArrowUp,
@@ -9,6 +10,9 @@ import {
   EyeOff,
   Lock,
   MoreHorizontal,
+  MoveDown,
+  MoveRight,
+  MoveUp,
   Pencil,
   Plus,
   Trash2,
@@ -79,70 +83,122 @@ function Icono({
   );
 }
 
+/** El ancho del menú, en píxeles — el mismo número que antes daba `w-40`. */
+const ANCHO_MENU_CAPA = 160;
+
 /** El menú `…` de una capa. Se cierra al elegir o al tocar afuera. */
 function MenuDeCapa({
   puedeBorrar,
+  haySeleccion,
   onRenombrar,
   onDuplicar,
   onBorrar,
+  onMoverAqui,
 }: {
   puedeBorrar: boolean;
+  /** Si hay algo elegido en el lienzo: es lo que habilita «Mover selección aquí». */
+  haySeleccion: boolean;
   onRenombrar(): void;
   onDuplicar(): void;
   onBorrar(): void;
+  onMoverAqui(): void;
 }) {
   const [abierto, setAbierto] = useState(false);
-  const caja = useRef<HTMLDivElement>(null);
+  const [posicion, setPosicion] = useState<{ top: number; left: number } | null>(null);
+  const boton = useRef<HTMLSpanElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
 
-  // Cerrar al tocar afuera. En captura, para ganarle al `onPointerDown` de la
-  // tarjeta que hay debajo.
+  /**
+   * 🔴 EL MENÚ SE PORTA A `document.body` — no es estética, es lo que lo hace
+   * VISIBLE. La lista de capas scrollea (`overflow-y-auto`, en
+   * `PanelDeCapas`), y CSS recorta a cualquier descendiente que se salga de
+   * esa caja —con `z-index` o sin él—, así que un menú `absolute` colgado de
+   * la tarjeta quedaba tapado por la fila de abajo la mayoría de las veces.
+   * Es el mismo defecto, un nivel más adentro, que ya obligó a portar el
+   * selector de color y el panel entero fuera de la barra que scrollea (ver
+   * esos docblocks): acá se posiciona a mano contra el botón que lo abre, en
+   * coordenadas de VIEWPORT (`position: fixed`), y se cierra solo si algo
+   * scrollea mientras está abierto — más simple que perseguir al botón pixel
+   * a pixel en cada evento de scroll.
+   */
   useEffect(() => {
     if (!abierto) return;
+    const r = boton.current?.getBoundingClientRect();
+    if (r) setPosicion({ top: r.bottom + 4, left: r.right - ANCHO_MENU_CAPA });
+
+    // Cerrar al tocar afuera. En captura, para ganarle al `onPointerDown` de
+    // la tarjeta que hay debajo. El menú ya no es descendiente del botón —se
+    // portó— así que "afuera" tiene que revisar los DOS.
     const afuera = (e: PointerEvent) => {
-      if (!caja.current?.contains(e.target as Node)) setAbierto(false);
+      const t = e.target as Node;
+      if (!boton.current?.contains(t) && !menu.current?.contains(t)) setAbierto(false);
     };
+    const cerrar = () => setAbierto(false);
     document.addEventListener('pointerdown', afuera, true);
-    return () => document.removeEventListener('pointerdown', afuera, true);
+    window.addEventListener('scroll', cerrar, true);
+    return () => {
+      document.removeEventListener('pointerdown', afuera, true);
+      window.removeEventListener('scroll', cerrar, true);
+    };
   }, [abierto]);
 
   const opciones: { rotulo: string; Ic: typeof Pencil; hacer: () => void; apagado?: boolean }[] = [
+    {
+      // Es lo que evita tener que crear la capa ANTES de tener a mano lo que
+      // va a llevar: se elige la imagen en el lienzo y se la manda para acá.
+      rotulo: 'Mover selección aquí',
+      Ic: MoveRight,
+      hacer: onMoverAqui,
+      apagado: !haySeleccion,
+    },
     { rotulo: 'Renombrar', Ic: Pencil, hacer: onRenombrar },
     { rotulo: 'Duplicar capa', Ic: Copy, hacer: onDuplicar },
     { rotulo: 'Eliminar capa', Ic: Trash2, hacer: onBorrar, apagado: !puedeBorrar },
   ];
 
   return (
-    <div ref={caja} className="relative shrink-0">
-      <Icono rotulo="Opciones de la capa" activo={abierto} onClick={() => setAbierto((a) => !a)}>
-        <MoreHorizontal className="size-3.5" />
-      </Icono>
+    <>
+      <span ref={boton} className="relative inline-flex shrink-0">
+        <Icono rotulo="Opciones de la capa" activo={abierto} onClick={() => setAbierto((a) => !a)}>
+          <MoreHorizontal className="size-3.5" />
+        </Icono>
+      </span>
 
-      {abierto && (
-        <div
-          role="menu"
-          aria-label="Opciones de la capa"
-          className="absolute right-0 top-full z-40 mt-1 w-40 rounded-lg border border-border bg-card py-1 shadow-lg"
-        >
-          {opciones.map(({ rotulo, Ic, hacer, apagado }) => (
-            <button
-              key={rotulo}
-              type="button"
-              role="menuitem"
-              disabled={apagado}
-              onClick={(e) => {
-                e.stopPropagation();
-                setAbierto(false);
-                hacer();
-              }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground transition hover:bg-muted disabled:opacity-40"
-            >
-              <Ic className="size-3.5 text-muted-foreground" />
-              {rotulo}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {abierto &&
+        posicion &&
+        createPortal(
+          <div
+            ref={menu}
+            role="menu"
+            aria-label="Opciones de la capa"
+            style={{ position: 'fixed', top: posicion.top, left: posicion.left, width: ANCHO_MENU_CAPA }}
+            // Mismo motivo que el `onPointerDown` del panel entero: sin esto,
+            // un clic adentro del menú se lee además como un clic en lo que
+            // hay debajo (la barra de dibujo).
+            onPointerDown={(e) => e.stopPropagation()}
+            className="z-50 rounded-lg border border-border bg-card py-1 shadow-lg"
+          >
+            {opciones.map(({ rotulo, Ic, hacer, apagado }) => (
+              <button
+                key={rotulo}
+                type="button"
+                role="menuitem"
+                disabled={apagado}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAbierto(false);
+                  hacer();
+                }}
+                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground transition hover:bg-muted disabled:opacity-40"
+              >
+                <Ic className="size-3.5 text-muted-foreground" />
+                {rotulo}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -159,6 +215,7 @@ export function PanelDeCapas({
   onBorrar,
   onMover,
   onOrdenar,
+  onMoverSeleccionA,
 }: {
   capas: Capa[];
   figuras: Figura[];
@@ -173,6 +230,8 @@ export function PanelDeCapas({
   /** `hacia` es el índice en el ARRAY (0 = fondo), ya desinvertido. */
   onMover(id: string, hacia: number): void;
   onOrdenar(a: Reordenamiento): void;
+  /** Muda la selección del lienzo a esta capa, sin importar dónde estuviera. */
+  onMoverSeleccionA(id: string): void;
 }) {
   const [renombrando, setRenombrando] = useState<string | null>(null);
   const [arrastrando, setArrastrando] = useState<string | null>(null);
@@ -308,9 +367,11 @@ export function PanelDeCapas({
 
               <MenuDeCapa
                 puedeBorrar={puedeBorrar}
+                haySeleccion={haySeleccion}
                 onRenombrar={() => setRenombrando(capa.id)}
                 onDuplicar={() => onDuplicar(capa.id)}
                 onBorrar={() => onBorrar(capa.id)}
+                onMoverAqui={() => onMoverSeleccionA(capa.id)}
               />
             </li>
           );
@@ -351,26 +412,73 @@ export function PanelDeCapas({
         </div>
       )}
 
-      {/* ACCIONES RÁPIDAS: el orden de los OBJETOS elegidos dentro de su capa.
-          Apagadas sin selección, antes que sin efecto. */}
-      <div className="flex shrink-0 gap-1 border-t border-border px-2 py-1.5">
-        {ORDENES.map(({ id, rotulo, Icono: Ic }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => onOrdenar(id)}
-            disabled={!haySeleccion}
-            title={rotulo}
-            aria-label={rotulo}
-            className="flex flex-1 items-center justify-center rounded border border-border py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-30"
-          >
-            <Ic className="size-3.5" />
-          </button>
-        ))}
+      {/*
+        ORDEN DE LA CAPA ACTIVA. Va A LA VISTA y no solo adentro del «⋯» de
+        cada tarjeta (donde también está, para poder mover una capa sin
+        activarla primero): es la acción que la vendedora busca de verdad al
+        tocar unas flechas en este panel, y dejarla solo en un menú angosto es
+        justo lo que hizo que «Orden del objeto», de acá abajo, se leyera como
+        si tuviera que mover la capa y no un objeto suyo.
+      */}
+      {(() => {
+        const indiceActiva = capas.findIndex((c) => c.id === capaActiva);
+        if (indiceActiva === -1) return null;
+        return (
+          <div className="shrink-0 border-t border-border px-2 py-1.5">
+            <p className="mb-1 text-[0.625rem] uppercase tracking-wide text-muted-foreground">Orden de la capa</p>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => onMover(capaActiva, indiceActiva + 1)}
+                disabled={indiceActiva >= capas.length - 1}
+                title="Subir capa (queda más adelante)"
+                aria-label="Subir capa (queda más adelante)"
+                className="flex flex-1 items-center justify-center gap-1 rounded border border-border py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-30"
+              >
+                <MoveUp className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onMover(capaActiva, indiceActiva - 1)}
+                disabled={indiceActiva <= 0}
+                title="Bajar capa (queda más atrás)"
+                aria-label="Bajar capa (queda más atrás)"
+                className="flex flex-1 items-center justify-center gap-1 rounded border border-border py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-30"
+              >
+                <MoveDown className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/*
+        ACCIONES RÁPIDAS: el orden del OBJETO elegido DENTRO de su capa — no el
+        de la capa misma (esa es la sección de arriba). Apagadas sin
+        selección, antes que sin efecto.
+      */}
+      <div className="shrink-0 border-t border-border px-2 py-1.5">
+        <p className="mb-1 text-[0.625rem] uppercase tracking-wide text-muted-foreground">Orden del objeto</p>
+        <div className="flex gap-1">
+          {ORDENES.map(({ id, rotulo, Icono: Ic }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onOrdenar(id)}
+              disabled={!haySeleccion}
+              title={rotulo}
+              aria-label={rotulo}
+              className="flex flex-1 items-center justify-center rounded border border-border py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-30"
+            >
+              <Ic className="size-3.5" />
+            </button>
+          ))}
+        </div>
       </div>
 
       <p className="shrink-0 px-2 pb-2 text-[0.625rem] leading-tight text-muted-foreground">
-        Una capa bloqueada se ve pero no se puede seleccionar. Arrastrá una tarjeta para cambiar el orden.
+        Una capa bloqueada se ve pero no se puede seleccionar. También podés arrastrar su tarjeta para cambiar el
+        orden. En su «⋯» está «Mover selección aquí», para llevar lo elegido a otra capa.
       </p>
     </div>
   );

@@ -14,6 +14,7 @@ import {
   paraGuardar,
   parsear,
   pesoDeFiguras,
+  puntoDeAncla,
   redimensionarImagen,
   reordenar,
   tiradorTocado,
@@ -112,6 +113,63 @@ describe('guardar y volver', () => {
   it('archivosDeFiguras no repite el mismo archivo dos veces', () => {
     const otra = { ...IMAGEN, id: 'i2' };
     expect(archivosDeFiguras([IMAGEN, TRAZO, otra])).toEqual(['nota-1-abc.png']);
+  });
+});
+
+describe('ancla', () => {
+  it('sobrevive la ida y la vuelta', () => {
+    const conAncla = f('a1', {
+      clase: 'trazo',
+      color: '#000',
+      grosor: 3,
+      puntos: [[10, 10]],
+      ancla: { bloqueId: 'b1', dx: 4, dy: 6 },
+    } as const);
+    expect(parsear(paraGuardar([conAncla]))).toEqual([conAncla]);
+  });
+
+  it('sin ancla, no se guarda una clave `ancla` (ni siquiera en `undefined`)', () => {
+    expect(JSON.stringify(paraGuardar([TRAZO]))).not.toContain('ancla');
+  });
+
+  it('🔴 un `bloqueId` vacío no es un ancla más chica: es ninguna', () => {
+    const [leida] = parsear([
+      { clase: 'trazo', color: '#000', grosor: 3, puntos: [[0, 0]], ancla: { bloqueId: '', dx: 1, dy: 1 } },
+    ]);
+    expect(leida.ancla).toBeUndefined();
+  });
+
+  it('un `dx`/`dy` no finito descarta el ancla entera', () => {
+    const [leida] = parsear([
+      {
+        clase: 'trazo',
+        color: '#000',
+        grosor: 3,
+        puntos: [[0, 0]],
+        ancla: { bloqueId: 'b1', dx: Number.POSITIVE_INFINITY, dy: 1 },
+      },
+    ]);
+    expect(leida.ancla).toBeUndefined();
+  });
+
+  it('el offset se redondea a un decimal, igual que las coordenadas', () => {
+    const conCola = f('a2', {
+      clase: 'trazo',
+      color: '#000',
+      grosor: 3,
+      puntos: [[0, 0]],
+      ancla: { bloqueId: 'b1', dx: 4.777777, dy: 6.111 },
+    } as const);
+    const json = JSON.stringify(paraGuardar([conCola]));
+    expect(json).toContain('4.8');
+    expect(json).not.toContain('4.777777');
+  });
+
+  it('puntoDeAncla usa el primer punto, `desde`, `en`, o la esquina — según la clase', () => {
+    expect(puntoDeAncla(TRAZO)).toEqual([0, 0]);
+    expect(puntoDeAncla(f('fl', { clase: 'flecha', color: '#000', grosor: 3, desde: [5, 6], hasta: [9, 9] } as const))).toEqual([5, 6]);
+    expect(puntoDeAncla(f('ro', { clase: 'rotulo', color: '#000', tamano: 20, en: [7, 8], texto: 'x' } as const))).toEqual([7, 8]);
+    expect(puntoDeAncla(IMAGEN)).toEqual([100, 100]);
   });
 });
 

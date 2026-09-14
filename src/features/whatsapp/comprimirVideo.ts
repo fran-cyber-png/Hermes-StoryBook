@@ -1,22 +1,5 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
-/**
- * 🔴 EL CORE SE SIRVE DESDE `public/ffmpeg/`, NO SE IMPORTA.
- *
- * `scripts/preparar-ffmpeg.mjs` lo copia ahí desde `node_modules` en `predev` y
- * `prebuild`, y tiene escrito el porqué largo. El corto: tiene que ser el build
- * **ESM** (el worker de @ffmpeg/ffmpeg es `type: "module"` y termina haciendo
- * `import(coreURL)`, que pide un `export default` que el UMD no tiene), y no hay
- * forma de pedirle esa URL al bundler — Vite pre-bundlea el paquete y `?url`
- * deja de devolver una URL.
- *
- * `document.baseURI` y no una ruta absoluta: el fallback local de la cáscara abre
- * el build sin servidor (de ahí el `base: './'` de `vite.config.ts`), y `/ffmpeg/…`
- * apuntaría a la raíz del disco.
- */
-function urlDelCore(archivo: string): string {
-  return new URL(`ffmpeg/${archivo}`, document.baseURI).href;
-}
+import { cargarFfmpeg, olvidarMotor } from './motorFfmpeg';
 import { CODEC_AUDIO, CODEC_VIDEO, type Plan } from './planDeCompresion';
 
 /**
@@ -51,36 +34,10 @@ import { CODEC_AUDIO, CODEC_VIDEO, type Plan } from './planDeCompresion';
  * la vendedora abre contra VPS1, no contra internet en general.
  */
 
-/** Un solo ffmpeg por sesión: cargar 32 MB dos veces no tiene sentido. */
-let instancia: FFmpeg | null = null;
-let cargando: Promise<FFmpeg> | null = null;
-
-async function cargarFfmpeg(alProgresarCarga?: (f: number) => void): Promise<FFmpeg> {
-  if (instancia) return instancia;
-  if (cargando) return cargando;
-
-  cargando = (async () => {
-    const ff = new FFmpeg();
-    // URLs DIRECTAS, no `toBlobURL`. El helper de @ffmpeg/util existe para
-    // cargar el core desde un CDN (cross-origin), y acá el core es nuestro: sale
-    // del mismo `express.static` que la app. Con blobs, además, el core ESM
-    // pierde su `import.meta.url` —que es como ubica archivos hermanos— y los
-    // dos `blob:` terminan en `net::ERR_ABORTED` dentro del worker.
-    alProgresarCarga?.(1);
-    await ff.load({
-      coreURL: urlDelCore('ffmpeg-core.js'),
-      wasmURL: urlDelCore('ffmpeg-core.wasm'),
-    });
-    instancia = ff;
-    return ff;
-  })();
-
-  try {
-    return await cargando;
-  } finally {
-    cargando = null;
-  }
-}
+/**
+ * El motor (la carga del core, una instancia por sesión) vive en `motorFfmpeg.ts`:
+ * lo comparte con la conversión de la nota de voz.
+ */
 
 export interface OpcionesCompresion {
   /** 0..1. Cubre la carga del motor y el encode, en ese orden. */
@@ -175,7 +132,7 @@ export async function comprimirVideo(
     // videos seguidos se comen la memoria del proceso.
     await ff.deleteFile(entrada).catch(() => {});
     await ff.deleteFile(salida).catch(() => {});
-    if (senal?.aborted) instancia = null; // `terminate()` lo dejó inservible.
+    if (senal?.aborted) olvidarMotor(); // `terminate()` lo dejó inservible.
   }
 }
 

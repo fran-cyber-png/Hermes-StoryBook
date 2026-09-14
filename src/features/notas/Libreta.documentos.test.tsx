@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest';
 import { esperarA, montar, tocar, type Montado } from '../../pruebas/dom';
 import { Libreta } from './Libreta';
 
@@ -62,6 +62,26 @@ const NOTA_SUBIDA = {
   archivo: { archivo: 'nota-doc-nueva.pdf', nombreOriginal: 'Contrato.pdf', mime: 'application/pdf', bytes: 2048 },
 };
 
+/**
+ * 🔴 SIN ESTO, VITEST TIRA UN «UNHANDLED REJECTION» AL AZAR.
+ *
+ * `Libreta` precarga `EditorDePagina` (`perezosos.tsx`) al montar, sin
+ * `await` — a propósito, es fuego y olvido para no bloquear la lista. Cada
+ * test de este archivo monta y desmonta la Libreta en milisegundos, mucho
+ * antes de que ese `import()` (BlockNote) termine de bajar y parsear. Cuando
+ * por fin resuelve, el entorno jsdom de ESTE archivo ya se desmontó — y
+ * `EnvironmentTeardownError` sale como rechazo SIN manejar, no como falla de
+ * ningún test puntual (por eso Vitest reporta todo en verde y aun así el
+ * proceso termina en rojo).
+ *
+ * Importarlo acá, una vez, ANTES de que corra ningún test deja el módulo ya
+ * resuelto en el registro: la precarga de `Libreta` encuentra la promesa
+ * cacheada y no dispara una descarga nueva que pueda terminar tarde.
+ */
+beforeAll(async () => {
+  await import('./EditorDePagina');
+});
+
 let montado: Montado | null = null;
 let paginas = [PAGINA_TEXTO, PAGINA_ARCHIVO];
 let peticiones: { url: string; metodo: string; body: Record<string, unknown> | undefined }[] = [];
@@ -90,10 +110,10 @@ beforeEach(() => {
       if (u.includes('/api/notas/documentos') && metodo === 'POST') {
         return new Response(JSON.stringify({ ok: true, adjunto: NOTA_SUBIDA.archivo }), { status: 201 });
       }
-      // POST de creación (tipo: 'archivo' o 'diagrama'). Se agrega a `paginas`
-      // ANTES de contestar: `crearDocumento`/`crearDiagrama` invalidan la
-      // lista al terminar, y el refetch que sigue tiene que encontrar la fila
-      // nueva — como haría el server de verdad.
+      // POST de creación (tipo: 'archivo'). Se agrega a `paginas` ANTES de
+      // contestar: `crearDocumento` invalida la lista al terminar, y el
+      // refetch que sigue tiene que encontrar la fila nueva — como haría el
+      // server de verdad.
       if (u.endsWith('/api/notas') && metodo === 'POST') {
         if (body?.tipo === 'archivo') {
           paginas = [...paginas, NOTA_SUBIDA];
@@ -124,17 +144,24 @@ const inputDocumento = () => document.querySelector('input[aria-label="Elegir do
 
 async function listaLista() {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista (y el menú de "Nueva página", que vive adentro) aparezcan.
+  await esperarA(() => Boolean(botonQueDice('Todas las páginas')), 'llegó el riel');
+  tocar(botonQueDice('Todas las páginas')!);
   await esperarA(() => Boolean(botonQueDice('precios del diplomado')), 'llegó la lista');
 }
 
-test('el menú de «Nueva página» ofrece las tres formas de empezar', async () => {
+test('el botón dividido de «Nueva página» ofrece las dos formas de empezar', async () => {
   await listaLista();
 
+  // Botón dividido (rediseño de ficha, 03-sep-2026): el clic PRINCIPAL en
+  // «Nueva página» ya crea la página en blanco directo — no es una opción
+  // del menú. La flechita es lo único que abre el menú, y ahí vive nada más
+  // «Adjuntar documento», la forma menos usada.
+  expect(botonQueDice('Nueva página'), 'falta el botón principal, siempre visible').toBeTruthy();
   expect(menuNuevaPagina(), 'la flechita del botón dividido').toBeTruthy();
   tocar(menuNuevaPagina()!);
 
-  expect(botonQueDice('Página en blanco'), 'falta la opción de siempre').toBeTruthy();
-  expect(botonQueDice('Diagrama'), 'falta la opción escondida hasta ahora').toBeTruthy();
   expect(botonQueDice('Adjuntar documento'), 'falta la opción nueva').toBeTruthy();
 });
 
@@ -177,9 +204,21 @@ test('elegir un archivo lo sube, crea la página como tipo "archivo" y la abre e
   const creacion = peticiones.find((p) => p.url.endsWith('/api/notas') && p.metodo === 'POST' && p.body?.tipo === 'archivo');
   expect(creacion?.body?.archivo, 'manda el puntero que devolvió la subida, no el archivo crudo').toEqual(NOTA_SUBIDA.archivo);
 
-  // La página nueva se abre SOLA, sin que haga falta un segundo clic — mismo
-  // trato que «Nuevo Diagrama».
-  await esperarA(() => Boolean(botonQueDice('Contrato.pdf')), 'el visor muestra el nombre del documento');
+  // La página nueva se abre SOLA, sin que haga falta un segundo clic — y el
+  // panel de "Páginas" se cierra al crearla (`adjuntarDocumento`), así que lo
+  // que hay que ver es el VISOR principal, no un botón de la lista.
+  //
+  // ⚠️ El nombre ya NO se lee del `textContent` del visor (04-sep-2026): la
+  // cabecera que lo mostraba como texto plano se sacó de `PaginaDocumento.tsx`
+  // a pedido explícito (ADR 0093, «Descargar» se mudó al menú `⋮` de la fila).
+  // Lo que queda visible con ese nombre es el campo de `AccionesDePagina.tsx`
+  // (`TituloEditable`, «Nombra el documento») — un `<input>`, así que su
+  // `.value` no aparece en `textContent` y hay que leerlo aparte.
+  await esperarA(
+    () =>
+      document.querySelector<HTMLInputElement>('input[aria-label="Nombra el documento"]')?.value === 'Contrato.pdf',
+    'el campo de título muestra el nombre del documento',
+  );
   // Y NUNCA por el editor de BlockNote: un archivo no se escribe.
   expect(document.querySelector('[data-libreta-editor]'), 'no tiene que montarse el editor de texto').toBeNull();
 });

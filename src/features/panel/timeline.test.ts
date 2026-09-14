@@ -33,6 +33,7 @@ function cliente(sobre: Partial<Extract<Ficha, { estado: 'cliente' }>> = {}): Ex
     correo: 'maria@test.com',
     ventasCount: 1,
     ventas: [venta()],
+    verificado: true,
     ...sobre,
   };
 }
@@ -134,6 +135,35 @@ describe('ensamblarTimeline', () => {
     expect(compra.detalle).toBe('Curso A · Curso B');
   });
 
+  /**
+   * 🔴 #1033 — UNA VENTA QUE NO ES COMPRA NO SE ROTULA «COMPRA». Cerberus manda
+   * cotizaciones, anuladas y reembolsos por el mismo webhook, y la Actividad las
+   * dibujaba todas como «Compra»: el tile «Última actividad» decía «Compra 14
+   * ago.» sobre una cotización. Qué es compra lo decide el server
+   * (`dominio/estadosVenta.ts`); lo que no lo es sigue en la pestaña Compras,
+   * marcado.
+   */
+  it('una cotización sale como cotización, una anulada no sale, y sólo la compra dice «Compra»', () => {
+    const resultado = ensamblarTimeline({
+      ficha: cliente({
+        ventas: [
+          venta({ folio: 'GOB-1', fecha: '2026-08-14T15:00:00Z', estado: 'Cotización', esCompra: false }),
+          venta({ folio: 'GOB-2', fecha: '2026-07-01T15:00:00Z', estado: 'Anulado', esCompra: false }),
+          venta({ folio: 'GOB-3', fecha: '2025-10-31T15:00:00Z', estado: 'Pagado', esCompra: true }),
+        ],
+      }),
+    });
+
+    expect(
+      eventosDe(resultado)
+        .filter((e) => e.fuente === 'Cerberus')
+        .map((e) => [e.tipo, e.rotulo]),
+    ).toEqual([
+      ['cotizacion', 'Cotización'],
+      ['compra', 'Compra'],
+    ]);
+  });
+
   it('Cerberus error: no genera compras', () => {
     const resultado = ensamblarTimeline({ ficha: errorFicha('timeout') });
 
@@ -161,7 +191,7 @@ describe('ensamblarTimeline', () => {
     expect(evs[1].timestamp).toBeUndefined();
   });
 
-  it('con señales: genera enfriamiento y cotizacion con estado ia', () => {
+  it('con señales: enfriamiento sigue ia, cotizacion es una señal con su fecha (F.4)', () => {
     const resultado = ensamblarTimeline({
       senales: senal({
         enfriamiento: { enfriada: true, diasDeSilencio: 5, motivo: 'sin respuesta' },
@@ -174,10 +204,14 @@ describe('ensamblarTimeline', () => {
     expect(enf!.estado).toBe('ia');
     expect(enf!.valor).toBe('5 días');
 
+    // 🔴 F.4: no hubo IA (esCotizacion es una regla sobre el texto saliente) y
+    // el server manda `ocurridoEn` — antes de este fix el front lo descartaba y
+    // la ficha decía «Cotización IA · Sin fecha».
     const cot = eventosDe(resultado).find((e) => e.tipo === 'cotizacion');
     expect(cot).toBeDefined();
-    expect(cot!.estado).toBe('ia');
+    expect(cot!.estado).toBe('senal');
     expect(cot!.fuente).toBe('Señal automática');
+    expect(cot!.timestamp).toBe('2026-07-28');
   });
 
   it('señal de enfriamiento sin diasDeSilencio no pone valor', () => {
@@ -280,6 +314,16 @@ describe('ensamblarTimeline', () => {
     expect(ev).toBeDefined();
     expect(ev!.valor).toBe('Juan');
     expect(ev!.fuente).toBe('WhatsApp');
+  });
+
+  // 🔴 #1033 — la Actividad de un cliente decía «Nombre identificado .». Un
+  // pushname de pura puntuación o sólo emojis no identifica a nadie: es la misma
+  // regla que `nombreDelContacto` aplica a la cabecera.
+  it('un pushname sin letras ni dígitos no es un «Nombre identificado»', () => {
+    for (const push of ['.', '🦋🦋']) {
+      const resultado = ensamblarTimeline({ conversacion: { persona_nombre: push } });
+      expect(eventosDe(resultado).find((e) => e.tipo === 'identidad'), `«${push}» no es un nombre`).toBeUndefined();
+    }
   });
 
   it('orden cronológico descendente con timestamps mezclados, sin importar la fuente', () => {

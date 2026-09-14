@@ -1,16 +1,22 @@
 import { useState } from 'react';
-import { Check, Lock, Plus, Settings2, Users } from 'lucide-react';
-import { ModalDeEspacios } from './ModalDeEspacios';
-import { type DondeEstoy, nombreCorto, useEspacios, useMutacionesEspacios, usePadron } from './espacios';
+import { Check, Files, Plus, Star, Trash2 } from 'lucide-react';
+import { type VistaLibreta, mismaVista, nombreCorto, useEspacios, useMutacionesEspacios, usePadron } from './espacios';
+import { iconoDeEspacio } from './iconosDeEspacio';
 
 /**
- * DÓNDE ESTOY ESCRIBIENDO — el selector que encabeza la lista de páginas.
+ * EL RIEL DE LA LIBRETA — "MI LIBRETA" (Todas/Favoritas/Papelera, "solo tú")
+ * más "TUS ESPACIOS" (03-sep-2026, rediseño con panel flotante).
  *
- * ══ LA LIBRETA PRIVADA VA PRIMERA Y NO SE PUEDE SACAR ═══════════════════════
+ * ══ ES UN RIEL, NO UN SELECTOR QUE ABRE UNA LISTA APILADA ═══════════════════
  *
- * No sale de la lista del server (es implícita, `espacioId === null`), así que se
- * dibuja acá a mano y siempre arriba. Es deliberado: quien no crea ni un espacio
- * tiene que ver **exactamente la Libreta de antes**, con un renglón de más.
+ * Hasta acá esto encabezaba una lista de páginas que vivía DEBAJO, en el mismo
+ * `<aside>` de `Libreta.tsx`. Ahora es angosto y SIEMPRE visible, y la lista de
+ * páginas de lo que se elija acá vive en un panel APARTE que se abre flotando
+ * — `Libreta.tsx` es quien decide si ese panel está abierto y con qué vista,
+ * este componente solo REPORTA qué fila se tocó (`onElegir`). Es a propósito:
+ * "clic en algo ya elegido hace toggle del panel, clic en algo nuevo cambia y
+ * abre" es una decisión sobre EL PANEL, no sobre el riel, y vive una vez en
+ * `Libreta.tsx` — acá duplicarla sería la próxima vez que diverjan (#37).
  *
  * ══ EL CANDADO Y LA GENTE SON LA MISMA INFORMACIÓN ══════════════════════════
  *
@@ -25,13 +31,14 @@ function FilaDeLugar({
   onIr,
   icono,
   nombre,
-  detalle,
+  contador,
 }: {
   activo: boolean;
   onIr: () => void;
   icono: React.ReactNode;
   nombre: string;
-  detalle?: string;
+  /** Cuántas páginas tiene — `undefined` mientras no se sabe (ver `Espacio.paginas`). */
+  contador?: number;
 }) {
   return (
     <button
@@ -44,7 +51,11 @@ function FilaDeLugar({
     >
       <span className="shrink-0">{icono}</span>
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{nombre}</span>
-      {detalle && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{detalle}</span>}
+      {contador !== undefined && (
+        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[0.6875rem] font-medium text-muted-foreground">
+          {contador}
+        </span>
+      )}
     </button>
   );
 }
@@ -134,83 +145,107 @@ function NuevoEspacio({ onListo, onCancelar }: { onListo: () => void; onCancelar
 }
 
 export function SelectorDeEspacio({
-  donde,
-  onIr,
+  vista,
+  onElegir,
+  totalCount,
+  favoritasCount,
+  papeleraCount,
 }: {
-  donde: DondeEstoy;
-  onIr: (donde: DondeEstoy) => void;
+  vista: VistaLibreta;
+  /** El riel solo REPORTA qué fila se tocó — ver el docblock de arriba. */
+  onElegir: (v: VistaLibreta) => void;
+  /** Los tres contadores de "MI LIBRETA" — `Libreta.tsx` los calcula porque
+   *  necesita las mismas consultas para armar la lista del panel. */
+  totalCount: number;
+  favoritasCount: number;
+  papeleraCount: number;
 }) {
   const [creando, setCreando] = useState(false);
-  const [administrando, setAdministrando] = useState(false);
   const espacios = useEspacios();
 
   const lista = espacios.data ?? [];
 
   return (
-    <div className="border-b border-border px-2 py-2">
+    // `pt-[17px]` (antes `py-2` parejo, 03-sep-2026 a pedido explícito) — EL
+    // MISMO alto que le toma a la primera página del panel de al lado llegar
+    // a su título (el `py-2` de su propia tarjeta más el borde, ver
+    // `FilaPagina` en `Libreta.tsx`): con el mismo `py-2` de acá "MI LIBRETA"
+    // quedaba más arriba que "Blame" — dos arranques distintos para lo que
+    // se lee como la misma fila. Medido con Playwright, no a ojo.
+    <div className="px-2 pb-2 pt-[17px]">
+      {/* "MI LIBRETA" — las tres vistas de la libreta privada. "solo tú" describe
+          a las TRES: ninguna cruza a un espacio compartido (confirmado con el
+          dueño del pedido, 03-sep-2026) — `dondeDeVista` en `espacios.ts` es la
+          prueba de que esto no es solo un rótulo, es la regla. */}
+      <p className="flex items-center justify-between px-2.5 pb-1 text-xs font-bold uppercase tracking-wide text-foreground">
+        <span>Mi libreta</span>
+        <span className="text-[0.6875rem] font-medium normal-case text-muted-foreground">solo tú</span>
+      </p>
       <div className="space-y-0.5">
         <FilaDeLugar
-          activo={donde === null}
-          onIr={() => onIr(null)}
-          icono={<Lock className="size-3.5" />}
-          nombre="Mi libreta"
-          detalle="solo tú"
+          activo={mismaVista(vista, { tipo: 'todas' })}
+          onIr={() => onElegir({ tipo: 'todas' })}
+          icono={<Files className="size-3.5" />}
+          nombre="Todas las páginas"
+          contador={totalCount}
+        />
+        <FilaDeLugar
+          activo={mismaVista(vista, { tipo: 'favoritas' })}
+          onIr={() => onElegir({ tipo: 'favoritas' })}
+          icono={<Star className="size-3.5" />}
+          nombre="Favoritas"
+          contador={favoritasCount}
+        />
+        <FilaDeLugar
+          activo={mismaVista(vista, { tipo: 'papelera' })}
+          onIr={() => onElegir({ tipo: 'papelera' })}
+          icono={<Trash2 className="size-3.5" />}
+          nombre="Papelera"
+          contador={papeleraCount}
         />
       </div>
 
       {/*
-        UN RÓTULO Y UN BORDE separan «Mi libreta» —siempre existe, siempre es
-        la primera— de LOS ESPACIOS —una lista que puede crecer—, para que las
-        dos cosas no se lean como una sola lista plana de seis renglones
-        parecidos (reportado: «hazlo más intuitivo, dales alguna separación»).
-        Solo aparece si hay al menos uno: el rótulo de una sección vacía es
-        ruido, no orientación.
+        UN RÓTULO Y UN BORDE separan "MI LIBRETA" —siempre existe, siempre son
+        las mismas tres— de LOS ESPACIOS —una lista que puede crecer—, para que
+        las dos cosas no se lean como una sola lista plana. Solo aparece si hay
+        al menos uno: el rótulo de una sección vacía es ruido, no orientación.
       */}
       {lista.length > 0 && (
         <div className="mt-2 space-y-0.5 border-t border-border pt-2">
-          <p className="px-2.5 pb-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
-            Tus espacios
-          </p>
-          {lista.map((e) => (
-            <FilaDeLugar
-              key={e.id}
-              activo={donde === e.id}
-              onIr={() => onIr(e.id)}
-              icono={<Users className="size-3.5" />}
-              nombre={e.nombre}
-              detalle={`${e.miembros.length}`}
-            />
-          ))}
+          <p className="px-2.5 pb-1 text-xs font-bold uppercase tracking-wide text-foreground">Tus espacios</p>
+          {lista.map((e) => {
+            const Icono = iconoDeEspacio(e.icono);
+            return (
+              <FilaDeLugar
+                key={e.id}
+                activo={mismaVista(vista, { tipo: 'espacio', id: e.id })}
+                onIr={() => onElegir({ tipo: 'espacio', id: e.id })}
+                icono={<Icono className="size-3.5" />}
+                nombre={e.nombre}
+                // `paginas` viene de `GET /api/espacios` (03-sep-2026) — de
+                // CUALQUIER miembro, no solo lo que escribiste vos. `?? 0` cubre
+                // el instante entre que la lista llega y el conteo (misma
+                // respuesta, así que en la práctica siempre vienen juntos).
+                contador={e.paginas ?? 0}
+              />
+            );
+          })}
         </div>
       )}
 
       {/* ⚠️ Un fallo al traer los espacios SE DICE. Sin esto, la lista se dibuja
-          con «Mi libreta» sola y se lee como «no tienes ningún espacio» — que es
+          con "MI LIBRETA" sola y se lee como «no tienes ningún espacio» — que es
           una afirmación sobre datos que no se pudieron leer. */}
       {espacios.isError && <p className="px-2.5 py-1 text-xs text-destructive">No pude traer tus espacios.</p>}
 
-      {/* «Administrar espacios» / «Nuevo espacio» van juntas, separadas del
-          resto por su propio borde: son ACCIONES, no lugares a los que ir —
-          mezclarlas con las filas de «Mi libreta»/espacios es lo que hacía
-          que todo el bloque se leyera parejo.
-
-          🔴 «Administrar espacios» es FIJO (26-ago-2026) — antes decía
-          «Administrar «X»…» y aparecía o desaparecía según cuál espacio
-          estuvieras mirando, lo que reportaron como que desarmaba la UI (el
-          botón saltaba de lugar, o no estaba, según dónde estuvieras parada).
-          Ahora siempre está, siempre dice lo mismo, y abre un modal que lista
-          TODOS los que creaste — vivos y archivados — en un solo lugar. Ver
-          `ModalDeEspacios.tsx`. */}
+      {/* «Nuevo espacio» — una ACCIÓN, no un lugar al que ir, separada del
+          resto por su propio borde. «Administrar espacios» se mudó al menú
+          de «Configuración» al pie del riel (`Libreta.tsx`, 03-sep-2026):
+          las dos vivían juntas acá cuando eran las únicas dos acciones de
+          administración de la Libreta, y dejaron de serlo cuando
+          "Configurar Respuestas Rápidas" pidió el mismo lugar. */}
       <div className="mt-2 space-y-0.5 border-t border-border pt-2">
-        <button
-          type="button"
-          onClick={() => setAdministrando(true)}
-          className="flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1 text-left text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
-        >
-          <Settings2 className="size-3.5" />
-          Administrar espacios
-        </button>
-
         {creando ? (
           <NuevoEspacio onListo={() => setCreando(false)} onCancelar={() => setCreando(false)} />
         ) : (
@@ -224,8 +259,6 @@ export function SelectorDeEspacio({
           </button>
         )}
       </div>
-
-      {administrando && <ModalDeEspacios onCerrar={() => setAdministrando(false)} />}
     </div>
   );
 }

@@ -19,20 +19,28 @@ import { VistaDashboard } from './VistaDashboard';
  * `PanelDerecho.campana.test.tsx`: un test que sólo comprueba que en campaña no
  * aparece «El negocio» pasa en verde si alguien rompe el conmutador entero y no
  * aparece para nadie. Lo que se fija es la DIFERENCIA.
+ *
+ * Desde ADR 0104 quien dice `supervisor` es la respuesta de «Hoy», no la del radar
+ * (que se fue del Dashboard).
  */
 
 let vista: Montado | null = null;
 let pedidos: string[] = [];
 
-/** Lo mínimo que el radar necesita para pintar sin explotar. */
-const RADAR_VACIO = {
-  chats: [], formularios: [], etapas: {}, etiquetas: {}, porVendedora: [],
-  automaticos: null, embudo: {}, cursos: [],
-  series: { leads_dia: [], envios_dia: [], ventas_dia: [] },
+/** Lo mínimo que «Hoy» contesta para que la vista pinte. */
+const HOY_VACIO = {
+  inicioDeHoy: '2026-09-10T05:00:00.000Z',
+  generadoEn: '2026-09-10T05:00:00.000Z',
   // `supervisor: true` a propósito: es el caso que estaba roto. Sin él, «El
   // negocio» no aparecería para nadie y la mitad de ventas pasaría sola.
   supervisor: true,
-  soloMisAsignadas: false,
+  modulo: 'ventas',
+  lineas: [],
+  escribieron: { total: 0, porLinea: [] },
+  sinRespuesta: { total: 0, porDuena: [], porLinea: [] },
+  calientesSinDuena: { total: 0, porLinea: [] },
+  personas: [],
+  sinAtribuir: [],
 };
 
 beforeEach(() => {
@@ -42,12 +50,12 @@ beforeEach(() => {
     vi.fn((url: unknown) => {
       const u = String(url);
       pedidos.push(u);
-      // El radar contesta; el resto falla y react-query lo absorbe. Lo que
-      // importa acá es QUÉ se pidió, no qué volvió.
-      if (u.includes('/api/dashboard') && !u.includes('/negocio') && !u.includes('/campana')) {
-        return Promise.resolve(new Response(JSON.stringify(RADAR_VACIO), {
-          status: 200, headers: { 'content-type': 'application/json' },
-        }));
+      // «Hoy» contesta; el resto falla y react-query lo absorbe. Lo que importa
+      // acá es QUÉ se pidió, no qué volvió.
+      if (u.includes('/api/dashboard/hoy')) {
+        return Promise.resolve(
+          new Response(JSON.stringify(HOY_VACIO), { status: 200, headers: { 'content-type': 'application/json' } }),
+        );
       }
       return Promise.reject(new Error('sin server en el test'));
     }),
@@ -60,10 +68,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const props = {
-  onAbrir: () => {}, onBuscarPersona: () => {}, onIrAgenda: () => {},
-  miVendedora: 'centurion:job.meneses',
-};
+const props = { onAbrirPipeline: () => {} };
 
 describe('el conmutador del Dashboard según el módulo', () => {
   it('🔴 en CAMPAÑA ofrece «La campaña» y NO ofrece «El negocio»', async () => {
@@ -101,6 +106,18 @@ describe('el conmutador del Dashboard según el módulo', () => {
     expect(
       pedidos.some((u) => u.includes('/api/dashboard/negocio')),
       'un operador de campaña no puede pedir jamás la lectura de la Escuela',
+    ).toBe(false);
+  });
+
+  it('«Hoy» es la lectura que abre, y pide su ruta con el inicio del día de quien mira', async () => {
+    vista = montar(<VistaDashboard {...props} />);
+    await esperarA(() => pedidos.some((u) => u.includes('/api/dashboard/hoy')), 'que «Hoy» se pida al abrir');
+
+    const pedido = pedidos.find((u) => u.includes('/api/dashboard/hoy'))!;
+    expect(decodeURIComponent(pedido)).toContain('inicioDeHoy=');
+    expect(
+      pedidos.some((u) => u.includes('/api/dashboard/negocio')),
+      '«El negocio» no se pide hasta que alguien lo abre',
     ).toBe(false);
   });
 });

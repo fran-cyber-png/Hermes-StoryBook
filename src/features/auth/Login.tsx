@@ -12,7 +12,9 @@ import { CLAVE_ULTIMO_USUARIO } from './sesion';
  * vez al montar, último usuario precargado. Ritual de 3 segundos, no un form.
  */
 
-const CLASE_INPUT = `${fieldClass} outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25`;
+/* En el celular el campo crece y su letra sube a 16 px: con menos, Safari de iOS
+   hace zoom al enfocar y la pantalla queda corrida hasta que alguien la pellizca. */
+const CLASE_INPUT = `${fieldClass} outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25 max-md:py-3 max-md:text-base`;
 
 /**
  * Cuatro causas distintas, cuatro mensajes — y ninguno es el error crudo.
@@ -106,9 +108,15 @@ export function Login({
   }
 
   return (
-    <div className="flex h-dvh items-center justify-center bg-background px-6">
+    /* EN EL CELULAR EL LOGIN SE PUEDE DESPLAZAR. Centrado con `justify-center`,
+       abrir el teclado achica la pantalla y el formulario se desborda por ARRIBA,
+       donde no se puede scrollear: el escudo y el campo de usuario quedan fuera
+       de alcance. En columna, con `my-auto` en el bloque, se centra cuando sobra
+       lugar y se desplaza cuando no. Los `safe-area` son el notch y la barra de
+       gestos de la PWA instalada. En escritorio no cambia nada. */
+    <div className="flex h-dvh items-center justify-center bg-background px-6 max-md:flex-col max-md:items-stretch max-md:justify-start max-md:overflow-y-auto max-md:px-4 max-md:pb-[max(1.5rem,env(safe-area-inset-bottom))] max-md:pt-[max(1.5rem,env(safe-area-inset-top))]">
       <style>{FIRMA}</style>
-      <div className="w-full max-w-sm">
+      <div className="w-full max-w-sm max-md:mx-auto max-md:my-auto">
         <div className="mb-4 flex flex-col items-center rounded-2xl bg-navy px-6 py-8 text-center">
           <span className="escudo-firma">
             <Escudo size={44} />

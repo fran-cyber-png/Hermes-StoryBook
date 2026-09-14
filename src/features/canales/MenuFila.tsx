@@ -105,9 +105,11 @@ export function MenuFila({
         // Invisible = intocable: si no, la esquina derecha de CADA fila se come
         // el clic con un botón que no se ve. Vuelve a la vida con el mouse
         // encima de la fila, con el foco de teclado en la fila, o abierta.
+        // En el celular no existe «el mouse encima»: ahí se ve SIEMPRE, o fijar,
+        // favorita y «no leído» quedarían fuera del alcance del dedo.
         (abierto
           ? 'opacity-100'
-          : 'pointer-events-none opacity-0 ' +
+          : 'pointer-events-none opacity-0 max-md:pointer-events-auto max-md:opacity-100 ' +
             'group-hover/fila:pointer-events-auto group-hover/fila:opacity-100 ' +
             'group-focus-within/fila:pointer-events-auto group-focus-within/fila:opacity-100')
       }
@@ -130,7 +132,7 @@ export function MenuFila({
           else abrir();
         }}
         className={
-          'flex items-center rounded-md p-0.5 transition-colors ' +
+          'flex items-center rounded-md p-0.5 transition-colors max-md:p-1.5 ' +
           (abierto ? 'bg-navy text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground')
         }
       >

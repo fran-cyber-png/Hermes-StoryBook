@@ -471,3 +471,57 @@ describe('VistaCorreos — el puente desde la ficha (H6/H7)', () => {
     expect(montado.contenedor.textContent).not.toContain('Queda anotado en la conversación');
   });
 });
+
+/**
+ * 🔴 **SI EL CANAL NO ES USABLE, CERRAR NO PUEDE DEPENDER DE GUARDAR.** El
+ * defecto (1-sep-2026): con el puente trayendo un «Para» ya lleno —el caso
+ * normal de «Escribirle un correo» desde una ficha—, `hayQueGuardar` da
+ * `true` aunque nadie haya tecleado nada, así que cerrar intentaba
+ * `POST /api/correos/borrador` ANTES de avisar que se puede cerrar. Con
+ * `/api/correos/estado` en 403 (una vendedora de campaña: Correos es 403
+ * entero para ese módulo) ese POST también es 403, y como
+ * `onListoParaCerrar` sólo se llama si el guardado gana, la X y el clic
+ * afuera se quedaban mudos para siempre — un correo que nunca se puede
+ * guardar tampoco se puede cerrar nunca.
+ */
+describe('VistaCorreos — cerrar no depende de un canal que no existe', () => {
+  function servidorSinCanal() {
+    return vi.fn(async (url: string) => {
+      const u = String(url);
+      // Correos es 403 ENTERO para este módulo — /estado, /borrador y /enviar
+      // los tres, la misma razón por la que reintentar nunca lo arregla.
+      if (u.includes('/api/correos/estado') || u.includes('/api/correos/borrador')) {
+        return new Response(JSON.stringify({ ok: false, message: 'otro_modulo_del_crm' }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ correos: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+  }
+
+  it('con el «Para» prellenado por el puente, la X cierra igual — sin canal no hay nada que guardar', async () => {
+    localStorage.setItem('hermes.token', tokenVivo('luz'));
+    vi.stubGlobal('fetch', servidorSinCanal());
+    montado = montar(<VistaCorreos correoInicial="ana@correo.com" nombreInicial="Ana" />);
+
+    for (let i = 0; i < 20; i++) {
+      if ((montado.contenedor.textContent ?? '').includes('No se pudo consultar el estado')) break;
+      await reposar();
+    }
+    expect(montado.contenedor.textContent).toContain('No se pudo consultar el estado del canal de correo');
+
+    const cerrar = montado.contenedor.querySelector('button[aria-label="Cerrar el composer"]') as HTMLButtonElement;
+    expect(cerrar).not.toBeNull();
+    tocar(cerrar);
+
+    for (let i = 0; i < 20; i++) {
+      if (montado.contenedor.querySelector('div[role="dialog"][aria-label="Nuevo correo"]') === null) break;
+      await reposar();
+    }
+    expect(montado.contenedor.querySelector('div[role="dialog"][aria-label="Nuevo correo"]')).toBeNull();
+  });
+});

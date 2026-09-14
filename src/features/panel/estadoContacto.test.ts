@@ -15,6 +15,7 @@ const CLIENTE: Ficha = {
     { folio: 'GOB-13706', estado: 'Pagado', monto: '1960.00', moneda: 'MXN', fecha: '2026-09-07', productos: [] },
     { folio: 'GOB-13222', estado: 'Pagado', monto: '2800.00', moneda: 'MXN', fecha: '2026-04-06', productos: [] },
   ],
+  verificado: true,
 };
 
 function entrada(p: Partial<EntradaEstadoContacto> = {}): EntradaEstadoContacto {
@@ -40,18 +41,24 @@ describe('estadoDelContacto — quién es, de un vistazo', () => {
   });
 
   it('cliente sin ventas cargadas lo dice, en vez de mostrar un hueco donde iba la cifra', () => {
-    const e = estadoDelContacto(entrada({ ficha: { ...CLIENTE, ventas: [], ventasCount: 0 } }));
+    const e = estadoDelContacto(
+      entrada({ ficha: { ...CLIENTE, estado: 'cliente', ventas: [], ventasCount: 0, verificado: true } }),
+    );
     expect(e.tono).toBe('cliente');
     expect(e.compras).toBeNull();
     expect(e.detalle).toMatch(/sin ventas/i);
   });
 
-  it('Cerberus caído NO es «lead nuevo» — son cosas opuestas y se ven distinto', () => {
+  it('una ficha que no cargó NO es «lead nuevo» — y tampoco grita en la cabecera', () => {
     const caido = estadoDelContacto(entrada({ error: true }));
     expect(caido.tono).toBe('sin-saber');
-    expect(caido.acento).toBe('alerta');
-    expect(caido.detalle).toMatch(/no cargó/i);
     expect(caido.tono).not.toBe(estadoDelContacto(entrada({ ficha: { estado: 'nuevo' } })).tono);
+    // Dueño, 13-sep-2026: «No se pudo saber» no le decía nada a la vendedora. La
+    // cabecera no afirma nada (sin chip) y la salida —reintentar— vive en Resumen.
+    expect(caido.titulo).toBe('');
+    expect(caido.acento).toBe('neutro');
+    expect(caido.detalle).toMatch(/no cargó/i);
+    expect(caido.detalle).not.toMatch(/Cerberus no respondió/i);
   });
 
   it('la ficha que responde `error` pesa lo mismo que la consulta que falló', () => {
@@ -85,8 +92,10 @@ describe('el frío es del hilo, no de la persona', () => {
     expect(e.enfriada).toBe(true);
   });
 
-  it('el frío nunca tapa que Cerberus no respondió', () => {
-    expect(estadoDelContacto(entrada({ error: true, enfriada: true })).acento).toBe('alerta');
+  it('el frío nunca tapa que la ficha no cargó: no pinta frío lo que no se sabe', () => {
+    const e = estadoDelContacto(entrada({ error: true, enfriada: true }));
+    expect(e.tono).toBe('sin-saber');
+    expect(e.acento).toBe('neutro');
   });
 });
 
@@ -131,7 +140,9 @@ describe('mientras Cerberus responde, el padrón local ya sabe algo', () => {
     expect(estadoDelContacto(entrada({ cargando: true })).tono).toBe('cargando');
   });
 
-  it('el padrón no tapa un error de Cerberus: «no se pudo saber» no es «es cliente»', () => {
-    expect(estadoDelContacto(entrada({ error: true, padron: 'vip' })).acento).toBe('alerta');
+  it('el padrón no tapa una ficha que no cargó: no saber no es «es cliente»', () => {
+    const e = estadoDelContacto(entrada({ error: true, padron: 'vip' }));
+    expect(e.tono).toBe('sin-saber');
+    expect(e.titulo).not.toBe('Cliente');
   });
 });

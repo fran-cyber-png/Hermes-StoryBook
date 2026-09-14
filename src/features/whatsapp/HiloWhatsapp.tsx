@@ -1,10 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bot, Check, CheckCheck, Copy, CornerDownRight, CornerUpLeft, CornerUpRight, FileText, SmilePlus, Loader2, Megaphone, Paperclip, Pencil, Phone, Play, QrCode, Send, Link2, Trash2, WifiOff, X } from 'lucide-react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Bot, Check, CheckCheck, Copy, CornerDownRight, CornerUpLeft, CornerUpRight, FileText, SmilePlus, Loader2, Maximize2, Megaphone, Mic, Paperclip, Pencil, Phone, Play, QrCode, Send, Link2, Trash2, Wand2, WifiOff, X } from 'lucide-react';
 import { ErrorApi } from '../../lib/datos/cliente';
+import { deDondeVino } from '../../dominio/origen';
 import { esDeCampana } from './campanaAjena';
 import { useBlobAutenticado } from '../../lib/datos/blobAutenticado';
+import { tokenGuardado } from '../../lib/datos/token';
 import { formatoTelefono, horasDesde, tempClass } from '../../lib/formato';
 import { usePopover } from '../../lib/teclado/usePopover';
+import { CONSULTA_CELULAR } from '../../lib/useEsMovil';
 import { ejecutarEnvioComposer, guardarBorrador, leerBorrador } from './borradorComposer';
 import { ponerEnComposer } from './puenteComposer';
 import {
@@ -15,6 +18,22 @@ import {
   TOPE_ADJUNTO_BYTES,
 } from './pegarAdjunto';
 import { AdjuntoPesado } from './AdjuntoPesado';
+import { BotonDescargarAdjunto } from './BotonDescargarAdjunto';
+import { esPdf, nombreDeDescarga } from './descargarAdjunto';
+import { guardarBlob } from '../../lib/datos/descargarArchivo';
+import { perezoso } from '../../lib/perezoso';
+import { puedeGrabarVoz, relojDeVoz } from './notaDeVoz';
+
+/**
+ * PEREZOSO, y medido: con el grabador estático el arranque pasaba de 296,9 a
+ * 299,2 KB gzip contra un techo de 300 (`npm run presupuesto`, 11-sep-2026). Lo
+ * que tiene que estar al abrir el chat es el BOTÓN; la lógica de grabar baja
+ * recién cuando el composer se monta, y mientras tanto se ve el mismo micrófono
+ * apagado en el mismo lugar.
+ */
+const GrabadorDeVoz = perezoso(() => import('./GrabadorDeVoz').then((m) => m.GrabadorDeVoz));
+/** Perezoso por lo mismo: se abre con un clic, y el arranque tiene el techo justo. */
+const VisorDeAdjunto = perezoso(() => import('../../components/VisorDeAdjunto').then((m) => m.VisorDeAdjunto));
 import { alPonerEnComposer } from './puenteComposer';
 import { anotarPieza, piezaDelTexto } from './procedenciaComposer';
 import { aplicarRespuesta, comandoEnCurso, filtrarRespuestas } from './comandoBarra';
@@ -24,13 +43,17 @@ import { pegarPlantilla, usePlantillasAMano, type PlantillaAMano } from './plant
 import { useCatalogoHechos, type HechoDelCatalogo } from '../hechos/catalogo';
 import { PantallaHechos } from '../hechos/PantallaHechos';
 import { textoDelBoton } from '../autorespuesta/revision';
+import { avisoDeVarita, pedirSugerencia, reportarDesenlace, type VaritaActiva } from './varita';
 import { TextoWhatsapp } from './TextoWhatsapp';
+import { VisorDeImagen } from './VisorDeImagen';
+import { imagenesDelHilo } from './encuadreDelVisor';
 import { lecturaDeMotivo } from './motivoEntrega';
 import { avisoDeComposer } from '../../dominio/ventana';
 import { lecturaDeTenencia } from '../../dominio/tenencia';
 import { useBloqueoDeChat, useTenenciaViva } from '../../dominio/conversaciones';
 import { citaDeMensaje, clavesDelHilo, respondidos, rotuloDeCita, sePuedeCitar, type CitaHilo } from './cita';
 import { Avatar } from '../../components/Avatar';
+import { CabeceraDeChat } from '../canales/CabeceraDeChat';
 // El mismo resolvedor que la lista de Contactos: las dos familias de identidad
 // (`centurion:` y el correo de Cerberus) se acortan igual en los dos lados, o el
 // mismo humano se lee distinto según la pantalla (#37).
@@ -60,6 +83,37 @@ function etiquetaDia(fecha: Date): string {
   return fecha
     .toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' })
     .replace(/[.,]/g, '');
+}
+
+/**
+ * LA IMAGEN DE UN DATO, COMO `File` — para dejarla de adjunto pendiente.
+ *
+ * El archivo ya está en el server (`hechos/media`, mismo directorio que la
+ * media de WhatsApp) y detrás del perímetro: se baja con el Bearer, como
+ * cualquier media autenticada (`blobAutenticado.ts`), y se envuelve en un
+ * `File` para que `setAdjunto` la trate IGUAL que el clip o un ⌘V — un solo
+ * camino a «adjunto pendiente», nunca dos.
+ *
+ * `null` = no se pudo bajar (perímetro caído, archivo borrado). Se ignora en
+ * silencio: el texto del dato ya quedó puesto, y es preferible eso a que el
+ * clic entero falle por la imagen.
+ */
+async function imagenDeHechoComoArchivo(imagen: {
+  archivo: string;
+  mime: string;
+  nombre: string | null;
+}): Promise<File | null> {
+  const token = tokenGuardado();
+  try {
+    const res = await fetch(urlMedia(imagen.archivo), {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return new File([blob], imagen.nombre ?? imagen.archivo, { type: imagen.mime });
+  } catch {
+    return null;
+  }
 }
 
 /** Agrupa mensajes por día calendario, respetando el orden del hilo. */
@@ -138,10 +192,22 @@ export function SkeletonHilo() {
  * audio y documento se bajan recién cuando la vendedora los toca. Trade-off
  * documentado en el ADR 0011.
  */
-function MediaEnBurbuja({ media }: { media: MediaHilo }) {
-  if (media.clase === 'imagen' || media.clase === 'sticker') return <ImagenEnBurbuja media={media} />;
-  if (media.clase === 'video' || media.clase === 'audio') return <ReproducirBajoDemanda media={media} />;
-  return <DocumentoBajoDemanda media={media} />;
+export function MediaEnBurbuja({
+  media,
+  cuando,
+  onAmpliar,
+}: {
+  media: MediaHilo;
+  cuando: string;
+  /**
+   * Quién abre la imagen ampliada. En el hilo de WhatsApp es el visor del HILO (`VisorDeImagen`,
+   * #997), que recorre las fotos y cita. Sin esto, la burbuja abre el suyo (`VisorDeAdjunto`).
+   */
+  onAmpliar?: () => void;
+}) {
+  if (media.clase === 'imagen' || media.clase === 'sticker') return <ImagenEnBurbuja media={media} cuando={cuando} onAmpliar={onAmpliar} />;
+  if (media.clase === 'video' || media.clase === 'audio') return <ReproducirBajoDemanda media={media} cuando={cuando} />;
+  return <DocumentoBajoDemanda media={media} cuando={cuando} />;
 }
 
 /**
@@ -462,6 +528,102 @@ function BotonEditar({ onEditar }: { onEditar: () => void }) {
 }
 
 /**
+ * ELIMINAR — dos alcances MUY distintos detrás del mismo botón, y la
+ * `etiqueta` es lo único que cambia:
+ *
+ * · SALIENTE: «delete for everyone», el molde exacto de `BotonEditar` (mismo
+ *   ADR 0056, misma limitación) — un permiso de WhatsApp multi-dispositivo
+ *   que la Cloud API de Meta no tiene, feature-detectado con
+ *   `sesion.puedeEliminar`, solo con sesión conectada.
+ * · ENTRANTE: «ocultar en Hermes» (ADR 0100 §"eliminar el mensaje del
+ *   lead") — WhatsApp NUNCA deja revocar lo que uno no mandó, así que esto no
+ *   toca ninguna línea: no depende de `puedeEliminar` ni de la sesión.
+ *
+ * En los dos casos el clic NO manda nada todavía: abre la confirmación inline
+ * (`ConfirmarEliminar`), porque el primero es irreversible y el segundo, aunque
+ * reversible en los hechos, no tiene un botón de deshacer en esta versión.
+ */
+function BotonEliminar({ etiqueta, onPedirConfirmacion }: { etiqueta: string; onPedirConfirmacion: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onPedirConfirmacion}
+      title={etiqueta}
+      aria-label={etiqueta}
+      className="flex size-6 items-center justify-center rounded-full border border-border bg-card text-muted-foreground opacity-0 shadow-[0_1px_3px_rgba(14,42,82,0.12)] transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 group-hover/burbuja:opacity-100"
+    >
+      <Trash2 size={13} />
+    </button>
+  );
+}
+
+/**
+ * LA CONFIRMACIÓN, ADENTRO DE LA MISMA BURBUJA — mismo criterio que
+ * `EditorDeMensaje`: lo que se elimina es ESTE mensaje, sacar la pregunta de
+ * su lugar (un modal aparte) le haría perder el contexto de cuál es.
+ *
+ * 🔴 **`explicacion` no es un detalle cosmético.** Para un mensaje ENTRANTE
+ * esto NO manda nada a WhatsApp — el lead lo sigue teniendo intacto en su
+ * teléfono — y la vendedora tiene que leerlo ANTES de confirmar, no
+ * enterarse después. Sin esa línea, «Eliminar» y «Ocultar» se leerían como
+ * la misma promesa, y no lo son (ver `db/eliminaciones.ts`).
+ *
+ * Escape cancela, como el editor; acá no hay `⌘↵` porque no hay nada que
+ * tipear — Enter no confirma a propósito, para que un dedo apurado no borre
+ * un mensaje con la misma tecla que manda uno nuevo.
+ */
+function ConfirmarEliminar({
+  pregunta,
+  explicacion,
+  etiquetaConfirmar,
+  pendiente,
+  onCancelar,
+  onConfirmar,
+}: {
+  pregunta: string;
+  explicacion?: string;
+  etiquetaConfirmar: string;
+  pendiente: boolean;
+  onCancelar: () => void;
+  onConfirmar: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-1.5"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          onCancelar();
+        }
+      }}
+    >
+      <p className="text-sm text-foreground">{pregunta}</p>
+      {explicacion && <p className="text-xs text-muted-foreground">{explicacion}</p>}
+      <div className="flex items-center justify-end gap-1.5">
+        <button
+          type="button"
+          onClick={onCancelar}
+          className="rounded-md px-2 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          autoFocus
+          disabled={pendiente}
+          onClick={onConfirmar}
+          className="flex items-center gap-1 rounded-md bg-destructive px-2.5 py-1 text-[11px] font-bold text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:opacity-40"
+        >
+          {pendiente && <Loader2 size={11} className="animate-spin" />}
+          {etiquetaConfirmar}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * EL EDITOR, ADENTRO DE LA MISMA BURBUJA — no un modal aparte: lo que se edita
  * es ESTE mensaje, y sacarlo de su lugar le haría perder el contexto (con
  * quién, cuándo, si tenía un adjunto).
@@ -602,19 +764,14 @@ function AdjuntoRoto() {
 
 /**
  * Imagen y sticker: eager — son livianas y SON el mensaje. El caché evita
- * re-bajarlas. «Ver completa» es un VISOR EN EL MISMO WEBVIEW, no un
- * `target="_blank"`: en la cáscara un blob en pestaña nueva muere — el shim de
- * Tauri (`enlacesExternos.ts`) lo manda al opener del sistema, que no sabe
- * abrir `blob:`.
+ * re-bajarlas, y por eso el visor abre al instante: pide la misma URL.
+ * «Ver completa» abre el visor del HILO (`VisorDeImagen`, #997) cuando el hilo lo ofrece
+ * (`onAmpliar`): recorre las fotos, cita, gira y descarga. Donde el hilo no tiene uno, abre el de la
+ * burbuja (`VisorDeAdjunto.tsx`), con Descargar y el tamaño real.
  */
-function ImagenEnBurbuja({ media }: { media: MediaHilo }) {
+function ImagenEnBurbuja({ media, cuando, onAmpliar }: { media: MediaHilo; cuando: string; onAmpliar?: () => void }) {
   const { url: src, fallo } = useBlobAutenticado(urlMedia(media.archivo));
   const [ampliada, setAmpliada] = useState(false);
-
-  // El lightbox trae su propio scrim visible (el fondo oscuro es parte del
-  // diseño, no una capa invisible), así que de `usePopover` solo usa el teclado:
-  // Escape cierra la foto y NO la conversación de atrás.
-  usePopover(ampliada, () => setAmpliada(false));
 
   if (fallo) return <AdjuntoRoto />;
   if (!src) {
@@ -622,7 +779,13 @@ function ImagenEnBurbuja({ media }: { media: MediaHilo }) {
   }
   return (
     <>
-      <button type="button" onClick={() => setAmpliada(true)} title="Ver completa" className="block w-full">
+      <button
+        type="button"
+        onClick={onAmpliar ?? (() => setAmpliada(true))}
+        title="Ver completa"
+        aria-label="Ver la imagen completa"
+        className="block w-full cursor-zoom-in"
+      >
         <img
           src={src}
           alt={media.nombre ?? 'imagen recibida'}
@@ -635,14 +798,15 @@ function ImagenEnBurbuja({ media }: { media: MediaHilo }) {
         />
       </button>
       {ampliada && (
-        <div
-          role="dialog"
-          aria-label="Imagen completa — clic o Escape para cerrar"
-          className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-navy/85 p-6"
-          onClick={() => setAmpliada(false)}
-        >
-          <img src={src} alt={media.nombre ?? 'imagen completa'} className="max-h-full max-w-full rounded-lg object-contain" />
-        </div>
+        <Suspense fallback={null}>
+          <VisorDeAdjunto
+            clase={media.clase === 'sticker' ? 'sticker' : 'imagen'}
+            src={src}
+            nombre={nombreDeDescarga(media, cuando)}
+            onDescargar={() => guardarBlob(src, nombreDeDescarga(media, cuando))}
+            onCerrar={() => setAmpliada(false)}
+          />
+        </Suspense>
       )}
     </>
   );
@@ -653,15 +817,56 @@ function ImagenEnBurbuja({ media }: { media: MediaHilo }) {
  * pantalla principal. Se baja al primer toque y arranca solo (la vendedora ya
  * apretó play una vez).
  */
-function ReproducirBajoDemanda({ media }: { media: MediaHilo }) {
+function ReproducirBajoDemanda({ media, cuando }: { media: MediaHilo; cuando: string }) {
   const { url: src, fallo, bajando, pedir } = useBlobAutenticado(urlMedia(media.archivo), {
     alPedir: true,
   });
+  const [ampliado, setAmpliado] = useState(false);
+
+  // La nota de voz se nombra como tal: sin eso, la del lead se lee igual que un
+  // audio reenviado, y no dicen lo mismo (una la grabó para ti).
+  const voz = media.clase === 'audio' ? media.voz : null;
+  const rotulo = media.clase === 'video' ? 'Video' : voz ? 'Nota de voz' : 'Audio';
+  const duracion = voz?.segundos != null ? ` · ${relojDeVoz(voz.segundos)}` : '';
 
   if (fallo) return <AdjuntoRoto />;
   if (src) {
     return media.clase === 'video' ? (
-      <video src={src} controls autoPlay className="max-h-72 w-full rounded-lg" />
+      <div className="relative">
+        {/* Pausado al abrir el visor: si no, suenan dos videos a la vez. */}
+        <video src={src} controls autoPlay={!ampliado} className="max-h-72 w-full rounded-lg" />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.currentTarget.parentElement?.querySelector('video')?.pause();
+            setAmpliado(true);
+          }}
+          title="Ver en grande"
+          aria-label="Ver en grande"
+          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-navy/70 text-white transition-colors hover:bg-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+        >
+          <Maximize2 size={14} />
+        </button>
+        {ampliado && (
+          <Suspense fallback={null}>
+            <VisorDeAdjunto
+              clase="video"
+              src={src}
+              nombre={nombreDeDescarga(media, cuando)}
+              onDescargar={() => guardarBlob(src, nombreDeDescarga(media, cuando))}
+              onCerrar={() => setAmpliado(false)}
+            />
+          </Suspense>
+        )}
+      </div>
+    ) : voz ? (
+      <div className="w-56 max-w-full">
+        <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+          <Mic size={12} className="shrink-0" />
+          Nota de voz{duracion}
+        </div>
+        <audio src={src} controls autoPlay className="w-full" />
+      </div>
     ) : (
       <audio src={src} controls autoPlay className="w-56 max-w-full" />
     );
@@ -675,12 +880,15 @@ function ReproducirBajoDemanda({ media }: { media: MediaHilo }) {
     >
       {bajando ? (
         <Loader2 size={18} className="shrink-0 animate-spin text-navy-ink" />
+      ) : voz ? (
+        <Mic size={18} className="shrink-0 text-navy-ink" />
       ) : (
         <Play size={18} className="shrink-0 text-navy-ink" />
       )}
       <span className="min-w-0">
         <span className="block truncate text-xs font-semibold text-foreground">
-          {media.clase === 'video' ? 'Video' : 'Audio'}
+          {rotulo}
+          {duracion}
         </span>
         <span className="block text-[11px] text-muted-foreground">
           {bajando ? 'Bajando…' : 'Toca para reproducir'}
@@ -692,76 +900,156 @@ function ReproducirBajoDemanda({ media }: { media: MediaHilo }) {
 
 /**
  * Documento (el flyer, el PDF del temario…): la bajada autenticada ocurre AL
- * TOCAR la tarjeta, no al montar — y al llegar, se descarga solo. Ya bajado,
- * la tarjeta queda como link de descarga al blob.
+ * TOCAR la tarjeta, no al montar. Al llegar, un PDF se ABRE en el visor —se lee
+ * antes de decidir si hace falta guardarlo— y cualquier otro documento se
+ * descarga, porque el navegador no sabe mostrarlo.
  *
  * SIN `target="_blank"` a propósito: con blobs eso muere en las cáscaras (ver
- * ImagenEnBurbuja). `download` a secas descarga en navegador y en
- * Tauri Windows/WebView2; el Tauri de macOS
- * (WKWebView) necesita cablear `on_download` en la cáscara — señalado en el
- * PR #78, no bloquea: la app empaquetada de las vendedoras es Windows.
+ * `VisorDeAdjunto.tsx`). Cómo se guarda, y el caso de la app de macOS, en
+ * `descargarAdjunto.ts`.
  */
-function DocumentoBajoDemanda({ media }: { media: MediaHilo }) {
+function DocumentoBajoDemanda({ media, cuando }: { media: MediaHilo; cuando: string }) {
   const { url: src, fallo, bajando, pedir } = useBlobAutenticado(urlMedia(media.archivo), {
     alPedir: true,
   });
-  const abrirAlLlegar = useRef(false);
+  const actuarAlLlegar = useRef(false);
+  const [viendo, setViendo] = useState(false);
+  const pdf = esPdf(media);
+  const nombre = nombreDeDescarga(media, cuando);
+
+  function actuar(url: string) {
+    if (pdf) setViendo(true);
+    else guardarBlob(url, nombre);
+  }
 
   useEffect(() => {
-    if (src && abrirAlLlegar.current) {
-      abrirAlLlegar.current = false;
-      const a = document.createElement('a');
-      a.href = src;
-      a.download = media.nombre ?? media.archivo;
-      a.rel = 'noreferrer';
-      a.click();
+    if (src && actuarAlLlegar.current) {
+      actuarAlLlegar.current = false;
+      actuar(src);
     }
-  }, [src, media.nombre, media.archivo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
 
-  const cuerpo = (
+  const accion = pdf ? 'toca para verlo' : 'toca para bajar';
+  return (
     <>
-      {bajando ? (
-        <Loader2 size={18} className="shrink-0 animate-spin text-navy-ink" />
-      ) : (
-        <FileText size={18} className="shrink-0 text-navy-ink" />
-      )}
-      <span className="min-w-0">
-        <span className="block truncate text-xs font-semibold text-foreground">{media.nombre ?? 'Documento'}</span>
-        <span className="block text-[11px] text-muted-foreground">
-          {fallo
-            ? 'No se pudo bajar — toca para reintentar'
-            : bajando
-              ? 'Bajando…'
-              : src
-                ? 'Bajado · toca para guardarlo de nuevo'
-                : `${media.mime ?? 'archivo'} · toca para bajar`}
+      <button
+        type="button"
+        disabled={bajando}
+        onClick={() => {
+          if (src) {
+            actuar(src);
+            return;
+          }
+          actuarAlLlegar.current = true;
+          pedir();
+        }}
+        // `w-56 max-w-full`, como la tarjeta del audio (#1009): sin un ancho, la
+        // tarjeta crecía con su segunda línea y a 390 px se salía de la burbuja.
+        className="flex w-56 max-w-full items-center gap-2.5 rounded-lg border border-border bg-muted/60 px-3 py-2.5 text-left transition-colors hover:bg-muted disabled:cursor-wait"
+      >
+        {bajando ? (
+          <Loader2 size={18} className="shrink-0 animate-spin text-navy-ink" />
+        ) : (
+          <FileText size={18} className="shrink-0 text-navy-ink" />
+        )}
+        <span className="min-w-0">
+          <span className="block truncate text-xs font-semibold text-foreground">{media.nombre ?? 'Documento'}</span>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {fallo
+              ? 'No se pudo bajar — toca para reintentar'
+              : bajando
+                ? 'Bajando…'
+                : src && !pdf
+                  ? 'Bajado · toca para guardarlo de nuevo'
+                  : `${pdf ? 'PDF' : tipoDeDocumento(media)} · ${accion}`}
+          </span>
         </span>
-      </span>
+      </button>
+      {viendo && src && (
+        <Suspense fallback={null}>
+          <VisorDeAdjunto
+            clase="documento"
+            src={src}
+            nombre={nombre}
+            onDescargar={() => guardarBlob(src, nombre)}
+            onCerrar={() => setViendo(false)}
+          />
+        </Suspense>
+      )}
     </>
   );
-  const estilo =
-    'flex items-center gap-2.5 rounded-lg border border-border bg-muted/60 px-3 py-2.5 text-left transition-colors hover:bg-muted';
+}
 
-  if (src) {
-    return (
-      <a href={src} download={media.nombre ?? media.archivo} className={estilo}>
-        {cuerpo}
-      </a>
-    );
-  }
-  return (
-    <button
-      type="button"
-      disabled={bajando}
-      onClick={() => {
-        abrirAlLlegar.current = true;
-        pedir();
-      }}
-      className={`${estilo} disabled:cursor-wait`}
-    >
-      {cuerpo}
-    </button>
-  );
+/**
+ * QUÉ ES ESTE DOCUMENTO, PARA UNA PERSONA (#1009).
+ *
+ * La tarjeta decía el MIME entero —`application/vnd.openxmlformats-
+ * officedocument.spreadsheetml.sheet · toca para bajar`—, que no le dice nada a
+ * la vendedora y era lo que la desbordaba en un hilo angosto. Se prefiere la
+ * extensión del nombre del archivo, que es lo que ella ve en su computadora;
+ * el MIME queda como respaldo para lo que llegue sin nombre.
+ */
+function tipoDeDocumento(media: MediaHilo): string {
+  const extension = media.nombre?.match(/\.([a-z0-9]{1,5})$/i)?.[1];
+  if (extension) return extension.toUpperCase();
+  const mime = media.mime ?? '';
+  if (mime.includes('spreadsheet') || mime.includes('excel')) return 'Excel';
+  if (mime.includes('wordprocessing') || mime.includes('msword')) return 'Word';
+  if (mime.includes('presentation') || mime.includes('powerpoint')) return 'PowerPoint';
+  return mime ? mime.split('/').pop()!.slice(0, 12) : 'archivo';
+}
+
+/**
+ * EL TECLADO DEL CELULAR — que el composer y el último mensaje sigan a la vista.
+ *
+ * En iOS, abrir el teclado NO achica `100dvh`: la página se desplaza y lo que
+ * queda debajo de las teclas es justo el composer. Lo que sí cambia es
+ * `visualViewport`: su alto y su desplazamiento son exactamente el rectángulo
+ * que la persona ve. Este componente los copia a dos variables del contenedor
+ * del chat (`[data-chat]`, ver las clases `max-md:` de arriba) y, cada vez que
+ * cambian, vuelve a pegar el hilo al final para que el último mensaje no quede
+ * escondido detrás del teclado.
+ *
+ * Sólo actúa por debajo de `md`: en escritorio no escribe nada, así que el
+ * alto del chat sigue siendo el de su columna. Se pregunta con
+ * `CONSULTA_CELULAR` (`lib/useEsMovil.ts`), la MISMA consulta con la que el
+ * shell decide que es un celular y la misma que `max-md:` hace en el CSS. Acá
+ * vivía una propia, `(max-width: 767.98px)`: con la letra del navegador en
+ * 20 px, o en un ancho fraccionario, el shell quedaba en celular y este ajuste
+ * en escritorio, y el composer se quedaba debajo del teclado. Lo fija
+ * `lib/unSoloDetectorDeAncho.test.ts`. Se lee en cada evento del
+ * `visualViewport` y no con el hook, porque cruzar el corte ya dispara uno.
+ * Se monta como un marcador vacío para encontrar su contenedor sin pasarle una
+ * ref por diez niveles.
+ */
+function AjusteTeclado() {
+  const marca = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const chat = marca.current?.closest<HTMLElement>('[data-chat]');
+    if (!vv || !chat) return;
+    const enCelular = window.matchMedia(CONSULTA_CELULAR);
+    const aplicar = () => {
+      if (!enCelular.matches) {
+        chat.style.removeProperty('--alto-chat');
+        chat.style.removeProperty('--desde-arriba');
+        return;
+      }
+      chat.style.setProperty('--alto-chat', `${Math.round(vv.height)}px`);
+      chat.style.setProperty('--desde-arriba', `${Math.round(vv.offsetTop)}px`);
+      const hilo = chat.querySelector<HTMLElement>('[data-hilo]');
+      if (hilo) hilo.scrollTop = hilo.scrollHeight;
+    };
+    aplicar();
+    vv.addEventListener('resize', aplicar);
+    vv.addEventListener('scroll', aplicar);
+    return () => {
+      vv.removeEventListener('resize', aplicar);
+      vv.removeEventListener('scroll', aplicar);
+    };
+  }, []);
+  return <span ref={marca} hidden />;
 }
 
 /**
@@ -776,6 +1064,10 @@ export function HiloWhatsapp({
   conversacion,
   sugerencia,
   miVendedora,
+  onAbrirOtra,
+  esDeCampana: modoCampana,
+  senales,
+  onVolver,
 }: {
   conversacion: Conversacion;
   /**
@@ -795,6 +1087,28 @@ export function HiloWhatsapp({
    * `lecturaDeTenencia` devuelve `null` antes de mirar a nadie.
    */
   miVendedora?: string | null;
+  /**
+   * ══ LA BARRA DE GESTIÓN VIVE EN ESTA CABECERA (07-sep-2026, pedido del
+   * dueño) ══ — ver el docblock de `BarraGestion.embebida`. Estos tres props
+   * son EXACTAMENTE los que `ConversacionActiva` le pasaba antes a
+   * `<BarraGestion>` como fila separada; ahora viajan un nivel más adentro,
+   * hasta acá, porque es acá donde `<BarraGestion embebida>` se monta para
+   * WhatsApp. Messenger y los comentarios de FB/IG NO pasan por este
+   * componente, así que su `<BarraGestion>` de fila separada sigue exactamente
+   * igual en `ConversacionActiva.tsx`.
+   *
+   * ⚠️ **`esDeCampana` llega como `modoCampana`** (renombrado en la
+   * desestructuración): el archivo ya importa una FUNCIÓN llamada
+   * `esDeCampana` de `./campanaAjena` (para saber si un error de `hilo` es de
+   * otro módulo) — con el mismo nombre acá abajo, esa función habría quedado
+   * tapada y `esDeCampana(hilo.error)`, más abajo, habría reventado con «no es
+   * una función».
+   */
+  onAbrirOtra?: (o: { clave: string; telefono: string | null }) => void;
+  esDeCampana?: boolean;
+  senales?: { registrar: number; estado: number; etiqueta: number; agendar: number };
+  /** El celular: volver a la lista. Ver `CabeceraDeChat.onVolver`. */
+  onVolver?: () => void;
 }) {
   const telefono = conversacion.persona_id ?? '';
   const numeroPropio = conversacion.numero_propio ?? '';
@@ -822,7 +1136,7 @@ export function HiloWhatsapp({
    */
   const [arrastrandoArchivo, setArrastrandoArchivo] = useState(false);
   const { data: sesion } = useSesionWa(numeroPropio || undefined);
-  const { hilo, enviar, enviarMedia, enviarPlantillaHsm, marcarLeido, reaccionar, editar } = useConversacionWa(
+  const { hilo, enviar, enviarMedia, enviarPlantillaHsm, marcarLeido, reaccionar, editar, eliminar, ocultar } = useConversacionWa(
     telefono,
     numeroPropio || undefined,
   );
@@ -851,9 +1165,32 @@ export function HiloWhatsapp({
   const [editando, setEditando] = useState<{ externalId: string; texto: string } | null>(null);
   useEffect(() => setEditando(null), [telefono]);
 
+  /**
+   * EL MENSAJE QUE SE ESTÁ POR ELIMINAR (confirmación pendiente), si hay
+   * alguno — mismo molde que `editando`: solo el id, porque no hay texto que
+   * editar, solo un sí/no. `modo` decide CUÁL de las dos cosas confirma:
+   * `'eliminar'` es un SALIENTE con «delete for everyone» real (whatsmeow);
+   * `'ocultar'` es un ENTRANTE que solo deja de verse en Hermes (ADR 0100
+   * §"eliminar el mensaje del lead") — dos acciones, un solo estado, porque
+   * nunca hay más de una burbuja pidiendo confirmación a la vez.
+   */
+  const [eliminando, setEliminando] = useState<{ externalId: string; modo: 'eliminar' | 'ocultar' } | null>(null);
+  useEffect(() => setEliminando(null), [telefono]);
+
   const conectado = sesion?.estado === 'conectado';
   const mensajes = hilo.data?.mensajes ?? [];
   const grupos = agruparPorDia(mensajes);
+
+  /**
+   * LA FOTO AMPLIADA, por el `external_id` de su mensaje — mismo molde que
+   * `editando`: se apaga al cambiar de conversación. Se guarda el id y no la
+   * posición porque el hilo se refresca solo; si esa foto se elimina con el visor
+   * abierto, deja de estar en la lista y el visor se cierra en vez de mostrar otra.
+   */
+  const [visorEn, setVisorEn] = useState<string | null>(null);
+  useEffect(() => setVisorEn(null), [telefono]);
+  const imagenesDelVisor = useMemo(() => imagenesDelHilo(mensajes), [mensajes]);
+  const indiceDelVisor = visorEn ? imagenesDelVisor.findIndex((m) => m.external_id === visorEn) : -1;
 
   /**
    * ══ ¿ESTE CHAT LO ESTÁ ATENDIENDO OTRO? (ADR 0083) ═════════════════════════
@@ -972,8 +1309,24 @@ export function HiloWhatsapp({
      * regresivas del mismo color en la misma pantalla no se distinguen.)
      */
     <div
+      data-chat
       className={
         'relative flex h-full flex-col overflow-hidden rounded-2xl bg-card shadow-panel ' +
+        /**
+         * EN EL CELULAR EL CHAT ES LA PANTALLA ENTERA (11-sep-2026).
+         *
+         * Por debajo de `md` la tarjeta deja de vivir dentro de la columna y se
+         * clava a la ventana: cabecera arriba, hilo con scroll en el medio y el
+         * composer pegado abajo, como en WhatsApp. El alto es `100dvh` hasta
+         * que `AjusteTeclado` mida algo mejor: con el teclado abierto el
+         * `dvh` NO se achica en iOS, y un chat que sigue midiendo la pantalla
+         * completa deja el composer y el último mensaje escondidos detrás de
+         * las teclas. Por eso el alto y el borde de arriba salen de dos
+         * variables que ese componente escribe desde `visualViewport`.
+         *
+         * En escritorio no cambia nada: todo lo de acá lleva `max-md:`.
+         */
+        'max-md:fixed max-md:inset-x-0 max-md:top-[var(--desde-arriba,0px)] max-md:z-30 max-md:h-[var(--alto-chat,100dvh)] max-md:rounded-none max-md:shadow-none ' +
         /**
          * 🔴 `outline` Y NO `ring`, y sólo se ve mirando la pantalla.
          *
@@ -991,39 +1344,91 @@ export function HiloWhatsapp({
         (tenencia ? 'outline outline-2 -outline-offset-2 outline-success' : '')
       }
     >
-      {/* Cabecera del contacto — la misma anatomía en los tres canales */}
-      <header className="flex shrink-0 items-center gap-2.5 border-b border-border px-4 py-3">
-        <Avatar
-          nombre={nombreDelHilo ?? telefono}
-          telefono={telefono}
-          numeroPropio={numeroPropio}
-          conFoto
-          className="size-8 rounded-[11px] bg-secondary font-heading text-xs font-bold text-navy-ink"
-        />
-        <div className="min-w-0">
-          <div className="truncate font-heading text-sm font-bold text-foreground">
-            {nombreDelHilo ?? formatoTelefono(telefono)}
-          </div>
-          <div className="flex items-center gap-1 font-mono text-[11px] tabular-nums text-muted-foreground">
-            <Phone size={10} /> {formatoTelefono(telefono)}
-          </div>
-        </div>
-        {/* A la derecha del nombre: quién lo está atendiendo y cuánto falta para
-            que se libere. El `title` lleva el id completo y la explicación — el
-            rótulo abrevia, como el resto de la app. */}
-        {tenencia && (
-          <span
-            title={tenencia.ayuda}
-            className="ml-auto flex shrink-0 items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-[11px] font-bold text-success"
-          >
-            <span aria-hidden className="size-1.5 rounded-full bg-success" />
-            {tenencia.texto}
-          </span>
-        )}
-      </header>
+      {/*
+        ══ LA CABECERA — COMPARTIDA CON MESSENGER Y LOS COMENTARIOS
+        (07-sep-2026 y 08-sep-2026, pedido del dueño) ══
+
+        Nació ACÁ el 07-sep-2026 como «un solo contenedor con la barra de
+        gestión»: antes eran DOS tarjetas apiladas, esta cabecera (avatar +
+        nombre + teléfono) y, arriba de todo el panel, la fila de
+        `<BarraGestion>` aparte. Un día después el mismo pedido se extendió a
+        Messenger y a los comentarios de FB/IG, así que la anatomía entera
+        —avatar, nombre, subtítulo, `<BarraGestion embebida>`— se factorizó en
+        `CabeceraDeChat` (#37: tres copias de la misma fila divergen mudas).
+        Acá sólo queda lo que es DE WhatsApp: el avatar CON FOTO, el teléfono
+        como subtítulo (monoespaciado, para los dígitos) y la píldora de
+        tenencia (ADR 0083), que los otros tres canales no tienen.
+
+        La altura (`min-h-[3.25rem]`) y el recorte a una fila (`flex-wrap` en
+        `CabeceraDeChat`) siguen siendo el MISMO número que la fila de
+        pestañas de `ColaUnificada` (columna de al lado) — medido con
+        Playwright. Si esta cabecera cambia de alto, ese otro archivo también
+        hay que revisarlo.
+      */}
+      <AjusteTeclado />
+      <CabeceraDeChat
+        conversacion={conversacion}
+        miVendedora={miVendedora}
+        esDeCampana={modoCampana}
+        onAbrirOtra={onAbrirOtra}
+        senales={senales}
+        onVolver={onVolver}
+        avatar={
+          <Avatar
+            nombre={nombreDelHilo ?? telefono}
+            telefono={telefono}
+            numeroPropio={numeroPropio}
+            conFoto
+            className="size-8 rounded-[11px] bg-secondary font-heading text-xs font-bold text-navy-ink"
+          />
+        }
+        nombre={nombreDelHilo ?? formatoTelefono(telefono)}
+        subtitulo={
+          <>
+            <Phone size={10} /> <span className="font-mono tabular-nums">{formatoTelefono(telefono)}</span>
+          </>
+        }
+        // Quién lo está atendiendo y cuánto falta para que se libere. El
+        // `title` lleva el id completo y la explicación — el rótulo abrevia,
+        // como el resto de la app. Va como `extra` (entre el bloque de nombre
+        // y `BarraGestion`), no con su propio `ml-auto`: es parte del grupo de
+        // la izquierda, no de los botones de acción de la derecha.
+        extra={
+          tenencia ? (
+            <span
+              title={tenencia.ayuda}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-[11px] font-bold text-success"
+            >
+              <span aria-hidden className="size-1.5 rounded-full bg-success" />
+              {tenencia.texto}
+            </span>
+          ) : undefined
+        }
+      />
 
       <BannerSesion sesion={sesion} />
       <BadgeOrigen origen={hilo.data?.origen ?? null} />
+
+      {/* Va en un portal sobre `body`: el lugar acá no importa para el dibujo. */}
+      {indiceDelVisor >= 0 && (
+        <VisorDeImagen
+          imagenes={imagenesDelVisor}
+          indice={indiceDelVisor}
+          onIndice={(i) => setVisorEn(imagenesDelVisor[i].external_id)}
+          // La misma lectura que el hilo: el nombre de la cabecera para el lead,
+          // y quien lo mandó desde Hermes (la etiqueta de la burbuja) para lo nuestro.
+          autorDe={(m) =>
+            m.direccion === 'entrante'
+              ? (nombreDelHilo ?? formatoTelefono(telefono))
+              : m.enviado_por
+                ? quienRegistro(m.enviado_por)
+                : 'Goberna'
+          }
+          // Mismo alcance que el botón de la burbuja: no en modo revisión.
+          onResponder={sugerencia ? null : (m) => setCitando(citaDeMensaje(m))}
+          onCerrar={() => setVisorEn(null)}
+        />
+      )}
 
       {/* El hilo.
           El ENVOLTORIO existe para el fondo (`.fondo-hilo` en `index.css`) y
@@ -1083,19 +1488,34 @@ export function HiloWhatsapp({
                   // línea viva — si no, el clic no haría nada.
                   // Responder además se apaga en revisión: ahí se aprueba un
                   // texto preparado, no se compone uno nuevo.
-                  const puedeCitar = !sugerencia && sePuedeCitar(m);
+                  // Un mensaje ELIMINADO no tiene nada que citar, copiar,
+                  // reenviar ni editar — no le queda contenido.
+                  const puedeCitar = !sugerencia && !m.eliminado && sePuedeCitar(m);
                   // El texto VIGENTE: si se editó, es el nuevo — copiar,
                   // reenviar y mostrar tienen que leer el mismo dato, o
                   // reenviar un mensaje editado mandaría el texto viejo.
-                  const textoVigente = m.editado?.texto ?? m.texto;
+                  const textoVigente = m.eliminado ? null : (m.editado?.texto ?? m.texto);
                   const editandoEste = editando?.externalId === m.external_id;
+                  const eliminandoEste = eliminando?.externalId === m.external_id;
                   // EDITAR: solo lo SALIENTE, solo con texto, y solo si esta
                   // línea puede (feature-detectado — hoy solo whatsmeow, ver
                   // `BotonEditar`) y con la sesión viva, como Reaccionar.
                   const puedeEditarEste =
                     m.direccion === 'saliente' && Boolean(textoVigente) && !sugerencia && conectado && Boolean(sesion?.puedeEditar);
+                  // ELIMINAR («delete for everyone»): mismo alcance que editar
+                  // (solo lo SALIENTE, línea que pueda, sesión viva), pero no
+                  // depende de tener texto — un adjunto solo también se elimina.
+                  const puedeEliminarEste =
+                    m.direccion === 'saliente' && !m.eliminado && !sugerencia && conectado && Boolean(sesion?.puedeEliminar);
+                  // OCULTAR (solo en Hermes, ADR 0100 §"eliminar el mensaje del
+                  // lead"): mismo molde, alcance OPUESTO. Solo lo ENTRANTE — es
+                  // lo que uno NO mandó, y por eso WhatsApp no lo puede revocar
+                  // — y nunca depende de `puedeEliminar` ni de `conectado`: no
+                  // hay ninguna línea de por medio, esto no sale de la base.
+                  const puedeOcultarEste = m.direccion === 'entrante' && !m.eliminado && !sugerencia;
                   const acciones =
-                    !editandoEste && (textoVigente || puedeCitar || (m.direccion === 'entrante' && conectado)) ? (
+                    !editandoEste && !eliminandoEste && !m.eliminado &&
+                    (textoVigente || m.media || puedeCitar || puedeEliminarEste || puedeOcultarEste || (m.direccion === 'entrante' && conectado)) ? (
                       <div className="flex shrink-0 items-center gap-1">
                         {m.direccion === 'entrante' && conectado && (
                           <BotonReaccionar
@@ -1119,6 +1539,7 @@ export function HiloWhatsapp({
                           />
                         )}
                         {textoVigente && <BotonCopiar texto={textoVigente} />}
+                        {m.media && <BotonDescargarAdjunto media={m.media} cuando={m.occurred_at} />}
                         {textoVigente && !sugerencia && (
                           <BotonReenviar
                             onReenviar={() => ponerEnComposer({ telefono, texto: textoVigente })}
@@ -1126,6 +1547,18 @@ export function HiloWhatsapp({
                         )}
                         {puedeEditarEste && (
                           <BotonEditar onEditar={() => setEditando({ externalId: m.external_id, texto: textoVigente! })} />
+                        )}
+                        {puedeEliminarEste && (
+                          <BotonEliminar
+                            etiqueta="Eliminar este mensaje"
+                            onPedirConfirmacion={() => setEliminando({ externalId: m.external_id, modo: 'eliminar' })}
+                          />
+                        )}
+                        {puedeOcultarEste && (
+                          <BotonEliminar
+                            etiqueta="Ocultar este mensaje"
+                            onPedirConfirmacion={() => setEliminando({ externalId: m.external_id, modo: 'ocultar' })}
+                          />
                         )}
                       </div>
                     ) : null;
@@ -1154,7 +1587,10 @@ export function HiloWhatsapp({
                       {/* Columna: la burbuja y, colgando de su borde, las
                           reacciones. El `max-w` vive acá para que la píldora del
                           emoji no ensanche el mensaje. */}
-                      <div className="flex max-w-[75%] flex-col">
+                      {/* En el celular la burbuja puede ir más ancha (85 %): a 390 px el
+                          75 % son 260 px y una frase de diez palabras ya se parte en
+                          cuatro renglones. En escritorio sigue en 75 %. */}
+                      <div className="flex max-w-[85%] flex-col md:max-w-[75%]">
                       <div
                         // El ancla del salto. React no emite `key` al HTML, así que
                         // sin esto no hay NADA en el DOM que identifique un mensaje.
@@ -1165,7 +1601,7 @@ export function HiloWhatsapp({
                         // navegador, y la tirita —ahora que es botón— salta.
                         onDoubleClick={(e) => {
                           if ((e.target as HTMLElement).closest('button, a, video, audio, textarea')) return;
-                          if (editandoEste || sugerencia || !sePuedeCitar(m)) return;
+                          if (editandoEste || eliminandoEste || !puedeCitar) return;
                           setCitando(citaDeMensaje(m));
                           // 🔴 La selección se limpia A PROPÓSITO, y esto es lo que
                           // se pierde: adentro de una burbuja, el doble clic deja de
@@ -1199,7 +1635,10 @@ export function HiloWhatsapp({
                         {/* La cita va ARRIBA de todo, adjunto incluido: es el
                             contexto de lo que sigue, y abajo se leería como una
                             aclaración de después. */}
-                        {m.cita && (
+                        {/* Un mensaje ELIMINADO no muestra ni la cita ni el
+                            adjunto que traía: WhatsApp tampoco deja nada de
+                            eso a la vista una vez que se borró para todos. */}
+                        {m.cita && !m.eliminado && (
                           <div className={m.media && (m.media.clase === 'imagen' || m.media.clase === 'video') ? 'mx-0.5 mt-0.5' : ''}>
                             <CitaEnBurbuja
                               cita={m.cita}
@@ -1215,8 +1654,35 @@ export function HiloWhatsapp({
                             />
                           </div>
                         )}
-                        {m.media && <MediaEnBurbuja media={m.media} />}
-                        {editandoEste && editando ? (
+                        {m.media && !m.eliminado && (
+                          <MediaEnBurbuja media={m.media} cuando={m.occurred_at} onAmpliar={() => setVisorEn(m.external_id)} />
+                        )}
+                        {m.eliminado ? (
+                          <span className="inline-flex items-center gap-1.5 italic text-muted-foreground">
+                            <Trash2 size={13} className="shrink-0" />
+                            {m.eliminado.revocadoEnWhatsapp ? 'Se eliminó este mensaje' : 'Se ocultó este mensaje en Hermes'}
+                          </span>
+                        ) : eliminandoEste && eliminando ? (
+                          <ConfirmarEliminar
+                            pregunta={eliminando.modo === 'eliminar' ? '¿Eliminar este mensaje para todos?' : '¿Ocultar este mensaje en Hermes?'}
+                            explicacion={
+                              eliminando.modo === 'ocultar'
+                                ? `No se elimina del WhatsApp de ${conversacion.persona_nombre} — sigue ahí, intacto. Solo deja de verse en esta pantalla.`
+                                : undefined
+                            }
+                            etiquetaConfirmar={eliminando.modo === 'eliminar' ? 'Eliminar' : 'Ocultar'}
+                            pendiente={eliminando.modo === 'eliminar' ? eliminar.isPending : ocultar.isPending}
+                            onCancelar={() => setEliminando(null)}
+                            onConfirmar={() => {
+                              if (eliminando.modo === 'eliminar') {
+                                eliminar.mutate({ numeroPropio, telefono, mensajeId: m.external_id });
+                              } else {
+                                ocultar.mutate({ numeroPropio, telefono, mensajeId: m.external_id });
+                              }
+                              setEliminando(null);
+                            }}
+                          />
+                        ) : editandoEste && editando ? (
                           <EditorDeMensaje
                             texto={editando.texto}
                             conMedia={Boolean(m.media)}
@@ -1242,7 +1708,7 @@ export function HiloWhatsapp({
                         ) : (
                           <span className="italic text-muted-foreground">(no es texto — velo en el teléfono)</span>
                         )}
-                        {!editandoEste && (
+                        {!editandoEste && !eliminandoEste && (
                         <div
                           className={
                             'mt-0.5 flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground ' +
@@ -1325,7 +1791,7 @@ export function HiloWhatsapp({
                                 solo que cambió. El detalle («¿qué decía antes?») no
                                 se guarda — es un ESTADO, no un historial (ver
                                 `db/ediciones.ts`). */}
-                            {m.editado && (
+                            {m.editado && !m.eliminado && (
                               <span className="italic" title={`Editado ${new Date(m.editado.editadoEn).toLocaleString('es')}`}>
                                 Editado
                               </span>
@@ -1667,6 +2133,47 @@ function ComposerWa({
   const [arrastrando, setArrastrando] = useState(false);
 
   /**
+   * ── LA VARITA (#918) ─────────────────────────────────────────────────────
+   *
+   * Lo que hay en la caja porque lo puso el bot, no ella. Se guarda el texto
+   * ORIGINAL además del id: el server necesita saber contra qué comparar, y
+   * `texto` ya cambió para cuando ella aprieta Enviar.
+   *
+   * ⚠️ Es OTRA cosa que `sugerencia`: aquella es la cola de revisión de la
+   * auto-respuesta, que toma el composer entero y cambia Enviar por Aprobar.
+   * Esta no cambia el gesto — el texto queda en su caja y se manda como
+   * cualquier otro. Por eso convive con el borrador y no lo pisa.
+   */
+  const [varita, setVarita] = useState<VaritaActiva | null>(null);
+  const [pidiendoVarita, setPidiendoVarita] = useState(false);
+  const [avisoVarita, setAvisoVarita] = useState<string | null>(null);
+
+  async function pedirVarita() {
+    if (pidiendoVarita) return;
+    setPidiendoVarita(true);
+    setAvisoVarita(null);
+    // Pedir otra sin haber mandado la anterior ES descartarla: si no se cerrara
+    // acá, la primera quedaría `pendiente` para siempre y «pedí y no me sirvió»
+    // —que es la señal más valiosa de todas— no se contaría nunca.
+    if (varita) void reportarDesenlace(varita.id, null);
+    setVarita(null);
+    try {
+      const s = await pedirSugerencia(conversacionClave);
+      if (!s.texto) {
+        setAvisoVarita(avisoDeVarita(s.motivo));
+        return;
+      }
+      setTexto(s.texto);
+      setVarita({ id: s.id, textoBot: s.texto });
+      textareaRef.current?.focus();
+    } catch (err) {
+      setAvisoVarita(avisoDeVarita(err instanceof Error ? err.message : null));
+    } finally {
+      setPidiendoVarita(false);
+    }
+  }
+
+  /**
    * ── LAS RESPUESTAS RÁPIDAS, CON `/` ──────────────────────────────────────
    *
    * Son los «datos recomendados» de siempre (tabla `hechos`): el catálogo ya
@@ -1731,6 +2238,13 @@ function ComposerWa({
      * superficie ponga texto sin declarar de dónde salió— acá no pasa: se declara.
      */
     anotarPieza(telefono, { clase: 'hecho', ref: h.clave, via: 'panel-datos' }, h.texto);
+    // Si el dato trae imagen, queda de adjunto pendiente — el mismo estado
+    // que deja el clip o ⌘V. Sigue sin mandar nada: ella aprieta Enviar.
+    if (h.imagen) {
+      void imagenDeHechoComoArchivo(h.imagen).then((archivo) => {
+        if (archivo) setAdjunto(archivo);
+      });
+    }
   }
 
   /**
@@ -1857,6 +2371,15 @@ function ComposerWa({
 
   const enviando = enviar.isPending || enviarMedia.isPending;
 
+  /**
+   * EL MICRÓFONO OCUPA EL LUGAR DE ENVIAR CON LA CAJA VACÍA, como en WhatsApp:
+   * con algo escrito o adjunto se manda eso; sin nada, se graba. Donde el entorno
+   * no puede grabar (la app de macOS sin permiso declarado, un navegador sin
+   * `MediaRecorder`) Enviar se queda donde estaba.
+   */
+  const [vozDisponible] = useState(puedeGrabarVoz);
+  const ofrecerVoz = vozDisponible && !sugerencia && !texto.trim() && !adjunto;
+
   // Red de seguridad, no el mecanismo principal (ver el comentario de arriba
   // del componente): si esto llega a correr con un `telefono` distinto al
   // que hidrató el `useState`, gana igual — pero con `key` no debería pasar.
@@ -1884,18 +2407,32 @@ function ComposerWa({
   // El panel derecho puede dejar una respuesta sugerida acá para editarla antes
   // de mandar (#101). Poner texto en la caja NO es enviar: la vendedora lo
   // revisa y aprieta Enter, como con cualquier otro borrador.
-  useEffect(
-    () =>
-      alPonerEnComposer((v) => {
-        if (v.telefono !== telefono) return;
-        setTexto(v.texto);
-        const caja = textareaRef.current;
-        caja?.focus();
-        // El cursor al final: se sigue escribiendo, no se pisa lo que llegó.
-        requestAnimationFrame(() => caja?.setSelectionRange(v.texto.length, v.texto.length));
-      }),
-    [telefono],
-  );
+  useEffect(() => {
+    // Guarda contra la respuesta de `imagenDeHechoComoArchivo` llegando
+    // tarde: si para entonces esta conversación ya no es la abierta (se
+    // cambió de chat, o este composer se desmontó), no hay que pisarle el
+    // adjunto a otra.
+    let vivo = true;
+    const cancelar = alPonerEnComposer((v) => {
+      if (v.telefono !== telefono) return;
+      setTexto(v.texto);
+      const caja = textareaRef.current;
+      caja?.focus();
+      // El cursor al final: se sigue escribiendo, no se pisa lo que llegó.
+      requestAnimationFrame(() => caja?.setSelectionRange(v.texto.length, v.texto.length));
+      // La imagen del dato, si trae — mismo estado que el clip o ⌘V, y
+      // sigue sin mandar nada: la vendedora aprieta Enviar.
+      if (v.imagen) {
+        void imagenDeHechoComoArchivo(v.imagen).then((archivo) => {
+          if (vivo && archivo) setAdjunto(archivo);
+        });
+      }
+    });
+    return () => {
+      vivo = false;
+      cancelar();
+    };
+  }, [telefono]);
 
   /**
    * ⌘V CON UNA CAPTURA EN EL PORTAPAPELES — la deja como adjunto, y lo que ya
@@ -2114,8 +2651,18 @@ function ComposerWa({
           setAvisoPegado(null);
         },
       });
+      // Recién acá: sólo un envío que SALIÓ cierra el ciclo. Reportarlo antes
+      // del `await` contaría como «usada» una sugerencia que se cayó al mandar.
+      //
+      // `texto` es el de ESTE render y no lo toca el `setTexto('')` de recién
+      // —el closure ya lo capturó—, así que lo que viaja es lo que salió.
+      if (varita) {
+        setVarita(null);
+        void reportarDesenlace(varita.id, texto);
+      }
     } catch {
       // El error se muestra abajo; no limpiamos texto ni adjunto para no perderlos.
+      // La varita tampoco se cierra: el texto sigue en la caja para reintentar.
     }
   }
 
@@ -2124,7 +2671,9 @@ function ComposerWa({
   return (
     <footer
       className={
-        'shrink-0 border-t p-3 transition-colors duration-200 ease-house ' +
+        // El pie respeta la barra de gestos del teléfono (`safe-area-inset-bottom`):
+        // sin eso, en un iPhone el botón de enviar queda debajo de la barrita.
+        'shrink-0 border-t p-3 transition-colors duration-200 ease-house max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))] ' +
         (arrastrando
           ? 'border-primary bg-primary/[0.06]'
           : sugerencia
@@ -2171,6 +2720,48 @@ function ComposerWa({
           falló un envío, acá no salió nada — el mensaje sigue en la caja. Por
           eso ámbar y no rojo, y por eso se puede cerrar. El silencio no era una
           opción: un ⌘V que no hace nada se lee como app rota. */}
+      {/* ── LA MARCA DE QUE ESTO LO PROPUSO EL BOT ──
+          Misma razón que la banda de la cola de revisión: el composer es donde
+          ella escribe de su puño, y a los cinco minutos no hay forma de saber
+          cuál de las dos cosas hay en la caja. Acá alcanza una banda fina —el
+          texto sigue siendo suyo para editar y el botón sigue diciendo
+          «Enviar»—, pero sin ninguna señal el bot estaría escribiendo con su
+          firma sin que nadie lo haya decidido. */}
+      {varita && !sugerencia && (
+        <div className="mb-2 flex items-center gap-2 rounded-xl border border-navy/25 bg-card px-2.5 py-1.5">
+          <Wand2 size={13} className="shrink-0 text-navy-ink" />
+          <p className="min-w-0 flex-1 truncate text-[11px] font-semibold text-navy-ink">
+            Sugerido por el bot
+            <span className="font-normal text-muted-foreground"> · edítalo antes de mandarlo</span>
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void reportarDesenlace(varita.id, null);
+              setVarita(null);
+              setTexto('');
+            }}
+            title="Descartar la sugerencia y vaciar la caja"
+            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
+      {avisoVarita && (
+        <div className="mb-2 flex items-start gap-1.5 rounded-lg border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
+          <Wand2 size={13} className="mt-0.5 shrink-0" />
+          <span className="min-w-0 flex-1">{avisoVarita}</span>
+          <button
+            type="button"
+            onClick={() => setAvisoVarita(null)}
+            title="Entendido"
+            className="shrink-0 rounded p-0.5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
       {avisoPegado && (
         <div className="mb-2 flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 p-2 text-xs text-warning-foreground">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -2361,7 +2952,7 @@ function ComposerWa({
           disabled={!conectado || Boolean(tomadoPor)}
           hidden={Boolean(sugerencia)}
           title="Adjuntar imagen, video o documento"
-          className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 disabled:opacity-40"
+          className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 disabled:opacity-40 max-md:size-11"
         >
           <Paperclip size={16} />
         </button>
@@ -2492,7 +3083,10 @@ function ComposerWa({
                   : `Escríbele a ${personaNombre ?? telefono}…`
           }
           className={
-            'min-h-[2.5rem] flex-1 resize-none overflow-y-auto rounded-xl border bg-muted px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-50 ' +
+            // En el celular la caja mide 44 px (el dedo) y el texto va a 16 px:
+            // por debajo de eso iOS hace zoom a toda la página al enfocar la
+            // caja, y la vendedora queda escribiendo en una pantalla corrida.
+            'min-h-[2.5rem] flex-1 resize-none overflow-y-auto rounded-xl border bg-muted px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-50 max-md:min-h-11 max-md:text-base ' +
             // El techo del composer normal subió de 7rem a 12rem: con
             // `rows={1}` de arranque, 7rem apenas dejaba crecer tres líneas
             // antes de volver a esconder texto en un scroll interno — la
@@ -2506,23 +3100,74 @@ function ComposerWa({
             <AccionesSugerencia sugerencia={sugerencia} texto={texto} editado={editado} />
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => void onEnviar()}
+          <>
+            {/* ── EL PALITO MÁGICO, PEGADO A ENVIAR ──
+                Va acá y no con el clip: el clip y las plantillas traen algo de
+                afuera, esto propone lo que ella iba a escribir. El gesto que
+                acompaña es el de mandar, así que vive a su izquierda.
+
+                Anda en TODAS las líneas, también donde el bot está apagado: no
+                sale nada hacia el lead: el texto cae en la caja y ella decide.
+                Ver el docblock de `server/src/bot/varita.ts`. */}
+            <button
+              type="button"
+              onClick={() => void pedirVarita()}
+              disabled={!conectado || Boolean(tomadoPor) || pidiendoVarita}
+              title="Pedirle al bot qué responder acá — el texto queda en tu caja para editarlo"
+              aria-label="Pedirle al bot qué responder"
+              className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-navy/25 text-navy-ink transition-colors hover:bg-navy/[0.06] hover:text-navy-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 disabled:opacity-40 max-md:size-11"
+            >
+              {pidiendoVarita ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+            </button>
+            {vozDisponible && (
+              <Suspense
+                fallback={
+                  ofrecerVoz && (
+                    <span
+                      aria-hidden
+                      className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground opacity-40 max-md:size-11"
+                    >
+                      <Mic size={16} />
+                    </span>
+                  )
+                }
+              >
+                <GrabadorDeVoz
+                  mostrarBoton={ofrecerVoz}
+                  deshabilitado={!conectado || Boolean(tomadoPor) || enviando}
+                  onEnviar={(archivo, voz) =>
+                    enviarMedia.mutateAsync({
+                      numeroPropio,
+                      telefono,
+                      referencia: conversacionClave,
+                      archivo,
+                      caption: '',
+                      voz,
+                    })
+                  }
+                  onAviso={setAvisoPegado}
+                />
+              </Suspense>
+            )}
+            <button
+              type="button"
+              hidden={ofrecerVoz}
+              onClick={() => void onEnviar()}
             // Era un ícono mudo: sin nombre para un lector de pantalla y sin forma
             // de encontrarlo en un test. El resto de los botones del composer sí
             // están rotulados («Quitar adjunto», «Quitar la cita»).
             title="Enviar"
             aria-label="Enviar"
             disabled={!conectado || Boolean(tomadoPor) || (!texto.trim() && !adjunto) || enviando}
-            className="group flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[0_2px_10px_-2px_rgba(37,99,235,0.5)] transition-[background-color,box-shadow,transform] duration-200 ease-house hover:bg-primary-hover hover:shadow-[0_4px_16px_-2px_rgba(37,99,235,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 active:scale-[0.94] disabled:opacity-40 disabled:shadow-none"
+            className="group flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[0_2px_10px_-2px_rgba(37,99,235,0.5)] max-md:size-11 transition-[background-color,box-shadow,transform] duration-200 ease-house hover:bg-primary-hover hover:shadow-[0_4px_16px_-2px_rgba(37,99,235,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 active:scale-[0.94] disabled:opacity-40 disabled:shadow-none"
           >
             {enviando ? (
               <Loader2 size={16} className="animate-spin" />
             ) : (
               <Send size={16} className="transition-transform duration-200 ease-house group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            )}
-          </button>
+              )}
+            </button>
+          </>
         )}
       </div>
       {/* La promesa sigue siendo la misma para lo que sale de acá. Lo único
@@ -2533,7 +3178,11 @@ function ComposerWa({
           En revisión la línea dice OTRA cosa, y tiene que decirla: acá aprobar
           no manda. Si dijera «lo mandas tú», la vendedora esperaría ver el
           mensaje en el hilo al instante, no lo vería, y volvería a apretar. */}
-      <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+      {/* En el celular la línea de siempre se esconde: a 390 px son dos renglones
+          debajo de la caja, y lo que dice ya lo sabe quien escribe desde su
+          teléfono. La de revisión SÍ se queda, porque ahí dice algo que no se
+          ve de otra forma (aprobar no manda ahora). */}
+      <p className={'mt-1.5 text-center text-[11px] text-muted-foreground' + (sugerencia ? '' : ' max-md:hidden')}>
         {sugerencia ? (
           <>
             Aprobar <b className="font-semibold text-foreground">no manda ahora</b>: entra a la cola espaciada y sale
@@ -2552,25 +3201,30 @@ function ComposerWa({
  * De dónde vino el lead — la captura del embudo, hecha visible. Que la vendedora
  * sepa "esta persona vino del anuncio X" cambia cómo le habla. Sin oro: el
  * origen es contexto, no tiempo que se acaba.
+ *
+ * 🔴 **LA REDACCIÓN YA NO SE ESCRIBE ACÁ (7-sep-2026).** Esta barra armaba su
+ * propia frase («Vino del anuncio “X” · campaña Y») sobre el MISMO hecho que la
+ * fila de la cola y la ficha dicen con otras palabras — la tercera copia del
+ * mismo ternario, que es literalmente la cicatriz que `docs/reglas/
+ * embudo-cola-y-radar.md` ya documenta: «UNA sola palabra para el origen… había
+ * TRES copias». Ahora la frase sale de `dominio/origen.ts`, y este componente
+ * sólo elige el ícono y la caja.
+ *
+ * ⚠️ **Sigue sin dibujarse cuando NO se sabe el origen, y eso es una decisión
+ * pendiente, no un olvido.** La fila y la ficha sí dicen «Sin origen»; acá una
+ * barra permanente en la cabecera de todos los chats es un cambio de producto
+ * que nadie pidió, y la ficha —que sí lo dice siempre— está en la columna de al
+ * lado. El matiz: esa columna **se puede contraer**, y ahí el chat vuelve a
+ * quedar mudo. Está levantado con el dueño.
  */
 function BadgeOrigen({ origen }: { origen: OrigenLead }) {
-  if (!origen) return null;
-
-  if (origen.fuente === 'anuncio') {
-    return (
-      <div className="flex items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-secondary-foreground">
-        <Megaphone size={13} className="shrink-0 text-navy-ink" />
-        <span>
-          Vino del anuncio{origen.anuncio ? <b> “{origen.anuncio}”</b> : ''}
-          {origen.campana ? <> · campaña <b>{origen.campana}</b></> : ''}
-        </span>
-      </div>
-    );
-  }
+  const procedencia = deDondeVino({ tipo: 'mensaje', canal: 'whatsapp', resuelto: origen });
+  if (!origen || !procedencia || procedencia.clase === 'desconocido') return null;
+  const Icono = procedencia.clase === 'anuncio' ? Megaphone : Link2;
   return (
     <div className="flex items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-secondary-foreground">
-      <Link2 size={13} className="shrink-0" />
-      <span>Vino de la landing <b>{origen.ref}</b></span>
+      <Icono size={13} className="shrink-0 text-navy-ink" />
+      <span>{procedencia.ayuda}</span>
     </div>
   );
 }

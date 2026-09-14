@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Copy, Lightbulb, ServerCrash } from 'lucide-react';
+import { Check, Copy, Image, Lightbulb, ServerCrash } from 'lucide-react';
 import { ErrorApi } from '../../lib/datos/cliente';
 import { sectionLabel } from '../../lib/styles';
 import type { Conversacion } from '../../dominio/conversaciones';
@@ -51,14 +51,25 @@ function Chip({ h, telefono }: { h: HechoRecomendado; telefono: string | null })
             // aunque el rótulo se renombre. Sin esto, un dato que destrabó una
             // venta llega al server indistinguible de un texto escrito de cero.
             pieza: { clase: 'hecho', ref: h.clave, via: 'panel-datos' },
+            // Si el dato trae imagen, queda de adjunto pendiente — el MISMO
+            // gesto que el clip o ⌘V. Sigue sin mandar nada: la vendedora
+            // revisa y aprieta Enviar.
+            imagen: h.imagen ?? null,
           })
         }
         title={h.texto}
-        aria-label={`Poner en la caja: ${h.rotulo}`}
+        aria-label={
+          h.imagen ? `Poner en la caja, con imagen: ${h.rotulo}` : `Poner en la caja: ${h.rotulo}`
+        }
         disabled={!telefono}
         className="min-w-0 flex-1 text-left disabled:opacity-50"
       >
-        <span className="block text-[11px] font-semibold leading-tight text-navy-ink">{h.rotulo}</span>
+        <span className="flex items-center gap-1 text-[11px] font-semibold leading-tight text-navy-ink">
+          {h.imagen && (
+            <Image size={10} className="shrink-0 text-muted-foreground" aria-label="Trae una imagen" />
+          )}
+          <span className="truncate">{h.rotulo}</span>
+        </span>
         <span className="mt-0.5 block truncate text-[10px] leading-tight text-muted-foreground">
           {h.texto}
         </span>

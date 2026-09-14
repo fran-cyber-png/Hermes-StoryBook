@@ -1,4 +1,5 @@
 import { AlertTriangle, ShieldCheck } from 'lucide-react';
+import { esLineasNoLeidas } from '../../lib/datos/lineasNoLeidas';
 import { useHistorial, type FilaDeHistorial } from './plantillas';
 
 /**
@@ -33,7 +34,9 @@ export function PantallaHistorial() {
   }
 
   if (isError) {
-    const sinMigracion = (error as { status?: number })?.status === 503;
+    // 🔴 No todo 503 es la migración: el guard `deVentas` contesta 503 `lineas_no_leidas` cuando no
+    // puede leer las líneas de quien pide (ADR 0108), y eso se dice con el mensaje del server.
+    const sinMigracion = (error as { status?: number })?.status === 503 && !esLineasNoLeidas(error);
     return (
       <div className="flex min-h-0 flex-1 items-start justify-center p-8">
         <div className="flex max-w-md items-start gap-2.5 rounded-2xl border border-warning/40 bg-warning/10 p-4 text-sm text-warning-foreground">

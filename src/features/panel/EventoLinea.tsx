@@ -1,6 +1,42 @@
 import { useState } from 'react';
-import { Check, GraduationCap, Pencil, Trash2, X } from 'lucide-react';
-import { COLOR, type EventoLinea as EventoTL } from './timeline';
+import {
+  Check,
+  GraduationCap,
+  Mail,
+  MessageCircle,
+  NotebookPen,
+  Pencil,
+  PhoneCall,
+  Sparkles,
+  Trash2,
+  UserRound,
+  Wallet,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
+import { COLOR, type EventoLinea as EventoTL, type TipoEvento } from './timeline';
+
+/**
+ * #887 pieza 3 — UN ÍCONO POR TIPO, decoración pura (no vive en el catálogo
+ * compartido con el server — mismo criterio que `RegistrarEvento.ICONO_TIPO`).
+ * `Record` sobre `TipoEvento`, así que un tipo nuevo sin ícono NO COMPILA.
+ */
+const ICONO_TIPO: Record<TipoEvento, LucideIcon> = {
+  llegada: MessageCircle,
+  identidad: UserRound,
+  mensaje: MessageCircle,
+  interes_detectado: Sparkles,
+  interes_registrado: NotebookPen,
+  compra: Wallet,
+  cotizacion: Sparkles,
+  enfriamiento: X,
+  pendiente: Check,
+  registrado: NotebookPen,
+  correo: Mail,
+  ficha: UserRound,
+  seguimiento: Check,
+  llamada: PhoneCall,
+};
 
 function formatearHora(iso: string): string {
   const d = new Date(iso);
@@ -13,7 +49,7 @@ function Punto({ estado }: { estado: EventoTL['estado'] }) {
     <span
       aria-hidden
       className={
-        'relative z-10 mt-1 size-2.5 shrink-0 rounded-full ' +
+        'relative z-10 mt-3.5 size-2.5 shrink-0 rounded-full ' +
         (estado === 'pendiente'
           ? 'border-2 border-dashed border-muted-foreground/40 bg-card'
           : COLOR[estado].punto)
@@ -23,9 +59,10 @@ function Punto({ estado }: { estado: EventoTL['estado'] }) {
 }
 
 /**
- * Un evento es una fila de texto sobre un rail, no una caja: punto (10 px,
- * color por estado) + rótulo + hora quieta a la derecha. La línea conectora se
- * corta en el último (`data-ultimo`), no se estira más allá del punto.
+ * Un evento es una tarjeta sobre un rail: punto (10 px, color por estado), el
+ * ícono del tipo en un cuadro, rótulo y hora quieta a la derecha (dueño,
+ * 13-sep-2026, sobre una referencia compacta). La línea conectora se corta en el
+ * último (`data-ultimo`), no se estira más allá del punto.
  *
  * ── LO QUE CAMBIÓ, Y POR QUÉ ────────────────────────────────────────────────
  * 1. **Se dice QUIÉN.** El timeline calculaba `fuente` y no la dibujaba en
@@ -53,6 +90,7 @@ export function EventoLinea({
   onBorrar?: (id: number) => void;
 }) {
   const c = COLOR[e.estado];
+  const Icono = ICONO_TIPO[e.tipo];
   const [editando, setEditando] = useState(false);
   const [borrando, setBorrando] = useState(false);
   const [texto, setTexto] = useState(e.comentario ?? '');
@@ -66,16 +104,20 @@ export function EventoLinea({
   }
 
   return (
-    <li className="group/ev relative flex gap-3 py-1.5 pl-1">
+    <li className="group/ev relative flex gap-2.5 pb-2 pl-1">
       <Punto estado={e.estado} />
       <span
         aria-hidden
         data-ultimo={esUltimo || undefined}
-        className="absolute bottom-[-0.375rem] left-2 top-4 w-px bg-border data-[ultimo]:hidden"
+        className="absolute bottom-[-0.875rem] left-2 top-6 w-px bg-border data-[ultimo]:hidden"
       />
-      <div className="min-w-0 flex-1 pb-2">
+      <div className="flex min-w-0 flex-1 items-start gap-2.5 rounded-xl border border-border/70 bg-card px-2.5 py-2">
+        <span aria-hidden className="grid size-7 shrink-0 place-items-center rounded-lg bg-muted/70 text-muted-foreground">
+          <Icono size={14} />
+        </span>
+      <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="text-xs font-semibold text-foreground">{e.rotulo}</span>
+          <span className="text-[12.5px] font-semibold text-foreground">{e.rotulo}</span>
           {/* El tag («MANUAL», «IA») dice de qué clase es el evento. Con AUTOR a
               la vista sobra: «por Luz» ya dice que lo escribió una persona, y
               «MANUAL · por Luz» es la misma cosa dos veces en una fila de 360 px.
@@ -206,6 +248,7 @@ export function EventoLinea({
             <p className="mt-0.5 text-xs italic text-muted-foreground">“{e.comentario}”</p>
           )
         )}
+      </div>
       </div>
     </li>
   );

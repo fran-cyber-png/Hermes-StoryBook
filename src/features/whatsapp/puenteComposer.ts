@@ -30,6 +30,17 @@ export interface TextoParaComposer {
    * ensucia el número contra el que se comparan todas las piezas.
    */
   pieza?: Omit<PiezaDeclarada, 'editada' | 'textoPieza'>;
+  /**
+   * La imagen de un dato (`hechos.imagen`) — OPCIONAL. Va en el MISMO evento
+   * que el texto y no en un puente aparte: es un solo gesto, «tocar el chip»,
+   * y las dos cosas tienen que llegar juntas a la misma conversación.
+   *
+   * El composer la resuelve a un `File` (baja el archivo ya subido, detrás
+   * del perímetro) y la dejar como adjunto pendiente — el MISMO estado que
+   * deja el clip o pegar con ⌘V. Sigue sin mandar nada: la vendedora tiene
+   * que apretar Enviar, como con el texto.
+   */
+  imagen?: { archivo: string; mime: string; nombre: string | null } | null;
 }
 
 type Escucha = (v: TextoParaComposer) => void;

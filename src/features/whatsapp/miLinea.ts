@@ -12,7 +12,17 @@ import { api } from '../../lib/datos/cliente';
 
 export interface MiLinea {
   numero: string | null;
-  sesion?: { estado: string };
+  sesion?: {
+    estado: string;
+    /**
+     * ISO del último pareo COMPLETADO. `null` = nunca se completó ninguno.
+     *
+     * ⚠️ **`undefined` NO es `null`**, y la diferencia decide si aparece el botón:
+     * `undefined` es un server viejo que no manda el campo —o sea «no sé»— y
+     * `null` es el server diciendo «nunca se pareó». Ver `motivoParaVincular`.
+     */
+    vinculado_at?: string | null;
+  };
 }
 
 export function useMiLinea() {
@@ -138,6 +148,17 @@ export function useInvalidarMiLinea() {
      * PREFIJO — alcanza cualquier hilo abierto, sea cual sea su `numeroPropio`.
      */
     void qc.invalidateQueries({ queryKey: ['wa', 'conversacion'] });
+    /**
+     * 🔴 Y LA BANDEJA — el hilo era la mitad visible, pero la fila con la
+     * PREVISUALIZACIÓN del último mensaje (`['conversaciones']`, la cola de
+     * Mensajes) es una query APARTE, y ésta nunca se invalidaba. El server ya
+     * archiva el hilo Y ahora también saca la fila de `consultarCola`
+     * (`cola/consultarCola.ts: chatsNoArchivadosSql`), pero sin esto la
+     * vendedora seguía viendo «Info por favor» en la bandeja hasta que algo
+     * MÁS disparara un refetch — el síntoma que este archivo reporta: «no se
+     * puede quitar la previsualización de mensajes» tras desvincular.
+     */
+    void qc.invalidateQueries({ queryKey: ['conversaciones'] });
   };
 }
 
@@ -201,7 +222,7 @@ export function useCancelarAutoVinculacion() {
  * CRUDOS del transporte (`whatsapp/transporte.ts:EstadoSesion`), que nunca
  * llegan hasta el front — el server los traduce ANTES de mandarlos. El bug no
  * se veía en el test puro (`miLinea.vincular.test.ts` llama a la función
- * directo con esos strings y por supuesto matchean), pero si vos desvinculabas
+ * directo con esos strings y por supuesto matchean), pero si desvinculabas
  * el WhatsApp desde el teléfono, la sesión se cerraba (`cambiarEstado({estado:
  * 'cerrada', ...})` en `transporteWhatsmeow.ts`), el server lo traducía a
  * `sin_vincular`, y ESE string no estaba en la lista — el botón «Vincular tu
@@ -209,30 +230,101 @@ export function useCancelarAutoVinculacion() {
  * Es la cicatriz de siempre (CLAUDE.md #10): la regla estaba bien escrita y
  * nadie la llamaba con el dato real.
  *
+ * 🔴 **Y EL 7-SEP-2026 VOLVIÓ, CON EL SIGNO CAMBIADO — por eso son DOS.**
+ * Desde hoy el server publica `cerrada` de verdad: Cerberus necesita distinguir
+ * «nunca se vinculó» (una línea recién dada de alta) de «se cayó y hay alguien
+ * esperando el QR», y hasta hoy las dos se veían igual — el caso vivo era la
+ * línea de Alex (`51901938157`, cerrada a las 12:22). Con la lista en
+ * `['sin_vincular']` a secas, ese cambio dejaba SIN botón exactamente a la línea
+ * que lo necesita: el mismo agujero de agosto, leído al revés.
+ *
+ * ⚠️ Lo que impide la tercera vez no es este párrafo: es
+ * `server/src/numeros/vocabularioDeSesion.paridad.test.ts`, que compara esta
+ * lista contra lo que `estadoSesionAContrato` publica DE VERDAD para una sesión
+ * muerta, y falla por los dos lados —falta uno, o sobra un nombre que el server
+ * no manda nunca—. Verificado en rojo antes de escribir esta línea.
+ *
  * 🔴 **`baneado` NO lo dispara, y no es un olvido.** Un `temporary_ban` se
  * muestra y **no se reintenta** — ofrecer «vuelve a vincular» ahí sería empujar a
  * la vendedora a re-parear durante un ban, que es exactamente el anti-ban que
- * este repo tiene prohibido por escrito. `vinculando` y `desconectado` tampoco:
- * son transitorios y la línea vuelve sola; ofrecer ahí invita a romper una sesión
- * sana.
+ * este repo tiene prohibido por escrito. `vinculando` tampoco: es transitorio y
+ * la línea vuelve sola.
  *
  * ⚠️ **Sin estado NO se ofrece.** Falta mientras la consulta viaja y en un server
  * viejo, y las dos veces la respuesta honesta es «no sé»: ofrecer ante la duda
  * haría parpadear el botón sobre una línea que anda.
  */
-export const ESTADOS_QUE_PIDEN_VINCULAR = ['sin_vincular'] as const;
+export const ESTADOS_QUE_PIDEN_VINCULAR = ['sin_vincular', 'cerrada'] as const;
+
+/**
+ * 🔴 `desconectado` TAPABA DOS SITUACIONES OPUESTAS, Y ESTA ES LA QUE SÍ PIDE EL
+ * BOTÓN (2-sep-2026).
+ *
+ * Hasta hoy `desconectado` estaba fuera de la lista con un motivo escrito y
+ * correcto: «es transitorio y la línea vuelve sola; ofrecer ahí invita a romper
+ * una sesión sana». Lo que faltaba es que el server devuelve ese mismo estado en
+ * cuanto existe el archivo `.wa-sessions/<n>.db` — **y ese archivo lo escribe el
+ * ARRANQUE del pareo, no el final**. Un QR que nadie escaneó lo deja igual.
+ *
+ * ── El caso, medido en producción ──
+ *
+ * `5215610584485` (la línea de Nicole) estaba registrada desde el 24-ago-2026 con
+ * `vinculado_at` en `null`, el `.db` de un pareo abandonado y cero mensajes. La
+ * app leía `desconectado`, lo trataba como transitorio y **no le ofrecía nada**:
+ * nueve días sin poder trabajar, sin un error, sin un log, sin síntoma.
+ *
+ * La fecha es lo único que separa los dos casos: con fecha hubo un pareo que
+ * funcionó (hay sesión sana, no se toca); en `null` nunca lo hubo (no hay nada
+ * que romper y hay alguien esperando).
+ *
+ * ⚠️ **Y tiene que ser `null` EXPLÍCITO, no cualquier valor falsy.** `undefined`
+ * es un server que no manda el campo, o sea «no sé» — y ante la duda esto sigue
+ * sin ofrecer, igual que con el estado ausente. Colapsar los dos con un `!fecha`
+ * haría que un server viejo ofreciera re-vincular todas las líneas caídas del
+ * equipo, que es el defecto de arriba con el signo cambiado.
+ */
+/**
+ * 🔴 SON DOS ESTADOS, Y EL SEGUNDO NACIÓ EL 7-SEP-2026 PORQUE ESTE ARREGLO SE
+ * HABRÍA ROTO SIN ÉL.
+ *
+ * El server separó `no_montada` de `desconectado`: la primera es «vinculada pero
+ * el gestor no la tiene montada, no vuelve sola», la segunda «el transporte vivo
+ * se cortó, vuelve sola». Y el caso de Nicole que este arreglo cubre —archivo de
+ * un pareo abandonado, `vinculado_at` en null— es EXACTAMENTE el que pasó a
+ * publicarse como `no_montada`. Con la lista en `['desconectado']` a secas, sus
+ * nueve días sin poder trabajar volvían enteros.
+ *
+ * `desconectado` NO se saca: un pareo que llegó a montarse y se cortó antes de
+ * completarse publica ése, también con la fecha en null.
+ *
+ * ⚠️ Lo que impide la próxima vez no es este párrafo: es
+ * `server/src/numeros/vocabularioDeSesion.paridad.test.ts`, que compara esta
+ * lista contra lo que `sesionPublicada` publica DE VERDAD.
+ */
+const ESTADOS_QUE_NO_VUELVEN_SOLOS = ['desconectado', 'no_montada'] as const;
+
+export function nuncaSePareo(
+  estadoDeSesion: string,
+  vinculadoAt: string | null | undefined,
+): boolean {
+  return (
+    (ESTADOS_QUE_NO_VUELVEN_SOLOS as readonly string[]).includes(estadoDeSesion) && vinculadoAt === null
+  );
+}
 
 export type MotivoDeVincular = 'sin_linea' | 'linea_muda';
 
 export function motivoParaVincular(
   tienePropia: boolean,
   estadoDeSesion: string | undefined,
+  vinculadoAt?: string | null,
 ): MotivoDeVincular | null {
   if (!tienePropia) return 'sin_linea';
   if (!estadoDeSesion) return null;
-  return (ESTADOS_QUE_PIDEN_VINCULAR as readonly string[]).includes(estadoDeSesion)
-    ? 'linea_muda'
-    : null;
+  if ((ESTADOS_QUE_PIDEN_VINCULAR as readonly string[]).includes(estadoDeSesion)) {
+    return 'linea_muda';
+  }
+  return nuncaSePareo(estadoDeSesion, vinculadoAt) ? 'linea_muda' : null;
 }
 
 /** Lo que dice el botón. Son dos acciones distintas y se llaman distinto. */

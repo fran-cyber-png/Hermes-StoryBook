@@ -1,13 +1,12 @@
-import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { MessageSquareText } from 'lucide-react';
 import { useEstadoConversacion, type Conversacion } from '../../dominio/conversaciones';
 import { HiloWhatsapp, type SugerenciaEnComposer } from '../whatsapp/HiloWhatsapp';
 import { HiloMessenger } from './HiloMessenger';
 import ResponderPanel from './ResponderPanel';
-import { BarraGestion } from '../gestion/BarraGestion';
 import { ProximoSeguimiento } from '../agenda/ProximoSeguimiento';
 import type { Interaccion } from './types';
+import { useEfectoAlCambiar } from '../../lib/useEfectoAlCambiar';
 
 /**
  * LA COLUMNA CENTRAL: la conversación abierta.
@@ -28,9 +27,17 @@ export function ConversacionActiva({
   onAbrirOtra,
   senales,
   esDeCampana,
+  onVolver,
 }: {
   conversacion: Conversacion | null;
   onCerrar: () => void;
+  /**
+   * EL CELULAR: volver a la lista de chats (11-sep-2026). El shell lo pasa
+   * sólo cuando la lista y el chat no caben juntos; baja hasta la cabecera
+   * del canal que corresponda (`CabeceraDeChat`), que dibuja la flecha con el
+   * nombre del contacto. Sin esto no hay flecha. En escritorio no cambia nada.
+   */
+  onVolver?: () => void;
   /**
    * Quién está mirando. Baja hasta la `BarraGestion` para el reparto: sin esto,
    * «pasar la conversación» no puede decir «Vos» ni marcar cuál de los destinos
@@ -69,12 +76,11 @@ export function ConversacionActiva({
   // (`useConversacionWa.marcarLeido`). Es una escritura por acción humana: abrir.
   const estado = useEstadoConversacion();
   const clave = conversacion?.clave ?? null;
-  useEffect(() => {
+  useEfectoAlCambiar([clave], () => {
     if (!clave) return;
     estado.mutate({ clave, leido: true });
     // Solo al cambiar de conversación: `estado` es estable entre renders.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clave]);
+  });
 
   if (!conversacion) {
     return (
@@ -88,33 +94,50 @@ export function ConversacionActiva({
     );
   }
 
-  // El embudo entero, manejable desde el chat: etapa, etiquetas, intereses,
-  // registrar, agendar — arriba de CUALQUIER conversación, sin soltar el hilo.
-  //
-  // Debajo de la barra va lo que se DEBE (`ProximoSeguimiento`), que se dibuja
-  // sólo si hay algo pendiente: el orden es «qué puedo hacer» y después «qué
-  // quedé en hacer», que es como se lee un chat que ya se trabajó.
-  const conBarra = (contenido: React.ReactNode) => (
+  /**
+   * ══ LOS CUATRO CANALES, LA MISMA ANATOMÍA (08-sep-2026, pedido del dueño) ══
+   *
+   * Hasta acá WhatsApp era el único con la barra de gestión ADENTRO de su
+   * cabecera (07-sep-2026): Messenger y los comentarios de FB/IG —y el
+   * Formulario, que cae en la rama de Messenger más abajo— seguían con DOS
+   * tarjetas apiladas, `BarraGestion` sola arriba (`conBarra`, que vivía acá)
+   * y el hilo con su PROPIA cabecera, más angosta, debajo. El pedido fue
+   * parejo: los cuatro con la misma fila única — ver `CabeceraDeChat`, que
+   * `HiloWhatsapp`, `HiloMessenger` y `ResponderPanel` montan cada uno con su
+   * propio avatar/subtítulo. `conBarra` ya no hace falta: cada componente
+   * recibe directo los props de la barra y los embebe.
+   *
+   * `ProximoSeguimiento` se queda AFUERA de la tarjeta en los cuatro, igual
+   * que ya estaba para WhatsApp: es «lo que se debe», no parte del chat.
+   */
+  /**
+   * En el celular el chat ocupa la pantalla entera (cada hilo se vuelve
+   * `fixed` por debajo de `md`, ver `HiloWhatsapp`), así que «lo que se
+   * debe» no tiene dónde ir sin robarle alto al hilo: se esconde. El
+   * envoltorio es `contents` a propósito — sin caja propia, para no meterle
+   * un `gap` vacío a la columna de escritorio cuando no hay seguimiento.
+   */
+  const conProximoSeguimiento = (contenido: React.ReactNode) => (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <BarraGestion
-        conversacion={conversacion}
-        miVendedora={miVendedora}
-        esDeCampana={esDeCampana}
-        onAbrirOtra={onAbrirOtra}
-        senalRegistrar={senales?.registrar}
-        senalEstado={senales?.estado}
-        senalEtiqueta={senales?.etiqueta}
-        senalAgendar={senales?.agendar}
-      />
-      <ProximoSeguimiento clave={conversacion.clave} />
+      <div className="contents max-md:hidden">
+        <ProximoSeguimiento clave={conversacion.clave} />
+      </div>
       <div className="min-h-0 flex-1">{contenido}</div>
     </div>
   );
 
   // WhatsApp: el hilo nativo. La razón de ser de este panel.
   if (conversacion.canal === 'whatsapp') {
-    return conBarra(
-      <HiloWhatsapp conversacion={conversacion} sugerencia={sugerencia} miVendedora={miVendedora} />,
+    return conProximoSeguimiento(
+      <HiloWhatsapp
+        conversacion={conversacion}
+        sugerencia={sugerencia}
+        miVendedora={miVendedora}
+        onAbrirOtra={onAbrirOtra}
+        esDeCampana={esDeCampana}
+        senales={senales}
+        onVolver={onVolver}
+      />,
     );
   }
 
@@ -134,15 +157,31 @@ export function ConversacionActiva({
       ventana_abierta: conversacion.ventana_abierta,
       dias: conversacion.dias,
     };
-    return conBarra(
+    return conProximoSeguimiento(
       <ResponderPanel
         interaccion={inter}
+        conversacion={conversacion}
+        miVendedora={miVendedora}
+        esDeCampana={esDeCampana}
+        onAbrirOtra={onAbrirOtra}
+        senales={senales}
+        onVolver={onVolver}
         onCerrar={onCerrar}
         onRespondido={() => void qc.invalidateQueries({ queryKey: ['conversaciones'] })}
       />,
     );
   }
 
-  // Messenger (canal Meta, tipo mensaje): el hilo completo, en lectura.
-  return conBarra(<HiloMessenger conversacion={conversacion} />);
+  // Messenger (canal Meta, tipo mensaje) y Formulario (tipo lead, sin canal
+  // propio de Meta): el hilo completo, en lectura.
+  return conProximoSeguimiento(
+    <HiloMessenger
+      conversacion={conversacion}
+      miVendedora={miVendedora}
+      esDeCampana={esDeCampana}
+      onAbrirOtra={onAbrirOtra}
+      senales={senales}
+      onVolver={onVolver}
+    />,
+  );
 }

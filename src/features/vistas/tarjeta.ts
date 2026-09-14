@@ -99,8 +99,12 @@ export function turnoDeTarjeta(c: DatosTarjeta): { turno: Turno; apremia: boolea
  * ⚠️ Lo que devuelve es el nombre CORTO (para leerse en 230 px). Para REGISTRAR
  * el interés hace falta el texto crudo del catálogo: eso es `cotizarEnUnClic`.
  */
-export function cursoDeTarjeta(c: DatosTarjeta): (CursoDeFila & { registrado: boolean }) | null {
-  const curso = cursoDeFila(c);
+export function cursoDeTarjeta(
+  c: DatosTarjeta,
+  contexto: { esDeCampana?: boolean } = {},
+): (CursoDeFila & { registrado: boolean }) | null {
+  // En campaña, sin curso: la regla vive en `cursoDeFila` y acá sólo viaja.
+  const curso = cursoDeFila(c, contexto);
   return curso && { ...curso, registrado: curso.fuente === 'interes' };
 }
 
@@ -139,7 +143,10 @@ export function haceCorto(horas: number): string {
  */
 export function cotizarEnUnClic(
   c: DatosTarjeta,
+  contexto: { esDeCampana?: boolean } = {},
 ): { crudo: string; etiqueta: string; hayQueRegistrar: boolean } | null {
+  // Cotizar es de ventas: en campaña no hay catálogo de la Escuela que registrar.
+  if (contexto.esDeCampana) return null;
   const registrado = (c.interes_curso ?? '').trim();
   const delFormulario = (c.lead_curso ?? '').trim();
   const crudo = registrado || delFormulario;

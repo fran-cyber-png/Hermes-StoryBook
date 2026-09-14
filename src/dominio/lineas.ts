@@ -61,7 +61,7 @@ export interface LineaWhatsapp {
 export function useLineas() {
   const q = useQuery({
     queryKey: ['lineas-whatsapp'],
-    queryFn: () => api<{ lineas: LineaWhatsapp[] }>('/api/whatsapp/lineas'),
+    queryFn: () => api<{ lineas: LineaWhatsapp[]; veTodo?: boolean }>('/api/whatsapp/lineas'),
     // Las líneas cambian cuando alguien vincula un número, o sea casi nunca y
     // nunca sin que una persona lo provoque. Refrescarlas con el pulso de la
     // cola sería una consulta por minuto para un dato que dura semanas.
@@ -86,6 +86,22 @@ export function useLineas() {
      * es el fail-open: sin dato, no hay opción y se ve todo.
      */
     hayMias: lineas.some((l) => l.mias === true),
+    /**
+     * ¿MANDA SOBRE EL TRABAJO DE LAS DEMÁS? (supervisor o admin, `equipo/roles.ts`).
+     *
+     * 🔴 **Viaja con las líneas y no aparte, y ese es el punto.** `hayMias` era
+     * lo único que este hook sabía del mapa, y `opcionesDeLinea` lo usaba como
+     * si dijera «esta persona está confinada a sus líneas» — que para una
+     * vendedora es cierto y para quien supervisa NO. En producción eso dejó a
+     * `alex` (supervisor con UNA línea en `numero_vendedora`) viendo sólo Ventas
+     * Meta, sin selector con el que salirse.
+     *
+     * ⚠️ **Opcional en el cuerpo, `false` sin dato**: un server viejo no lo
+     * manda y el selector se comporta exactamente como hoy. Ausencia = «no
+     * dijo», nunca «dijo que sí» — y para un recorte, «no dijo» tiene que caer
+     * del lado de la regla vieja, no del lado de abrir la mesa entera.
+     */
+    veTodo: q.data?.veTodo === true,
     /**
      * Sus líneas PROPIAS: las suyas que no comparte con nadie. Es lo que el
      * panel mira para decidir si le ofrece traer una — la línea del equipo

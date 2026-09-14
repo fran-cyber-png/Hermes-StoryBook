@@ -2,7 +2,6 @@ import {
   AlertTriangle,
   Calendar,
   Check,
-  ChevronDown,
   Info,
   ListChecks,
   MapPin,
@@ -12,13 +11,14 @@ import {
   User,
   X,
 } from 'lucide-react';
+import { cifra } from '../../lib/formato';
+import { controlDeBarraClass } from '../../lib/styles';
 import { encabezadoSeccion } from '../panel/estiloSeccion';
 import {
   alternarGrupo,
-  chipsDeGrupos,
   contactosDelGrupo,
   contactosSinGrupo,
-  esNadieTodavia,
+  esSinAsignar,
   ETAPA_GRUPOS,
   grupoActivo,
   NIVEL_GRUPOS,
@@ -29,139 +29,118 @@ import {
 import { FiltroFaceta } from './FiltroFaceta';
 import {
   alternar,
-  DIMENSIONES,
-  nombreCorto,
-  TOGGLES,
   type Facetas,
   type FacetaReparto,
   type FiltrosPadron,
   type OpcionLinea,
 } from './padron';
+import type { ChipDelRecorte } from './vistasDelPadron';
 
 /**
- * LOS FILTROS DEL PADRÓN — la fila rápida + el panel LATERAL.
+ * LOS FILTROS DEL PADRÓN — el botón, los chips y el panel LATERAL.
  *
- * ══ POR QUÉ SE PARTIÓ DE `PantallaPadron.tsx` ═══════════════════════════════
- * Antes eran 8 controles siempre visibles (5 facetas + 3 interruptores) en UNA
- * fila. Medido a 1152 px —el ancho real de contenido de la app— quedaban
- * ~390 px libres: agregar «Asignado a» + un rango de fecha ya los llenaba, y
- * eso es ANTES de que `Curso`/`Fuente` sigan ahí sueltos. La fila rápida baja a
- * UN control (País) + un botón «Filtros» que abre `PanelLateralFiltros`,
- * exportado aparte porque vive en OTRO lugar del layout (`PantallaPadron.tsx`
- * lo pone al lado de la tabla, no debajo de la fila).
+ * ══ LA FILA QUIETA (ADR 0102, 10-sep-2026) ══════════════════════════════════
+ * Hasta el rediseño esto dibujaba su propia fila —«Más nuevos» · País · Filtros—
+ * y debajo la de chips, que con el default del supervisor no se iba nunca. Ahora
+ * cada pieza se exporta suelta y `PantallaPadron` las pone en UNA fila:
  *
- * ⚠️ **«Sin repartir» salió de la fila rápida** (24-ago-2026, pedido del
- * dueño): se unificó con «Asignado a» en un solo control dentro del panel —
- * ver la sección «Reparto» y el docblock de `opcionesDeReparto` en
- * `dominio/segmentosPadron.ts`. No se agregó un control a la fila para
- * compensar; se sacó uno.
+ *   · **País entró al panel.** Era la única faceta que vivía afuera, sin otro
+ *     motivo que haber sido la primera.
+ *   · **El orden salió de acá.** No recorta nada, así que no cuenta en «Filtros
+ *     N» ni se limpia con ellos: vive en `PantallaPadron`, al lado de Repartir.
+ *   · **Los chips son sólo lo que refina a la vista** (`chipsDelRecorte`): lo
+ *     que la vista puso ya lo dice el selector, y «Filtros N» cuenta esos mismos
+ *     chips.
  *
- * 🔴 **La primera versión de esto era un acordeón a ancho completo que EMPUJABA
- * la tabla fuera de la pantalla** (más de 1.000 px de alto, cero filas
- * visibles) — Estephano la rechazó con razón: invertía el pedido («que la
- * pantalla deje de abrumar») por otra forma de abrumar. `PanelLateralFiltros`
- * es una COLUMNA de ancho fijo (~380 px) al lado de la tabla, nunca más alta
- * que la ventana — scrollea por dentro, la página no.
+ * ══ POR QUÉ UNA COLUMNA LATERAL Y NO UN POPOVER ═════════════════════════════
+ * 🔴 **La primera versión fue un acordeón a ancho completo que EMPUJABA la tabla
+ * fuera de la pantalla** (más de 1.000 px de alto, cero filas visibles).
+ * Estephano la rechazó: «para filtrar hay que perder de vista justo lo que se
+ * está filtrando». Un popover flotando encima de la tabla tiene el mismo
+ * defecto, en chico. `PanelLateralFiltros` es una COLUMNA de ancho fijo (~380 px)
+ * al lado de la tabla que EMPUJA su ancho, nunca más alta que la ventana:
+ * scrollea por dentro, la página no.
  *
  * ══ ETAPA Y NIVEL YA NO SON FACETAS CRUDAS ═════════════════════════════════
- * Van agrupadas (`ETAPA_GRUPOS`/`NIVEL_GRUPOS` en `padron.ts`) porque un valor
- * solo —`contacted`— es el 84 % del padrón, y un desplegable de 10 valores en
- * inglés no lo puede leer un supervisor. País/Curso/Fuente siguen siendo
- * `FiltroFaceta` sin cambios: esas SÍ recortan parejo.
+ * Van agrupadas (`ETAPA_GRUPOS`/`NIVEL_GRUPOS`) porque un valor solo
+ * —`contacted`— es el 84 % del padrón, y un desplegable de 10 valores en inglés
+ * no lo puede leer un supervisor. País/Curso/Fuente siguen siendo
+ * `FiltroFaceta`: esas SÍ recortan parejo.
  */
-export function PanelFiltros({
-  filtros,
-  onCambiar,
-  onLimpiarTexto,
-  facetas,
-  entroPorLinea,
-  cargandoFacetas,
+
+/**
+ * «FILTROS N» — abre y cierra la columna lateral. `cuantos` es el largo de los
+ * chips: los dos cuentan lo mismo porque salen de `chipsDelRecorte`.
+ */
+export function BotonFiltros({
+  cuantos,
   abierto,
   onAbrirCerrar,
 }: {
-  filtros: FiltrosPadron;
-  onCambiar: (p: Partial<FiltrosPadron>) => void;
-  onLimpiarTexto: () => void;
-  facetas: Facetas | undefined;
-  /** Solo para poder mostrar la ETIQUETA del chip («Ventas Meta»), no el
-   * número que viaja de vuelta — ver el docblock de `RespuestaFacetas`. */
-  entroPorLinea: OpcionLinea[] | null | undefined;
-  cargandoFacetas: boolean;
+  cuantos: number;
   abierto: boolean;
   onAbrirCerrar: (v: boolean) => void;
 }) {
-  const enElPanel = contarEnPanel(filtros);
-
   return (
-    <>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {/* Antes vivía en el header (mudado el 24-ago-2026 para hacerle lugar
-            a la tira de reparto, que ahora es fija ahí) — acá encaja igual de
-            bien: es otro control de «cómo se mira la lista», como País. */}
-        <select
-          value={filtros.orden ?? 'recientes'}
-          onChange={(e) => onCambiar({ orden: e.target.value as FiltrosPadron['orden'] })}
-          aria-label="Ordenar"
-          className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground"
-        >
-          <option value="recientes">Más nuevos</option>
-          <option value="antiguos">Más antiguos</option>
-          <option value="mas_gastaron">Los que más gastaron</option>
-          <option value="nombre">Por nombre</option>
-        </select>
-        <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-
-        <FiltroFaceta
-          rotulo="País"
-          opciones={facetas?.pais ?? []}
-          elegidos={filtros.pais ?? []}
-          cargando={cargandoFacetas}
-          onAlternar={(v) => onCambiar({ pais: alternar(filtros.pais, v) })}
-          onLimpiar={() => onCambiar({ pais: [] })}
-        />
-        <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-
-        <button
-          type="button"
-          onClick={() => onAbrirCerrar(!abierto)}
-          aria-expanded={abierto}
-          className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors duration-200 ${
-            enElPanel > 0 || abierto
-              ? 'border-navy bg-navy text-white'
-              : 'border-border bg-card text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <SlidersHorizontal size={13} />
-          Filtros
-          {enElPanel > 0 && (
-            <span className="rounded-full bg-white/25 px-1.5 text-[10px] font-bold tabular-nums">{enElPanel}</span>
-          )}
-          <ChevronDown size={12} className={abierto ? 'rotate-180 transition-transform' : 'transition-transform'} />
-        </button>
-      </div>
-
-      <ChipsActivos
-        filtros={filtros}
-        onCambiar={onCambiar}
-        onLimpiarTexto={onLimpiarTexto}
-        entroPorLinea={entroPorLinea}
-      />
-    </>
+    <button
+      type="button"
+      onClick={() => onAbrirCerrar(!abierto)}
+      aria-expanded={abierto}
+      className={`${controlDeBarraClass} ${abierto ? 'bg-muted' : ''}`}
+    >
+      <SlidersHorizontal size={13} className="text-muted-foreground" />
+      Filtros
+      {cuantos > 0 && (
+        <span className="rounded-md bg-primary px-1.5 text-[10px] font-bold tabular-nums text-primary-foreground">
+          {cuantos}
+        </span>
+      )}
+    </button>
   );
 }
 
-function contarEnPanel(filtros: FiltrosPadron): number {
+/**
+ * LO QUE REFINA A LA VISTA, EN UNA LÍNEA — y NADA si no hay: una fila vacía de
+ * chips es una fila de chrome. «Limpiar filtros» vuelve a la vista puesta, no al
+ * padrón entero.
+ */
+export function ChipsActivos({
+  chips,
+  onQuitar,
+  onLimpiar,
+}: {
+  chips: ChipDelRecorte[];
+  onQuitar: (cambio: Partial<FiltrosPadron>) => void;
+  onLimpiar: () => void;
+}) {
+  if (chips.length === 0) return null;
+
   return (
-    (filtros.curso?.length ?? 0) +
-    (filtros.fuente?.length ?? 0) +
-    chipsDeGrupos('etapa', ETAPA_GRUPOS, filtros.etapa).length +
-    chipsDeGrupos('nivel', NIVEL_GRUPOS, filtros.nivel).length +
-    (filtros.asignadoA?.length ?? 0) +
-    (filtros.entroPorLinea?.length ?? 0) +
-    (filtros.sinHabilitar ? 1 : 0) +
-    (filtros.entroDesde || filtros.entroHasta ? 1 : 0) +
-    (filtros.conVenta ? 1 : 0) +
-    (filtros.conTelefono ? 1 : 0)
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {chips.map((c) => (
+        <span
+          key={c.llave}
+          className="flex h-6 items-center gap-1 rounded-md border border-border bg-muted pl-2 pr-0.5 text-[11px] font-medium text-foreground"
+        >
+          {c.rotulo}
+          <button
+            type="button"
+            onClick={() => onQuitar(c.quitar)}
+            aria-label={`Quitar ${c.rotulo}`}
+            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-border hover:text-foreground"
+          >
+            <X size={11} />
+          </button>
+        </span>
+      ))}
+      <button
+        type="button"
+        onClick={onLimpiar}
+        className="ml-1 text-[11px] font-semibold text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+      >
+        Limpiar filtros
+      </button>
+    </div>
   );
 }
 
@@ -209,6 +188,14 @@ export function PanelLateralFiltros({
     <div className="flex min-h-0 w-[23.75rem] shrink-0 flex-col overflow-y-auto border-l border-border bg-card">
       <Seccion icono={<User size={13} />} titulo="Quién es">
         <div className="flex flex-wrap gap-1.5">
+          <FiltroFaceta
+            rotulo="País"
+            opciones={facetas?.pais ?? []}
+            elegidos={filtros.pais ?? []}
+            cargando={cargandoFacetas}
+            onAlternar={(v) => onCambiar({ pais: alternar(filtros.pais, v) })}
+            onLimpiar={() => onCambiar({ pais: [] })}
+          />
           <FiltroFaceta
             rotulo="Curso"
             opciones={facetas?.curso ?? []}
@@ -268,9 +255,9 @@ export function PanelLateralFiltros({
             <OpcionReparto
               key={o.id}
               opcion={o}
-              activo={esNadieTodavia(o) ? filtros.sinHabilitar === true : (filtros.asignadoA ?? []).includes(o.id)}
+              activo={esSinAsignar(o) ? filtros.sinHabilitar === true : (filtros.asignadoA ?? []).includes(o.id)}
               onClick={() =>
-                esNadieTodavia(o)
+                esSinAsignar(o)
                   ? onCambiar({ sinHabilitar: !filtros.sinHabilitar || undefined })
                   : onCambiar({ asignadoA: alternar(filtros.asignadoA, o.id) })
               }
@@ -378,7 +365,7 @@ function OpcionGrupo({
               <Info size={11} />
             </span>
           )}
-          <span className="shrink-0 tabular-nums text-muted-foreground">{contactos.toLocaleString('es')}</span>
+          <span className="shrink-0 tabular-nums text-muted-foreground">{cifra(contactos)}</span>
         </span>
         {grupo.notaSiempreVisible && grupo.aviso && (
           <span className="mt-0.5 flex items-start gap-1 text-[10px] leading-snug text-warning-foreground">
@@ -410,16 +397,16 @@ function FilaSinDato({ contactos }: { contactos: number }) {
       <input type="checkbox" disabled checked={false} className="mt-0.5 size-3.5 shrink-0" />
       <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
         <span>Sin historial</span>
-        <span className="shrink-0 tabular-nums">{contactos.toLocaleString('es')}</span>
+        <span className="shrink-0 tabular-nums">{cifra(contactos)}</span>
       </span>
     </div>
   );
 }
 
 /**
- * UNA FILA DEL CONTROL DE REPARTO — «Nadie todavía» o una vendedora, la misma
+ * UNA FILA DEL CONTROL DE REPARTO — «Sin asignar» o una vendedora, la misma
  * pinta para las dos. La diferencia (a cuál campo traduce el click) la decide
- * quien la usa (`esNadieTodavia`, `dominio/segmentosPadron.ts`); acá adentro
+ * quien la usa (`esSinAsignar`, `dominio/segmentosPadron.ts`); acá adentro
  * es solo un checkbox con nombre y número, como cualquier faceta.
  */
 function OpcionReparto({
@@ -435,7 +422,7 @@ function OpcionReparto({
     <label className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-xs hover:bg-muted">
       <input type="checkbox" checked={activo} onChange={onClick} className="size-3.5 shrink-0 accent-navy" />
       <span className="min-w-0 flex-1 truncate font-medium text-foreground">{opcion.rotulo}</span>
-      <span className="shrink-0 tabular-nums text-muted-foreground">{opcion.contactos.toLocaleString('es')}</span>
+      <span className="shrink-0 tabular-nums text-muted-foreground">{cifra(opcion.contactos)}</span>
     </label>
   );
 }
@@ -483,129 +470,6 @@ function FiltroFecha({
           Quitar
         </button>
       )}
-    </div>
-  );
-}
-
-/**
- * LO QUE ESTÁ PUESTO, EN UNA LÍNEA.
- *
- * Etapa y Nivel muestran un chip POR GRUPO ACTIVO (rótulo humano), nunca por
- * valor crudo: sin esto, elegir «En conversación» dibujaría tres chips en
- * inglés (`interested`, `follow_up`, `recontact`) que ningún supervisor puede
- * leer. `chipsDeGrupos` también deja ver —sin rótulo lindo— cualquier valor
- * suelto que quedó de una versión vieja (caché de IndexedDB, ADR 0007): un
- * chip feo es mejor que un filtro puesto que no se ve en ningún lado.
- */
-function ChipsActivos({
-  filtros,
-  onCambiar,
-  onLimpiarTexto,
-  entroPorLinea,
-}: {
-  filtros: FiltrosPadron;
-  onCambiar: (p: Partial<FiltrosPadron>) => void;
-  onLimpiarTexto: () => void;
-  entroPorLinea: OpcionLinea[] | null | undefined;
-}) {
-  const puestos: { llave: string; rotulo: string; quitar: () => void }[] = [];
-
-  for (const d of DIMENSIONES) {
-    if (d.id === 'etapa') {
-      for (const chip of chipsDeGrupos('etapa', ETAPA_GRUPOS, filtros.etapa)) {
-        puestos.push({ llave: chip.llave, rotulo: chip.rotulo, quitar: () => onCambiar({ etapa: chip.quitar(filtros.etapa) }) });
-      }
-      continue;
-    }
-    if (d.id === 'nivel') {
-      for (const chip of chipsDeGrupos('nivel', NIVEL_GRUPOS, filtros.nivel)) {
-        puestos.push({ llave: chip.llave, rotulo: chip.rotulo, quitar: () => onCambiar({ nivel: chip.quitar(filtros.nivel) }) });
-      }
-      continue;
-    }
-    for (const v of filtros[d.id] ?? []) {
-      puestos.push({
-        llave: `${d.id}:${v}`,
-        rotulo: v,
-        quitar: () => onCambiar({ [d.id]: (filtros[d.id] ?? []).filter((x) => x !== v) }),
-      });
-    }
-  }
-  for (const v of filtros.asignadoA ?? []) {
-    puestos.push({
-      llave: `asignadoA:${v}`,
-      rotulo: nombreCorto(v),
-      quitar: () => onCambiar({ asignadoA: (filtros.asignadoA ?? []).filter((x) => x !== v) }),
-    });
-  }
-  for (const v of filtros.entroPorLinea ?? []) {
-    // La etiqueta sale de la faceta, no del valor — mostrar el número crudo
-    // acá sería la misma clase de fuga que ya se corrigió en otros lados.
-    const etiqueta = entroPorLinea?.find((l) => l.valor === v)?.etiqueta ?? v;
-    puestos.push({
-      llave: `entroPorLinea:${v}`,
-      rotulo: etiqueta,
-      quitar: () => onCambiar({ entroPorLinea: (filtros.entroPorLinea ?? []).filter((x) => x !== v) }),
-    });
-  }
-  if (filtros.entroDesde || filtros.entroHasta) {
-    const rotulo =
-      filtros.entroDesde && filtros.entroHasta
-        ? `Cargado: ${filtros.entroDesde} a ${filtros.entroHasta}`
-        : filtros.entroDesde
-          ? `Cargado desde ${filtros.entroDesde}`
-          : `Cargado hasta ${filtros.entroHasta}`;
-    puestos.push({ llave: 'entro', rotulo, quitar: () => onCambiar({ entroDesde: undefined, entroHasta: undefined }) });
-  }
-  for (const t of TOGGLES) {
-    if (filtros[t.id]) puestos.push({ llave: t.id, rotulo: t.rotulo, quitar: () => onCambiar({ [t.id]: undefined }) });
-  }
-  if (filtros.q) puestos.push({ llave: 'q', rotulo: `«${filtros.q}»`, quitar: onLimpiarTexto });
-
-  if (puestos.length === 0) return null;
-
-  return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-      {puestos.map((p) => (
-        <span
-          key={p.llave}
-          className="flex items-center gap-1 rounded-full bg-navy/10 py-0.5 pl-2.5 pr-1 text-[11px] font-semibold text-navy-ink"
-        >
-          {p.rotulo}
-          <button
-            type="button"
-            onClick={p.quitar}
-            aria-label={`Quitar ${p.rotulo}`}
-            className="rounded-full p-0.5 transition-colors hover:bg-navy/20"
-          >
-            <X size={10} />
-          </button>
-        </span>
-      ))}
-      <button
-        type="button"
-        onClick={() => {
-          onLimpiarTexto();
-          // 🔴 Antes era un objeto literal con los 5+3 nombres escritos a mano:
-          // agregar una dimensión y olvidarse de esta línea la dejaba sin
-          // limpiar, sin que ningún test lo agarrara. Derivado de las mismas
-          // listas que ya definen qué existe. `asignadoA` y las fechas no
-          // encajan en ninguna de las dos listas (una es una lista sin
-          // conteo, las otras son un rango, no un booleano) — van sueltos acá,
-          // que es UN solo lugar y no cuatro.
-          onCambiar({
-            ...Object.fromEntries(DIMENSIONES.map((d) => [d.id, []])),
-            ...Object.fromEntries(TOGGLES.map((t) => [t.id, undefined])),
-            asignadoA: [],
-            entroPorLinea: [],
-            entroDesde: undefined,
-            entroHasta: undefined,
-          });
-        }}
-        className="ml-1 text-[11px] font-semibold text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-      >
-        Limpiar todo
-      </button>
     </div>
   );
 }

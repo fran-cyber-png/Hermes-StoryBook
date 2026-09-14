@@ -20,6 +20,10 @@ const BASE: ContactoRegistrado = {
   prioridad: 'alta',
   vendedoraId: 'centurion:job.meneses',
   distrito: 'Huari · Áncash',
+  direccion: 'Jr. Comercio 123, Huari',
+  ubicacion: 'Huari, Áncash',
+  lat: -9.34,
+  lon: -76.85,
   linea: '51963139984',
   favorito: false,
   registrado: true,
@@ -76,6 +80,18 @@ describe('quienRegistro', () => {
    */
   it('🔴 «Usuario2» y «centurion:usuario2» dan el MISMO rótulo', () => {
     expect(quienRegistro('Usuario2')).toBe(quienRegistro('centurion:usuario2'));
+  });
+
+  /**
+   * 🔴 **La misma grafía-suelta que la regla dura #4 del repo, acá en el
+   * RÓTULO.** `Luz`, `LUZ` y `luz` son la misma persona con tres capitalizaciones
+   * distintas de un `vendedora_id` que viene de dos sistemas (Cerberus,
+   * Centurión); si esta función no las colapsa, `productividad()` las suma en
+   * filas separadas y «Cuántos registró cada uno» se ve mal para esa persona.
+   */
+  it('🔴 la MISMA persona con distinta capitalización da el MISMO rótulo', () => {
+    expect(quienRegistro('LUZ')).toBe(quienRegistro('luz'));
+    expect(quienRegistro('LUZ')).toBe('Luz');
   });
 });
 
@@ -251,5 +267,16 @@ describe('productividad', () => {
 
   it('sin nadie devuelve vacío, no una fila en cero', () => {
     expect(productividad([])).toEqual([]);
+  });
+
+  /** 🔴 Misma persona, tres grafías del `vendedora_id` — tienen que sumar UNA fila. */
+  it('🔴 suma las tres grafías de la misma persona bajo un solo rótulo', () => {
+    expect(
+      productividad([
+        { vendedoraId: 'Luz', cuantos: 10 },
+        { vendedoraId: 'LUZ', cuantos: 3 },
+        { vendedoraId: 'luz', cuantos: 2 },
+      ]),
+    ).toEqual([{ nombre: 'Luz', cuantos: 15 }]);
   });
 });

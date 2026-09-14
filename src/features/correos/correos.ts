@@ -1,5 +1,6 @@
 import { ErrorApi } from '../../lib/datos/cliente';
-import { fechaCorta } from '../../lib/formato';
+import { esLineasNoLeidas } from '../../lib/datos/lineasNoLeidas';
+import { cifra, fechaCorta } from '../../lib/formato';
 import { nombreCorto } from '../../dominio/dueno';
 import type { EstadoDeCorreos, RemitentePublico, RitmoDeCorreos } from './tipos';
 
@@ -95,25 +96,6 @@ const SEPARADOR_NOMBRES = ' · ';
  * server (`correos/remitente.ts`), que es la que manda: ésta sólo adelanta el aviso.
  */
 export const FORMA_DE_CORREO = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
-
-/**
- * Un número con puntos de miles, sin depender del ICU del entorno.
- *
- * ⚠️ `toLocaleString('es')` daría lo mismo **cuando el runtime trae los datos de
- * locale completos**, y no siempre los trae: un node compilado con `small-icu`
- * devuelve `20,000`. El test afirma sobre el texto exacto, así que un formateo que
- * cambia según dónde corre convierte un candado en un flake.
- *
- * ⚠️ **Se exporta para el contador del composer, y por eso mismo no se puede
- * cambiar de forma alegremente**: el aviso del tope («sobran 5.000») y el contador
- * que la vendedora mira mientras escribe («19.812 de 20.000») tienen que contar la
- * misma cadena de la misma manera. Con una copia en el `.tsx`, el contador diría
- * que entra y el motivo diría que sobra, sobre el MISMO texto — que es #37 en su
- * forma más confusa: los dos números están a diez píxeles uno del otro.
- */
-export function conMiles(n: number): string {
-  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // LOS ADJUNTOS
@@ -319,7 +301,7 @@ export function motivoParaNoEnviar(
   // distinto en cada lado y volveríamos a tener dos criterios (#37).
   if (campos.cuerpo.length > TOPE_CUERPO) {
     const sobran = campos.cuerpo.length - TOPE_CUERPO;
-    return NO(`El correo pasa de los ${conMiles(TOPE_CUERPO)} caracteres: sobran ${conMiles(sobran)}.`);
+    return NO(`El correo pasa de los ${cifra(TOPE_CUERPO)} caracteres: sobran ${cifra(sobran)}.`);
   }
 
   return { puede: true };
@@ -509,8 +491,9 @@ export function lecturaDeError(err: unknown): LecturaDeErrorDeCorreo {
  * misma familia de defecto que este frente entero vino a arreglar (el pie del
  * composer prometiendo un `Reply-To` que no se mandaba).
  *
- * Los tres que pasan la prueba: el perímetro de auth (401), quién administra
- * remitentes (403) y el SMTP sin configurar (503) — ninguno nombra un envío. Los que
+ * Los que pasan la prueba: el perímetro de auth (401), quién administra remitentes
+ * (403), las líneas que el guard de módulo no pudo leer (el 503 `lineas_no_leidas`,
+ * ADR 0108) y el SMTP sin configurar (el resto de los 503) — ninguno nombra un envío. Los que
  * **no** pasan y por eso se quedan afuera: el 400 (acá es el destinatario, allá la
  * dirección del remitente), el 429 (el ritmo es de envíos), el 502 (el rechazo del
  * proveedor sólo existe mandando) y el 409/404 (acá es «el remitente que elegiste
@@ -530,6 +513,13 @@ function lecturaCompartida(err: ErrorApi): LecturaDeErrorDeCorreo | null {
     // mandando un correo, sólo administrando remitentes, y confundirlos haría creer
     // que se perdió el permiso de escribirle a un lead.
     return LEER('Los remitentes los administra un supervisor. Pídele que lo dé de alta.', false);
+  }
+
+  // 🔴 Antes que el 503 del SMTP: `/api/correos` va detrás del guard `deVentas`, que también
+  // contesta 503 cuando no puede leer las líneas de quien pide. No es un paso de sistemas: se dice
+  // lo que dijo el server y se puede reintentar.
+  if (esLineasNoLeidas(err)) {
+    return LEER(err.message, true);
   }
 
   if (err.status === 503) {

@@ -3,9 +3,9 @@ import { useRef, useState } from 'react';
 /**
  * UN TÍTULO QUE SE EDITA IN-PLACE — el mismo molde que ya usa `Miembros`
  * (`SelectorDeEspacio.tsx`) para renombrar un espacio: guarda al perder el
- * foco o con Enter, Escape descarta. Se reusa acá para nombrar un DIAGRAMA
- * (`AccionesDePagina.tsx`, `PantallaDividida.tsx`) — la única clase de
- * página sin un «primer renglón de texto» del que sacar un título solo.
+ * foco o con Enter, Escape descarta. Se reusa acá para nombrar un DOCUMENTO
+ * (`AccionesDePagina.tsx`, `PantallaDividida.tsx`) — una clase de página sin
+ * un «primer renglón de texto» del que sacar un título solo.
  *
  * ⚠️ VACÍO NO GUARDA. Un texto en blanco no pasa `validarTexto` del lado del
  * server (400), así que ni se manda: el campo vuelve solo al valor anterior,

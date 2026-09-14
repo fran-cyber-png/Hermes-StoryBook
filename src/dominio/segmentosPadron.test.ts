@@ -4,9 +4,9 @@ import {
   chipsDeGrupos,
   contactosDelGrupo,
   contactosSinGrupo,
-  esNadieTodavia,
+  esSinAsignar,
   grupoActivo,
-  ID_NADIE_TODAVIA,
+  ID_SIN_ASIGNAR,
   opcionesDeReparto,
   type GrupoCondensado,
   type OpcionFaceta,
@@ -103,12 +103,13 @@ describe('un grupo condensado (Etapa, Nivel)', () => {
 });
 
 describe('el control unificado de Reparto', () => {
-  test('«Nadie todavía» va PRIMERO, con el conteo de `sinRepartir`', () => {
+  // Rotulada «Sin asignar» desde ADR 0102: el mismo filtro tenía tres nombres en pantalla.
+  test('«Sin asignar» va PRIMERO, con el conteo de `sinRepartir`', () => {
     const filas = opcionesDeReparto({
       opciones: [{ valor: 'luz', contactos: 877 }],
       sinRepartir: 61506,
     });
-    expect(filas[0]).toEqual({ id: ID_NADIE_TODAVIA, rotulo: 'Nadie todavía', contactos: 61506 });
+    expect(filas[0]).toEqual({ id: ID_SIN_ASIGNAR, rotulo: 'Sin asignar', contactos: 61506 });
   });
 
   test('las vendedoras llevan el nombre corto, no la grafía cruda', () => {
@@ -123,12 +124,12 @@ describe('el control unificado de Reparto', () => {
     expect(opcionesDeReparto(undefined)).toEqual([]);
   });
 
-  test('esNadieTodavia distingue la fila especial de una vendedora real', () => {
+  test('esSinAsignar distingue la fila especial de una vendedora real', () => {
     const [nadie, vendedora] = opcionesDeReparto({
       opciones: [{ valor: 'luz', contactos: 877 }],
       sinRepartir: 61506,
     });
-    expect(esNadieTodavia(nadie)).toBe(true);
-    expect(esNadieTodavia(vendedora)).toBe(false);
+    expect(esSinAsignar(nadie)).toBe(true);
+    expect(esSinAsignar(vendedora)).toBe(false);
   });
 });

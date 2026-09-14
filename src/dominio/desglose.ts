@@ -34,5 +34,35 @@ export interface FilaDesglose {
    * campo el chip no se dibuja.
    */
   seCallo?: boolean;
+  /**
+   * EL SEMÁFORO DEL LEAD (server: `cola/semaforoSql.ts`, #826): cuánto quiere
+   * comprar. Opcional por lo mismo que los otros tres — un server sin S.1 no
+   * lo manda, y ahí los recortes «Verdes · Ámbar · Grises · Rojos» no se
+   * ofrecen (regla del cero: sin el campo, cada conteo da 0).
+   */
+  luz?: 'gris' | 'verde' | 'ambar' | 'rojo';
+  /**
+   * NACIÓ HOY — lo cuenta el server contra el `?inicioDeHoy=` que resuelve el
+   * navegador (el hoy de la vendedora, no el del server, #421): el primer mensaje
+   * de la conversación, entrante o saliente, es de hoy. En «Nunca contestaron» eso
+   * es la difusión del día, que es lo que quien supervisa quiere ver ahí.
+   * Opcional por lo mismo que los otros cuatro: un server que no lo manda no dice
+   * «0 hoy», no dice nada (`vistas/tablero.ts#contarHoy`).
+   *
+   * 🔴 **No es `escribioHoy`**, el recorte que abre el Dashboard: ése es el primer
+   * ENTRANTE de toda la historia (450 un día en que nacieron 1.800). Dos hechos,
+   * dos palabras: acá «nuevas», allá «escribieron por primera vez» (#37).
+   */
+  nacioHoy?: boolean;
+  /**
+   * DE QUÉ CANAL Y TIPO ES LA FILA — sólo con `?mesaPorCanal=1` (el Pipeline de
+   * campaña, 13-sep-2026). Con esa marca el desglose cuenta TODOS los canales del
+   * rango puesto, y cada fila dice el suyo: la card de cada columna reparte por
+   * canal y la mesa se queda con las del canal elegido (`vistas/canalDeMesa.ts`).
+   * Ausentes = un server viejo o un pedido sin la marca, donde el desglose ya
+   * viene recortado por el canal pedido.
+   */
+  canal?: 'whatsapp' | 'facebook' | 'instagram' | 'landing' | (string & {});
+  tipo?: 'mensaje' | 'comentario' | 'lead' | (string & {});
   n: number;
 }

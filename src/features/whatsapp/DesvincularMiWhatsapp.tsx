@@ -15,6 +15,12 @@ import { useDesvincularMiLinea } from './miLinea';
  * borra un mensaje — el event store es append-only — retira la asignación
  * (`numero_vendedora`) para que el número deje de figurar como tuyo; el
  * comentario completo vive en el server, que es quien decide de verdad.
+ *
+ * ⚠️ **Las dos opciones cierran la sesión, así que las dos ocultan la
+ * previsualización** (bandeja Y conversación) mientras dura — la diferencia
+ * NO es "se ve" vs "no se ve", es si el número sigue siendo tuyo. "Mantener
+ * los chats" no borra ni suelta nada: todo vuelve solo, completo, en cuanto
+ * vuelves a escanear el QR (7-sep-2026).
  */
 export function DesvincularMiWhatsapp({ onCerrar }: { onCerrar: () => void }) {
   useEscape(onCerrar);
@@ -37,10 +43,16 @@ export function DesvincularMiWhatsapp({ onCerrar }: { onCerrar: () => void }) {
   return (
     <>
       {/* Mismo arreglo que `VincularMiWhatsapp`/`ConfiguracionPerfil`: el
-          contenedor de z-50 cubre toda la pantalla y tapaba el overlay de
-          abajo — el click afuera nunca llegaba. */}
-      <div className="fixed inset-0 z-40 bg-navy/30 backdrop-blur-[2px]" aria-hidden="true" />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onCerrar}>
+          contenedor de z-58 cubre toda la pantalla y tapaba el overlay de
+          abajo — el click afuera nunca llegaba.
+          🔴 z-55/z-58 — mismo motivo que en `VincularMiWhatsapp` (ver su
+          docblock): este modal se abre SIEMPRE desde `ConfiguracionPerfil`,
+          que ya ocupa z-40/z-50, y con esos mismos números su tarjeta quedaba
+          por encima del velo de ESTE modal — Configuración se veía sin
+          atenuar detrás. Por debajo de z-[60] a propósito: ahí viven las
+          notificaciones de `Avisos.tsx`. */}
+      <div className="fixed inset-0 z-[55] bg-navy/30 backdrop-blur-[2px]" aria-hidden="true" />
+      <div className="fixed inset-0 z-[58] flex items-center justify-center p-4" onClick={onCerrar}>
         <div
           role="dialog"
           aria-modal="true"

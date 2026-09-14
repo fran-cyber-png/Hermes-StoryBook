@@ -117,12 +117,10 @@ function AccionesFicha({ telefono, onEscribir, onVenta }: { telefono: string; on
  * padrón es una copia de icarus y no tiene folios ni montos por venta.
  */
 export function VistaPersonas({
-  telefonoInicial,
   onEscribir,
   miVendedora,
   onMandarCorreo,
 }: {
-  telefonoInicial?: string | null;
   /** Puente a Mensajes (Fase 3): abre (o crea) el chat con ese número. */
   onEscribir?: (telefono: string) => void;
   /** Quién mira — la `HojaContacto` del padrón la necesita (ADR 0037). */
@@ -130,15 +128,23 @@ export function VistaPersonas({
   /** Puente a Correos: sigue de largo hasta la ficha que abre el padrón. */
   onMandarCorreo?: (destino: DestinoCorreo) => void;
 }) {
-  // Con un teléfono en la mano se abre directo en la ficha: quien llega así ya
-  // sabe a quién busca, y mostrarle la tabla primero sería un paso de más.
-  const [modo, setModo] = useState<'padron' | 'telefono' | 'campanas'>(
-    telefonoInicial ? 'telefono' : 'padron',
-  );
+  // Abre siempre en el padrón. Hasta #949 un teléfono que llegaba del radar del
+  // Dashboard la abría directo en «Buscar por teléfono»; el radar ya no existe y
+  // nadie más pasaba ese teléfono.
+  const [modo, setModo] = useState<'padron' | 'telefono' | 'campanas'>('padron');
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border bg-card px-4 py-2">
+      {/* Pestañas QUIETAS (ADR 0102): subrayado y no una píldora azul llena. En
+          esta pantalla el azul lleno es de la acción (Repartir); una pestaña
+          pintada igual compite con ella por la vista sin ser lo que se hace. */}
+      {/* En angosto las pestañas se desplazan en vez de partirse: «Buscar por
+          teléfono» en tres renglones (captura a 390 px) era peor que un scroll. */}
+      <div
+        role="tablist"
+        aria-label="Contactos"
+        className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-card px-4 [&>button]:shrink-0 [&>button]:whitespace-nowrap"
+      >
         <Solapa activa={modo === 'padron'} onClick={() => setModo('padron')}>
           <Users2 size={13} /> Padrón
         </Solapa>
@@ -172,7 +178,7 @@ export function VistaPersonas({
       ) : modo === 'campanas' ? (
         <PantallaCampanas />
       ) : (
-        <BuscarPorTelefono telefonoInicial={telefonoInicial} onEscribir={onEscribir} />
+        <BuscarPorTelefono onEscribir={onEscribir} />
       )}
     </div>
   );
@@ -190,9 +196,11 @@ function Solapa({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={activa}
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors duration-200 ${FOCO_ANILLO} ${
-        activa ? 'bg-navy text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+      className={`-mb-px flex items-center gap-1.5 border-b-2 px-2 py-2.5 text-xs font-semibold transition-colors duration-200 ${FOCO_ANILLO} ${
+        activa ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
       }`}
     >
       {children}
@@ -200,17 +208,9 @@ function Solapa({
   );
 }
 
-function BuscarPorTelefono({
-  telefonoInicial,
-  onEscribir,
-}: {
-  telefonoInicial?: string | null;
-  onEscribir?: (telefono: string) => void;
-}) {
-  const [entrada, setEntrada] = useState(telefonoInicial ?? '');
-  const [telefono, setTelefono] = useState<string | null>(
-    telefonoInicial && telefonoInicial.replace(/\D/g, '').length >= 8 ? telefonoInicial.replace(/\D/g, '') : null,
-  );
+function BuscarPorTelefono({ onEscribir }: { onEscribir?: (telefono: string) => void }) {
+  const [entrada, setEntrada] = useState('');
+  const [telefono, setTelefono] = useState<string | null>(null);
   const [recientes, setRecientes] = useState<string[]>([]);
   const [faltanDigitos, setFaltanDigitos] = useState(false);
   const [ventaAbierta, setVentaAbierta] = useState(false);
@@ -438,6 +438,9 @@ function BuscarPorTelefono({
                     telefono={telefono}
                     canal="whatsapp"
                     personaNombre={data.nombre}
+                    // Ya estamos en la rama `estado === 'cliente'`: `ventasCount`
+                    // dice si tiene alguna venta previa (postventa, no orgánico).
+                    yaCompro={data.ventasCount > 0}
                     onCerrar={() => setVentaAbierta(false)}
                   />
                 )}

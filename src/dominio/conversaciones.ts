@@ -4,6 +4,8 @@ import { api } from '../lib/datos/cliente';
 import { intervaloDeCola, streamVivo } from '../lib/datos/latido';
 import { esFiltroSec, parametrosDeCola, type EstadoCola } from './cola';
 import type { FilaDesglose } from './desglose';
+import type { FuenteOrigen } from './origen';
+import type { RecorteDelDia } from './recortesDelDia';
 
 /**
  * Una fila de la cola unificada: o un comentario suelto (FB/IG) o una
@@ -40,10 +42,30 @@ export interface Conversacion {
   /** Clase del último mensaje (imagen/video/audio/documento/sticker): para «📷 Foto» cuando no hay texto.
    *  Opcional: solo la cola (`/api/conversaciones`) la trae; el radar/agenda arman Conversacion sin ella. */
   ultima_clase?: string | null;
-  /** Origen del último mensaje (anuncio/landing): para «📣 Vino del anuncio» cuando no hay texto ni media. */
-  ultima_origen?: { fuente: string; titulo?: string | null } | null;
-  /** El PRIMER anuncio de la conversación — de acá sale el curso (#128). */
-  origen_anuncio?: { fuente: string; titulo?: string | null; adId?: string | null } | null;
+  /**
+   * Origen del último mensaje (anuncio/landing): para «📣 Vino del anuncio» cuando no hay
+   * texto ni media, y para la etiqueta de origen de la fila (`dominio/origen.ts`).
+   *
+   * ⚠️ **`ref` estaba faltando y el server SÍ lo manda.** La columna es el `payload->'origen'`
+   * entero (`consultarCola.ts`), y para una landing esa forma es `{fuente:'landing', ref}` —
+   * el código entre corchetes que la landing puso en el `wa.me`. El tipo declaraba sólo
+   * `titulo`, así que el único dato que distingue una landing de otra no se podía leer sin
+   * que TypeScript lo rechazara. Nunca dio un síntoma porque **producción no tiene ni una
+   * fila de landing** (0 en toda la historia de `events`, medido el 7-sep-2026): el hueco
+   * estaba esperando al día que la primera llegara.
+   */
+  ultima_origen?: { fuente: FuenteOrigen; titulo?: string | null; ref?: string | null } | null;
+  /**
+   * El PRIMER anuncio de la conversación — de acá sale el curso (#128) y la
+   * etiqueta de origen de la fila.
+   *
+   * ⚠️ **`fuente` es la unión cerrada `FuenteOrigen`, no `string`**: con `string`,
+   * una fuente nueva del server caía de callado en «Sin origen» y nadie se
+   * enteraba. La regla es del repo («UNA sola palabra para el origen»,
+   * `docs/reglas/embudo-cola-y-radar.md`) y el candado es el `never` de
+   * `dominio/origen.ts`.
+   */
+  origen_anuncio?: { fuente: FuenteOrigen; titulo?: string | null; adId?: string | null } | null;
   /** Derivada: hay un saliente posterior al último entrante. Nunca estado de fila. */
   respondida: boolean;
   /** Derivada: alguna vez salió un mensaje nuestro. Distinto de `respondida`
@@ -149,7 +171,7 @@ export interface Conversacion {
   cliente_compras?: number | null;
   /** EL VEREDICTO DEL BOT (`cola/botSql.ts`): el bot se frenó y espera a una
    *  persona. Ausente = no se sabe (el radar y la agenda no lo traen, y un
-   *  server sin la migración del bot tampoco). Se lee en `canales/bot.ts`. */
+   *  server sin la migración del bot tampoco). Se lee en `dominio/bot.ts`. */
   bot_escalada?: boolean | null;
   /** `caliente` · `tibio` · `frio` — lo que el bot calificó. `null` = no dijo nada. */
   bot_temperatura?: string | null;
@@ -166,6 +188,14 @@ export interface Conversacion {
    *  distinguen mirando `asignada_a`, y colapsarlos deja abierto justo el caso
    *  más trabado. La lectura la decide `dominio/tenencia.ts`, puro y con tests. */
   asignada_hasta?: string | null;
+  /** EL SEMÁFORO DEL LEAD (`dominio/semaforo.ts`, #826 S.1): cuánto quiere
+   *  comprar, no cuánto tiempo pasó. Ausente = servidor sin la migración del
+   *  semáforo (degradación honesta: el front no inventa una luz). */
+  luz?: 'gris' | 'verde' | 'ambar' | 'rojo' | null;
+  /** El porqué de la luz, en palabras — se lee en el tooltip de la tarjeta. */
+  porque?: string | null;
+  /** `'maquina'` = la razón que ganó salió del bot/LLM: se dibuja punteada. */
+  origen_semaforo?: 'maquina' | null;
 }
 
 type Pagina = {
@@ -260,6 +290,20 @@ type Pagina = {
   /** La misma foto abierta por «ya le hablamos» × precio × viva × ventana. Solo primera página. */
   desglose?: FilaDesglose[];
 };
+
+/**
+ * El id de la interacción de un COMENTARIO, o `null` si la conversación es un chat
+ * (ADR 0121). La clave `int:<id>` la arma el server (`server/src/cola/claveSql.ts`).
+ *
+ * Vive en el modelo y no en la feature que la usa primero: la leen la fila de la
+ * cola y la tarjeta del Pipeline, y una feature entrando a otra a buscar el modelo
+ * es el nudo que ADR 0057 vino a cortar.
+ */
+export function idDeComentario(c: Pick<Conversacion, 'tipo' | 'clave'>): number | null {
+  if (c.tipo !== 'comentario') return null;
+  const m = /^int:(\d+)$/.exec(c.clave);
+  return m ? Number(m[1]) : null;
+}
 
 /**
  * La cola unificada. Mismo patrón que `useInteracciones` (infinite query cacheada
@@ -389,6 +433,15 @@ export function useConversaciones(
     cargando: q.isPending,
     cargandoMas: q.isFetchingNextPage,
     cargarMas: () => void q.fetchNextPage(),
+    /**
+     * Por qué no llegó la cola, si no llegó. Con un 503 `lineas_no_leidas` (ADR 0108) el server no
+     * pudo leer las líneas de quien mira y cerró en vez de servir de más: la pantalla lo dice y
+     * ofrece reintentar. Sin esto la consulta queda en error y SIN datos, y la cola se ve vacía.
+     */
+    falla: q.isError ? q.error : null,
+    reintentar: () => void q.refetch(),
+    /** El reintento está en vuelo. */
+    reintentando: q.isFetching,
     /**
      * Cuándo se trajo esto. Al abrir la app la cola se pinta desde el caché
      * persistido, y hasta que llegue lo fresco hay que decir de cuándo es
@@ -598,8 +651,16 @@ export function useEstadoConversacion() {
 }
 
 
-/** El recorte de UNA columna del tablero. Uno por columna, nunca dos (ADR 0044). */
-export type RecorteDeColumna = 'precio' | 'ventana' | 'seguir' | 'seCallo';
+/**
+ * El recorte de UNA columna del tablero. Uno por columna, nunca dos (ADR 0044).
+ *
+ * ⚠️ **`escribioHoy` y `sinRespuesta24h` (#946) sólo se mandan a un server que los
+ * publica en `recortesDisponibles`**: a uno que no los conoce, un recorte
+ * desconocido es un 400 del tablero ENTERO. `nacioHoy` también lo acepta el
+ * server, pero ninguna pantalla lo pide: el «N nuevas hoy» se cuenta en el
+ * desglose, sin recortar nada.
+ */
+export type RecorteDeColumna = 'precio' | 'ventana' | 'seguir' | 'seCallo' | RecorteDelDia;
 
 /**
  * La franja de tiempo de una columna, ya resuelta a instantes (`vistas/franja.ts`).
@@ -631,6 +692,19 @@ interface ColumnaServida {
 
 type RespuestaTablero = Pick<Pagina, 'conteos' | 'desglose' | 'colaRecortada' | 'conLineaPropia'> & {
   columnas?: Record<string, ColumnaServida>;
+  /**
+   * Los recortes que este server sabe aplicar (#946). Ausente = un server que
+   * sólo conoce `precio` · `ventana` · `seguir` · `seCallo`, y que tampoco sabe
+   * `franjaEn=*`: su presencia es la señal de las dos cosas.
+   */
+  recortesDisponibles?: string[];
+  /**
+   * El server entendió `?mesaPorCanal=1` (13-sep-2026): el desglose y los conteos
+   * cuentan el RANGO puesto y TODOS los canales, y cada fila trae `canal` y `tipo`.
+   * Ausente = un server viejo, con el desglose de 30 días recortado por el canal
+   * pedido y sin decir de cuál es cada fila.
+   */
+  mesaPorCanal?: boolean;
 };
 
 /** `interesado,cotizado:seguir,cierre` — lo que el server sabe leer. */
@@ -664,6 +738,79 @@ export function paramsDeFranja(columnas: readonly ColumnaDelTablero[]): string {
   const p = new URLSearchParams({ franjaEn: col.etapa, desde: col.franja.desde });
   if (col.franja.hasta) p.set('hasta', col.franja.hasta);
   return `&${p}`;
+}
+
+/**
+ * EL RANGO GLOBAL DEL PIPELINE (Hoy · 7 d, #946) — la misma franja en TODAS las
+ * columnas pedidas: `franjaEn=*`.
+ *
+ * 🔴 **Al revés que `paramsDeFranja`, esto NO entra a la `queryKey`**: se arma
+ * cuando SALE el pedido, y en la clave va el rango (`vistas/mesa.ts#claveDelRango`).
+ * Con el instante adentro, «7 d» cambiaba de clave cada minuto y el tablero entero
+ * se volvía a pedir en frío: en esqueleto y tirando lo traído con «Ver más»
+ * (revisión cruzada de #956).
+ *
+ * No reabre ADR 0069: es un valor explícito que manda un control visible arriba
+ * del tablero, y sin `franjaEn` el server sigue dando 400.
+ *
+ * ⚠️ **Sólo a un server que publica `recortesDisponibles`**: uno viejo lee `*` como
+ * una columna que no existe y responde 400 al tablero entero.
+ */
+export function paramsDeRango(rango: FranjaDeColumna | null): string {
+  if (!rango) return '';
+  const p = new URLSearchParams({ franjaEn: '*', desde: rango.desde });
+  if (rango.hasta) p.set('hasta', rango.hasta);
+  return `&${p}`;
+}
+
+/**
+ * DESDE CUÁNDO ES «HOY» PARA QUIEN MIRA — `&inicioDeHoy=<ISO>`, la medianoche
+ * LOCAL del navegador. El server cuenta `nacioHoy` contra esto, y no contra su
+ * propio reloj: el hoy de la vendedora no es el del server (#421).
+ *
+ * ⚠️ **Se resuelve cuando SALE el pedido (adentro de `queryFn`), no en la
+ * `queryKey`.** La clave dice QUÉ lista es; cuántas llegaron hoy es un conteo que
+ * depende del momento, igual que `viva` (< 24 h), que tampoco va en la clave.
+ * Resolviéndolo al pedir, la app abierta de un día para otro ya pregunta por el
+ * hoy nuevo en el próximo refresco, sin depender de que algo la repinte.
+ *
+ * ⚠️ **Se manda SIEMPRE**: `/tablero` lee sólo los parámetros que conoce
+ * (`comunesDelQuery`, `parsearFranja`), así que un server que todavía no cuenta
+ * `nacioHoy` lo ignora y el front puede salir antes que él.
+ */
+export function paramDeHoy(ahora: Date): string {
+  const medianoche = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
+  return `&${new URLSearchParams({ inicioDeHoy: medianoche.toISOString() })}`;
+}
+
+/**
+ * El canal que acota el tablero y, cuando hace falta, su `tipo`: Facebook y
+ * Messenger comparten `canal=facebook`, y lo que los separa es `comentario` ·
+ * `mensaje`. Vive en el dominio porque lo leen `useTablero` y la regla de la mesa
+ * (`vistas/canalDeMesa.ts`), y el dominio no puede importar de una feature.
+ */
+export interface AlcanceDeCanal {
+  canal: string;
+  tipo: string | null;
+}
+
+/**
+ * Los parámetros del alcance del tablero, listos para pegar en la URL (con su `&`).
+ *
+ * ⚠️ **El canal viaja con su `tipo` cuando lo tiene.** `canal=facebook` solo trae
+ * los comentarios Y los DMs de Messenger: lo que los separa es `tipo`
+ * (`comentario` · `mensaje`). Quién decide el par es `vistas/canalDeMesa.ts`
+ * (el ícono o el puente del Dashboard), no esta función.
+ */
+function paramsDeAlcance(linea: string | null, canal: AlcanceDeCanal | null): string {
+  const p = new URLSearchParams();
+  if (linea) p.set('linea', linea);
+  if (canal) {
+    p.set('canal', canal.canal);
+    if (canal.tipo) p.set('tipo', canal.tipo);
+  }
+  const texto = p.toString();
+  return texto ? `&${texto}` : '';
 }
 
 /** Sin repetidas y conservando el orden: la primera aparición de cada clave manda. */
@@ -701,24 +848,110 @@ function sinRepetir(filas: readonly Conversacion[]): Conversacion[] {
  * Darle paginación por columna al endpoint nuevo sería complicar el contrato
  * para el 3 % — y ese 3 % paga un `todo` que ya pagaba antes.
  */
-export function useTablero(columnas: readonly ColumnaDelTablero[]) {
+export function useTablero(
+  columnas: readonly ColumnaDelTablero[],
+  /**
+   * EL ALCANCE DEL TABLERO ENTERO: por qué línea o por qué canal (el puente del
+   * Dashboard, ADR 0104). El server ya sabe leer los dos (`comunesDelQuery`:
+   * `?linea=`, `?canal=`, `?tipo=`). A diferencia del recorte, va a TODAS las
+   * columnas, y por eso vive aparte de cada una.
+   */
+  alcance: {
+    linea?: string | null;
+    /**
+     * El canal y, cuando hace falta, su `tipo` (Facebook = comentarios, Messenger =
+     * DMs: comparten `canal=facebook`). Lo decide `vistas/canalDeMesa.ts`.
+     */
+    canal?: AlcanceDeCanal | null;
+    /**
+     * EL RANGO DE LA MESA (Hoy · 7 d, #946): la misma franja en TODAS las
+     * columnas. `null` = los 30 días de la cola. Nunca junto a la franja de una
+     * columna: la mesa los excluye (`vistas/mesa.ts`), y dos `franjaEn` en el
+     * mismo pedido no son una lista que el server sepa servir.
+     *
+     * `clave` entra a la `queryKey`; `limites` se resuelve cuando SALE cada
+     * pedido, igual que `inicioDeHoy` (ver `paramsDeRango`). ⚠️ `limites` tiene
+     * que ser una función ESTABLE (`vistas/mesa.ts#rangoDelTablero`): es
+     * dependencia de `cargarMas`.
+     */
+    rango?: { clave: string; limites: (ahora: Date) => FranjaDeColumna } | null;
+    /**
+     * LOS OTROS RANGOS, PRECARGADOS DETRÁS (11-sep-2026). La mesa arranca en «Hoy»
+     * y se piden «7 d» y «30 d» recién cuando «Hoy» ya contestó, de a uno: cambiar
+     * de rango muestra lo precargado al instante y lo refresca por debajo.
+     *
+     * ⚠️ Es la consulta más cara del repo (ver arriba), así que tiene dos frenos:
+     * sale DESPUÉS de la visible, nunca a la par, y no se repite si lo precargado
+     * tiene menos de un minuto. `null` en `clave` = los 30 días de la cola.
+     */
+    precargar?: readonly ({ clave: string; limites: (ahora: Date) => FranjaDeColumna } | null)[];
+    /**
+     * EL DESGLOSE POR CANAL (`?mesaPorCanal=1`, Pipeline de campaña, 13-sep-2026):
+     * todos los canales en el rango puesto, cada fila con el suyo. Cambia la FORMA
+     * de la respuesta, así que entra a la `queryKey`: una foto de antes, restaurada
+     * de IndexedDB (ADR 0007), no puede pasar por una de éstas.
+     */
+    mesaPorCanal?: boolean;
+  } = {},
+) {
   const clave = claveDeColumnas(columnas);
-  const franja = paramsDeFranja(columnas);
+  const rangoClave = alcance.rango?.clave ?? null;
+  const rangoLimites = alcance.rango?.limites ?? null;
+  // La franja de UNA columna sí entra con sus instantes: «Últimos 30 min» se mueve
+  // por minuto a propósito (`vistas/franja.ts#limitesDe`).
+  const franjaDeColumna = paramsDeFranja(columnas);
+  const lineaPedida = alcance.linea ?? null;
+  const canalPedido = alcance.canal ?? null;
+  // Entra a la clave: otra línea u otro canal es OTRA lista, no un conteo que envejece.
+  // `mesaPorCanal` va en el mismo tramo y sólo cuando se pide: así la clave de ventas
+  // no cambia, y «Ver más» —que arma sus parámetros aparte— no lo manda a `GET /`.
+  const alcanceUrl = paramsDeAlcance(lineaPedida, canalPedido) + (alcance.mesaPorCanal ? '&mesaPorCanal=1' : '');
 
-  const q = useQuery({
+  /** La consulta de un rango: la misma para la visible y para las precargadas. */
+  const consultaDe = (
+    rango: { clave: string; limites: (ahora: Date) => FranjaDeColumna } | null,
+    franjaCol: string,
+  ) => ({
     // 🔴 ARRANCA CON `conversaciones` PORQUE EL SSE INVALIDA ESE PREFIJO. Con una
     // clave propia el tablero dejaría de refrescarse al llegar un mensaje y sólo
     // se enteraría por el reloj — que con el push vivo son 5 minutos.
-    queryKey: ['conversaciones', 'tablero', clave, franja],
-    queryFn: () =>
-      api<RespuestaTablero>(
-        `/api/conversaciones/tablero?columnas=${encodeURIComponent(clave)}&limit=30${franja}`,
-      ),
+    queryKey: ['conversaciones', 'tablero', clave, franjaCol, rango?.clave ?? null, alcanceUrl],
+    queryFn: () => {
+      const ahora = new Date();
+      const franja = rango ? paramsDeRango(rango.limites(ahora)) : franjaCol;
+      return api<RespuestaTablero>(
+        `/api/conversaciones/tablero?columnas=${encodeURIComponent(clave)}&limit=30${franja}${alcanceUrl}${paramDeHoy(ahora)}`,
+      );
+    },
+  });
+
+  const q = useQuery({
+    ...consultaDe(rangoLimites && rangoClave ? { clave: rangoClave, limites: rangoLimites } : null, franjaDeColumna),
     // El mismo ritmo que la cola de Mensajes, por la misma razón: con el stream
     // vivo el poll es la red y no la fuente (`lib/datos/latido.ts`).
     refetchOnWindowFocus: true,
     refetchInterval: () => intervaloDeCola(streamVivo(), Math.random()),
   });
+
+  const qc = useQueryClient();
+  const precargar = alcance.precargar ?? [];
+  const clavesAPrecargar = precargar.map((r) => r?.clave ?? 'cola').join(',');
+  useEffect(() => {
+    // Sólo con la visible ya contestada, y sin franja de columna: la mesa apaga la
+    // franja al cambiar de rango, así que una precarga con ella no se usaría nunca.
+    if (!q.isSuccess || franjaDeColumna || precargar.length === 0) return;
+    let vivo = true;
+    void (async () => {
+      for (const r of precargar) {
+        if (!vivo) return;
+        await qc.prefetchQuery({ ...consultaDe(r, ''), staleTime: 60_000 }).catch(() => {});
+      }
+    })();
+    return () => {
+      vivo = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.isSuccess, clave, franjaDeColumna, alcanceUrl, clavesAPrecargar]);
 
   /**
    * Las páginas que «Cargar más» trajo, por columna. Viven acá y no en la query
@@ -736,7 +969,7 @@ export function useTablero(columnas: readonly ColumnaDelTablero[]) {
    */
   useEffect(() => {
     setExtra({});
-  }, [clave, franja]);
+  }, [clave, franjaDeColumna, rangoClave, alcanceUrl]);
 
   const cargarMas = useCallback(
     async (col: ColumnaDelTablero, yaTengo: number) => {
@@ -744,12 +977,23 @@ export function useTablero(columnas: readonly ColumnaDelTablero[]) {
       try {
         const p = new URLSearchParams({ etapa: col.etapa, limit: '30', offset: String(yaTengo) });
         if (col.recorte) p.set(col.recorte, '1');
-        // La página 2 tiene que traer LA MISMA lista: sin la franja, «Ver más»
-        // llenaría la columna de tarjetas que el chip excluye.
-        if (col.franja) {
+        // La página 2 es de la MISMA línea y el MISMO canal: sin esto, «Ver más»
+        // traería de todas.
+        for (const [k, v] of new URLSearchParams(paramsDeAlcance(lineaPedida, canalPedido).slice(1))) p.set(k, v);
+        // La página 2 tiene que traer LA MISMA lista: sin la franja —la de la
+        // columna o el rango de la mesa—, «Ver más» llenaría la columna de
+        // tarjetas que el chip excluye. `GET /` pide UNA etapa, así que nombra
+        // ésa y nunca `*`.
+        const franjaDeLaPagina = col.franja ?? rangoLimites?.(new Date()) ?? null;
+        if (franjaDeLaPagina) {
           p.set('franjaEn', col.etapa);
-          p.set('desde', col.franja.desde);
-          if (col.franja.hasta) p.set('hasta', col.franja.hasta);
+          p.set('desde', franjaDeLaPagina.desde);
+          if (franjaDeLaPagina.hasta) p.set('hasta', franjaDeLaPagina.hasta);
+        }
+        // «Escribió hoy» sin `inicioDeHoy` es un 400 (#946): el hoy es el de quien
+        // mira, igual que en el tablero.
+        if (col.recorte === 'escribioHoy') {
+          for (const [k, v] of new URLSearchParams(paramDeHoy(new Date()).slice(1))) p.set(k, v);
         }
         const r = await api<Pagina>(`/api/conversaciones?${p}`);
         setExtra((e) => ({
@@ -763,7 +1007,7 @@ export function useTablero(columnas: readonly ColumnaDelTablero[]) {
         setTrayendo(null);
       }
     },
-    [],
+    [lineaPedida, canalPedido, rangoLimites],
   );
 
   const porColumna = Object.fromEntries(
@@ -792,10 +1036,42 @@ export function useTablero(columnas: readonly ColumnaDelTablero[]) {
     }),
   );
 
+  /**
+   * QUÉ RECORTES SABE HACER EL SERVER (#946), recordado entre pedidos. Se lee de
+   * la última respuesta FRESCA y no de `q.data`, que se vacía al cambiar de clave:
+   * tocar «Hoy» apagaría el mismo botón mientras llega la lista nueva.
+   *
+   * 🔴 **Fresca quiere decir de ESTA visita** (`isFetchedAfterMount`). El caché de
+   * consultas se restaura de IndexedDB antes del primer render (ADR 0007): una
+   * foto de un server que sí publicaba el campo encendería «Hoy» contra uno que
+   * hoy le responde 400 al tablero entero. Y una respuesta fresca SIN el campo lo
+   * borra: el server volvió atrás.
+   *
+   * ⚠️ Y no con `placeholderData: (previo) => previo`, que es como el resto del
+   * repo conserva datos entre claves: acá dejaría las columnas VIEJAS dibujadas
+   * debajo del rango nuevo mientras llega la lista — el defecto que
+   * `paramsDeFranja` persigue. Lo único que tiene que sobrevivir es este dato.
+   */
+  const fresca = q.isFetchedAfterMount ? q.data : undefined;
+  const [recortesDisponibles, setRecortesDisponibles] = useState<string[] | undefined>(undefined);
+  if (fresca && (fresca.recortesDisponibles?.join(',') ?? null) !== (recortesDisponibles?.join(',') ?? null)) {
+    setRecortesDisponibles(fresca.recortesDisponibles);
+  }
+
   return {
     porColumna,
+    recortesDisponibles,
+    /**
+     * ¿El pedido de ESTA clave ya contestó en esta visita? No es `!cargando`: una
+     * foto restaurada del caché (ADR 0007) no dice qué sabe hacer el server de hoy.
+     */
+    contesto: q.isFetchedAfterMount,
+    /** El pedido de esta clave FALLÓ: contestó, pero no dice nada de qué sabe hacer el server. */
+    fallo: q.isError,
     /** La foto del embudo, contada UNA vez para todas las columnas. */
     desglose: q.data?.desglose,
+    /** El desglose es del rango y de todos los canales, fila por fila (`mesaPorCanal`). */
+    mesaPorCanal: q.data?.mesaPorCanal === true,
     conteos: q.data?.conteos,
     cargando: q.isPending,
     actualizando: q.isFetching,

@@ -37,11 +37,22 @@
  * de scrollear, y lo que deja que la capa se pinte una sola vez en vez de
  * recalcularse en cada rueda del mouse.
  *
- * ⚠️ **LO QUE ESTO NO PUEDE HACER, DICHO DE FRENTE.** Las coordenadas son
- * absolutas, así que las anotaciones quedan ancladas al DOCUMENTO, no a las
- * palabras. Si después se escribe un párrafo más arriba, el texto baja y el
- * círculo se queda donde estaba. Un PDF anotado tiene la misma limitación —y
- * funciona— porque el documento no se reacomoda. Acá sí puede.
+ * ══ Y EL `ancla` ES LA CORRECCIÓN, NO UN SEGUNDO SISTEMA DE COORDENADAS ══════
+ *
+ * Hasta el 8-sep-2026 esto era, dicho de frente, un límite: las coordenadas son
+ * absolutas, así que las anotaciones quedaban ancladas al DOCUMENTO y no a las
+ * palabras — escribir un párrafo más arriba bajaba el texto y dejaba el círculo
+ * donde estaba. Un PDF anotado tiene esa misma limitación y funciona, porque el
+ * documento no se reacomoda. Acá sí puede, y el pedido fue justamente que la
+ * anotación seleccionara pareja al párrafo que tenía al lado.
+ *
+ * `ancla` (opcional, ver `Comun`) guarda a qué bloque de BlockNote estaba pegada
+ * la figura la última vez que se creó o se movió, y el offset (`dx`/`dy`) desde
+ * la esquina de ese bloque. Este archivo sigue sin saber nada de DOM ni de
+ * BlockNote: solo guarda el dato. Quien lo RESUELVE —mide el bloque, calcula si
+ * se corrió, y desplaza la figura con `moverFigura`— es `dibujo/anclaje.ts`, que
+ * sí puede tocar el DOM. Sin ancla, o si el bloque se borró, la figura se queda
+ * donde estaba: la limitación de antes sigue siendo el resultado final ahí.
  *
  * ══ ESTE ARCHIVO ES PURO ════════════════════════════════════════════════════
  *
@@ -66,6 +77,19 @@ export const LIMITE_FIGURAS_BYTES = 64 * 1024;
 
 /** Un punto: `[x, y]` en píxeles del área del documento. */
 export type Punto = [number, number];
+
+/**
+ * A QUÉ BLOQUE DE TEXTO ESTÁ PEGADA UNA FIGURA. `dx`/`dy` son el offset desde
+ * la esquina superior izquierda de `bloqueId` hasta el punto de anclaje de la
+ * figura (su primer punto, o su esquina, según la clase), en el mismo píxel
+ * del documento que todo lo demás. Quien la resuelve y la mantiene al día es
+ * `dibujo/anclaje.ts` — acá es solo el dato.
+ */
+export interface Ancla {
+  bloqueId: string;
+  dx: number;
+  dy: number;
+}
 
 /** Las que se dibujan arrastrando de una esquina a la otra. */
 export type ClaseDeDosPuntos = 'linea' | 'flecha' | 'rectangulo' | 'elipse';
@@ -95,6 +119,8 @@ export interface Comun {
   capaId: string;
   /** Grados. Declarada para el futuro; hoy nadie la lee. */
   rotacion?: number;
+  /** A qué párrafo sigue pegada, si a alguno. Ver el docblock de `Ancla`. */
+  ancla?: Ancla;
 }
 
 /**
@@ -228,23 +254,38 @@ function puntoLimpio(p: Punto): Punto {
  * escapado dentro de JSON, y el server no podría ni contar las figuras sin
  * parsear a mano.
  */
+function anclaLimpia(a: Ancla | undefined): Ancla | undefined {
+  return a ? { bloqueId: a.bloqueId, dx: redondear(a.dx), dy: redondear(a.dy) } : undefined;
+}
+
 export function paraGuardar(figuras: Figura[]): Figura[] {
   return figuras.map((f) => {
-    if ('puntos' in f) return { ...f, puntos: f.puntos.map(puntoLimpio) };
-    if ('en' in f) return { ...f, en: puntoLimpio(f.en) };
-    if ('texto' in f && 'ancho' in f) {
-      return { ...f, x: redondear(f.x), y: redondear(f.y), ancho: redondear(f.ancho), alto: redondear(f.alto) };
-    }
-    if ('archivo' in f) {
+    const ancla = anclaLimpia(f.ancla);
+    // `ancla` es opcional: con `undefined` no se agrega la clave, en vez de
+    // guardar un `"ancla": null` o `"ancla": undefined` que después hay que
+    // filtrar en cada lector.
+    const base = ancla ? { ...f, ancla } : f;
+    if ('puntos' in base) return { ...base, puntos: base.puntos.map(puntoLimpio) };
+    if ('en' in base) return { ...base, en: puntoLimpio(base.en) };
+    if ('texto' in base && 'ancho' in base) {
       return {
-        ...f,
-        x: redondear(f.x),
-        y: redondear(f.y),
-        ancho: redondear(f.ancho),
-        alto: redondear(f.alto),
+        ...base,
+        x: redondear(base.x),
+        y: redondear(base.y),
+        ancho: redondear(base.ancho),
+        alto: redondear(base.alto),
       };
     }
-    return { ...f, desde: puntoLimpio(f.desde), hasta: puntoLimpio(f.hasta) };
+    if ('archivo' in base) {
+      return {
+        ...base,
+        x: redondear(base.x),
+        y: redondear(base.y),
+        ancho: redondear(base.ancho),
+        alto: redondear(base.alto),
+      };
+    }
+    return { ...base, desde: puntoLimpio(base.desde), hasta: puntoLimpio(base.hasta) };
   });
 }
 
@@ -278,6 +319,21 @@ function coordenadaDe(v: unknown, siNo: number): number {
 
 function idDe(v: unknown): string {
   return typeof v === 'string' && v !== '' ? v : nuevoId();
+}
+
+/**
+ * `ancla` GUARDADO → `Ancla`, o `undefined` si no se entiende. Un `bloqueId`
+ * vacío o un offset no finito no es un ancla más chica: es NINGUNA, porque
+ * resolverla contra un bloque que no existe (`''`) tiraría la figura al origen
+ * del documento en el primer reflow.
+ */
+function anclaDe(v: unknown): Ancla | undefined {
+  if (!esObjeto(v)) return undefined;
+  const { bloqueId, dx, dy } = v;
+  if (typeof bloqueId !== 'string' || bloqueId === '') return undefined;
+  if (typeof dx !== 'number' || !Number.isFinite(dx)) return undefined;
+  if (typeof dy !== 'number' || !Number.isFinite(dy)) return undefined;
+  return { bloqueId, dx, dy };
 }
 
 /**
@@ -315,11 +371,13 @@ export function parsear(valor: unknown): Figura[] {
     // que existieran la opacidad y las capas tiene que abrirse igual, opaca y en
     // la capa base. Sin esto, `undefined` llegaría a un `globalAlpha` y la figura
     // se pintaría transparente sin que nadie lo haya pedido.
+    const ancla = anclaDe(f.ancla);
     const comun = {
       id,
       opacidad: typeof f.opacidad === 'number' && f.opacidad >= 0 && f.opacidad <= 1 ? f.opacidad : OPACIDAD_PLENA,
       capaId: typeof f.capaId === 'string' && f.capaId !== '' ? f.capaId : CAPA_BASE,
       ...(typeof f.rotacion === 'number' && Number.isFinite(f.rotacion) ? { rotacion: f.rotacion } : {}),
+      ...(ancla ? { ancla } : {}),
     };
 
     if (CLASES_DE_MANO.includes(f.clase as ClaseDeMano)) {
@@ -569,6 +627,21 @@ export function figurasEnCaja(figuras: Figura[], caja: Caja): string[] {
       return !(c.x2 < x1 || c.x1 > x2 || c.y2 < y1 || c.y1 > y2);
     })
     .map((f) => f.id);
+}
+
+/**
+ * EL PUNTO QUE SE USA PARA ANCLAR UNA FIGURA — el mismo que se le pasó a
+ * `resolverAncla` cuando se creó: el primer punto para lo dibujado a mano
+ * alzada o entre dos puntos, `en` para un rótulo, la esquina para una caja o
+ * una imagen. Lo usa `CapaDeAnotaciones` para RE-anclar después de mover o
+ * redimensionar — sin esto, arrastrar un dibujo a otro párrafo lo dejaría
+ * «recordando» el de antes.
+ */
+export function puntoDeAncla(f: Figura): Punto {
+  if ('puntos' in f) return f.puntos[0];
+  if ('en' in f) return f.en;
+  if ('desde' in f) return f.desde;
+  return [f.x, f.y];
 }
 
 /** La misma figura, corrida. Devuelve una nueva: nada se muta en su lugar. */

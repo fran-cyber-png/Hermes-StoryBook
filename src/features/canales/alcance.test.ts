@@ -63,6 +63,54 @@ describe('opcionesDeLinea', () => {
     expect(seDibujaElSelector(o)).toBe(true);
   });
 
+  /**
+   * 🔴 EL CASO DE ALEX (7-sep-2026). Supervisor con UNA línea en el mapa: con la
+   * regla vieja quedaba con una sola opción, el selector desaparecía y
+   * `lineaEfectiva` le clavaba Ventas Meta — 2.346 conversaciones de las 7.178
+   * que el server sí le servía.
+   *
+   * «Todas» tiene que ir **primera**: `lineaEfectiva` cae a `opciones[0]` cuando
+   * lo guardado ya no es una opción, y ahí es donde se decide qué ve al entrar.
+   */
+  it('quien VE TODO no queda confinado a su línea: «Todas» primera, «Las mías» y todas las vivas', () => {
+    const propias = LAS_CUATRO.map((l) => (l.numero === '51984429504' ? { ...l, mias: true } : l));
+    const o = opcionesDeLinea(propias, true, true);
+    expect(o.map((x) => x.etiqueta)).toEqual([
+      'Todas',
+      'Las mías',
+      'Ventas Perú',
+      'Walter Ventas',
+      'Venta Peru',
+      'Ventas Meta',
+    ]);
+    expect(seDibujaElSelector(o)).toBe(true);
+    expect(lineaEfectiva('51984429504', o)).toBe('51984429504');
+    // Y lo que importa de verdad: al entrar sin nada guardado, ve la mesa entera.
+    expect(lineaEfectiva('', o)).toBe('');
+  });
+
+  /**
+   * Quien ve todo y NO tiene línea en el mapa —`alan` (admin) y
+   * `ventas10@grupogoberna.com` (supervisor), los dos casos vivos en
+   * producción— no gana un «Las mías» que no lleva a ningún lado.
+   */
+  it('quien ve todo SIN líneas en el mapa no recibe «Las mías»', () => {
+    const o = opcionesDeLinea(LAS_CUATRO, false, true);
+    expect(o.map((x) => x.etiqueta)).toEqual([
+      'Todas',
+      'Ventas Perú',
+      'Walter Ventas',
+      'Venta Peru',
+      'Ventas Meta',
+    ]);
+  });
+
+  it('sin `veTodo` la regla es EXACTAMENTE la de antes: el default no abre nada', () => {
+    const propias = LAS_CUATRO.map((l) => (l.numero === '51984429504' ? { ...l, mias: true } : l));
+    expect(opcionesDeLinea(propias, true)).toEqual(opcionesDeLinea(propias, true, false));
+    expect(opcionesDeLinea(propias, true).map((x) => x.etiqueta)).toEqual(['Ventas Meta']);
+  });
+
   it('una sola línea viva y sin mapa sigue sin dibujar selector (regla vieja, intacta)', () => {
     expect(seDibujaElSelector(opcionesDeLinea([L('51986394450', 'Ventas Perú')], false))).toBe(true);
     // ↑ «Todas» + la línea son dos opciones. Que el shell lo esconda con una sola

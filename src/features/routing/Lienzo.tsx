@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { Boxes, ChevronRight, FileText, Megaphone, User } from 'lucide-react';
+import { Boxes, ChevronRight, FileText, Megaphone, Percent, User } from 'lucide-react';
 import {
   alSoltar,
   claveDeCable,
@@ -57,12 +57,15 @@ export function Lienzo({
   onConectar,
   onCortar,
   onEntrar,
+  onAdentro,
 }: {
   columnas: ColumnaLienzo[];
   cables: CableLienzo[];
   onConectar: (de: string, a: string) => void;
   onCortar: (de: string, a: string) => void;
   onEntrar?: (id: string) => void;
+  /** Tocar un renglón de adentro que tenga `accion` (hoy: repartir un anuncio, #1002). */
+  onAdentro?: (id: string) => void;
 }) {
   const marco = useRef<HTMLDivElement>(null);
   const puertos = useRef(new Map<string, { izq?: HTMLElement; der?: HTMLElement }>());
@@ -329,6 +332,7 @@ export function Lienzo({
                 }
               }}
               onEntrar={n.abrible && onEntrar ? () => onEntrar(n.id) : undefined}
+              onAdentro={onAdentro}
             />
           ))}
         </div>
@@ -370,6 +374,7 @@ function Nodo({
   onTecla,
   onTocar,
   onEntrar,
+  onAdentro,
 }: {
   nodo: NodoLienzo;
   armado: boolean;
@@ -383,6 +388,7 @@ function Nodo({
   onTecla: (e: React.KeyboardEvent, id: string, lado: 'izq' | 'der') => void;
   onTocar: () => void;
   onEntrar?: () => void;
+  onAdentro?: (id: string) => void;
 }) {
   const Icono = ICONO[nodo.icono];
   const tono = TONO[nodo.icono];
@@ -487,9 +493,12 @@ function Nodo({
         )}
         {nodo.pie && <p className="truncate pl-[18px] text-[10px] text-muted-foreground">{nodo.pie}</p>}
 
-        {/* LO DE ADENTRO. Va DENTRO de la tarjeta y no en una columna aparte: los
-            anuncios no se cablean, y sacarlos afuera obligaría a mover el
-            producto y las campañas hermanas fuera de la vista. */}
+        {/* LO DE ADENTRO. Va DENTRO de la tarjeta y no en una columna aparte:
+            sacarlo afuera obligaría a mover el producto y las campañas hermanas
+            fuera de la vista. Desde #1002 un anuncio SÍ tiene regla —su reparto
+            en porcentajes— pero NO un puerto: esta lista tiene scroll propio, y un
+            cable que sale de un renglón que se desplaza no tiene dónde anclarse.
+            Se edita en su hoja, con el botón del renglón. */}
         {/* ⚠️ Con tope de alto: hay campañas de 40 anuncios y sin esto el nodo
             empuja al producto y a las hermanas fuera de la pantalla — que es
             exactamente lo que este cambio vino a evitar. */}
@@ -507,10 +516,30 @@ function Nodo({
               </p>
             ) : (
               (nodo.adentro ?? []).map((a) => (
-                <p key={a.id} className="flex items-baseline gap-1.5 pl-[18px]">
-                  <span className="min-w-0 flex-1 truncate text-[10px] text-foreground">{a.titulo}</span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">{a.pie}</span>
-                </p>
+                <div key={a.id} className="pl-[18px]">
+                  <p className="flex items-center gap-1.5">
+                    <span title={a.titulo} className="min-w-0 flex-1 truncate text-[10px] text-foreground">
+                      {a.titulo}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">{a.pie}</span>
+                    {onAdentro && a.accion && (
+                      <button
+                        type="button"
+                        onClick={() => onAdentro(a.id)}
+                        aria-label={a.accion}
+                        title={a.accion}
+                        className="-mr-1 shrink-0 rounded p-0.5 text-muted-foreground transition-colors duration-200 ease-house hover:text-navy-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                      >
+                        <Percent size={11} strokeWidth={2.2} aria-hidden />
+                      </button>
+                    )}
+                  </p>
+                  {a.detalle && (
+                    <p title={a.detalle} className="truncate text-[10px] font-medium text-navy-ink">
+                      {a.detalle}
+                    </p>
+                  )}
+                </div>
               ))
             )}
           </div>

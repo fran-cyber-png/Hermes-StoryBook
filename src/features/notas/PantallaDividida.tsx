@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import { Loader2, Notebook, Paperclip, Plus, Search, Workflow, X } from 'lucide-react';
-import { ColumnaDeEscritura, DiagramaPerezoso, EditorPerezoso } from './perezosos';
+import { Loader2, Notebook, Paperclip, Plus, Search, X } from 'lucide-react';
+import { ColumnaDeEscritura, EditorPerezoso } from './perezosos';
 import { PaginaDocumento } from './PaginaDocumento';
 import { TituloEditable } from './TituloEditable';
 import { ACEPTA_DOCUMENTOS, ErrorDeDocumento, subirDocumento } from './documentos';
@@ -19,18 +19,15 @@ import {
 /**
  * DIVIDIR PANTALLA — el panel de la derecha (17-ago-2026).
  *
- * ══ CUATRO ESTADOS, Y LOS CUATRO VIVEN ACÁ Y NO EN `Libreta.tsx` ════════════
+ * ══ TRES ESTADOS, Y LOS TRES VIVEN ACÁ Y NO EN `Libreta.tsx` ════════════════
  *
  *   1. **Eligiendo**: recién apretaste «Dividir pantalla» — buscador + lista +
- *      «Página nueva» / «Nuevo Diagrama». Local y descartable: nada se
- *      escribió todavía.
- *   2. **Creando** (texto): elegiste «Página nueva» — un editor en blanco.
- *   3. **Creando un diagrama**: elegiste «Nuevo Diagrama» — un lienzo de React
- *      Flow en blanco, con su propia barra de herramientas.
- *      En los dos casos de «creando», el primer cambio la crea (en el mismo
- *      espacio que la de la izquierda — `donde`) Y la divide en el mismo
- *      movimiento (`alCrear` dispara `dividir`).
- *   4. **Dividida**: `divididaId` (que viene de la propia nota de la
+ *      «Página nueva». Local y descartable: nada se escribió todavía.
+ *   2. **Creando** (texto): elegiste «Página nueva» — un editor en blanco. El
+ *      primer cambio la crea (en el mismo espacio que la de la izquierda —
+ *      `donde`) Y la divide en el mismo movimiento (`alCrear` dispara
+ *      `dividir`).
+ *   3. **Dividida**: `divididaId` (que viene de la propia nota de la
  *      izquierda, persistido) ya apunta a algo — se trae con `useNotaPorId` y
  *      se edita con su propio autoguardado. Es la fuente de verdad: gana
  *      sobre los estados de arriba en cuanto el server confirma, y `tipo` de
@@ -55,10 +52,7 @@ export function PantallaDividida({
   divididaId: number | null;
   /** La lista ya cargada del lugar actual, para el picker por default (sin buscar). */
   notasDisponibles: Nota[];
-  mutaciones: Pick<
-    ReturnType<typeof useMutacionesNotas>,
-    'crear' | 'editar' | 'dividir' | 'crearDiagrama' | 'autoguardarDiagrama' | 'crearDocumento'
-  >;
+  mutaciones: Pick<ReturnType<typeof useMutacionesNotas>, 'crear' | 'editar' | 'dividir' | 'crearDocumento'>;
   /**
    * Cierra el panel — eligiendo o ya persistida, las dos (`Libreta.tsx` lo
    * arma para cubrir ambas). ⚠️ Antes de 19-ago-2026 esto solo servía ANTES
@@ -68,21 +62,20 @@ export function PantallaDividida({
    */
   onCerrar: () => void;
 }) {
-  const [fase, setFase] = useState<'eligiendo' | 'creando' | 'creando-diagrama'>('eligiendo');
+  const [fase, setFase] = useState<'eligiendo' | 'creando'>('eligiendo');
   const [busqueda, setBusqueda] = useState('');
   const termino = busqueda.trim();
   const encontradas = useBuscarNotas(termino);
   const notaDerecha = useNotaPorId(divididaId);
-  const { crear, editar, dividir, crearDiagrama, autoguardarDiagrama, crearDocumento } = mutaciones;
+  const { crear, editar, dividir, crearDocumento } = mutaciones;
 
   /**
-   * ADJUNTAR UN DOCUMENTO ACÁ (26-ago-2026) — el tercer botón, al lado de
-   * «Página nueva» y «Nuevo Diagrama». No es una fase más del estado de
-   * arriba: un documento no se «va creando» de a poco como un texto o un
-   * diagrama (no hay nada que autoguardar), así que sube y divide en el
-   * mismo gesto, apenas se elige el archivo — igual que `adjuntarDocumento`
-   * en `Libreta.tsx`, pero terminando en `dividir.mutate` en vez de
-   * seleccionar la página.
+   * ADJUNTAR UN DOCUMENTO ACÁ (26-ago-2026) — el segundo botón, al lado de
+   * «Página nueva». No es una fase más del estado de arriba: un documento no
+   * se «va creando» de a poco como un texto (no hay nada que autoguardar),
+   * así que sube y divide en el mismo gesto, apenas se elige el archivo —
+   * igual que `adjuntarDocumento` en `Libreta.tsx`, pero terminando en
+   * `dividir.mutate` en vez de seleccionar la página.
    */
   const inputDocumento = useRef<HTMLInputElement | null>(null);
   const [subiendoDocumento, setSubiendoDocumento] = useState(false);
@@ -107,33 +100,20 @@ export function PantallaDividida({
   // — así una página recién creada pasa de {tipo:'nueva'} a {tipo:'nota', id}
   // sin un salto en el medio (misma garantía que `useAutoguardado` ya da).
   const destino: DestinoDeGuardado =
-    divididaId !== null
-      ? { tipo: 'nota', id: divididaId }
-      : fase === 'creando' || fase === 'creando-diagrama'
-        ? { tipo: 'nueva' }
-        : null;
+    divididaId !== null ? { tipo: 'nota', id: divididaId } : fase === 'creando' ? { tipo: 'nueva' } : null;
 
   /**
-   * ¿Estamos con un DIAGRAMA? Dos caminos llegan acá: se está creando uno
-   * ahora (`fase`), o ya se cargó uno persistido (`notaDerecha.data.tipo`).
-   * De esto depende CUÁL PAR de mutaciones usa el autoguardado — texto o
-   * diagrama son dos columnas distintas, `editar`/`crear` no sirven para una
-   * página que nunca manda `texto`/`doc`.
-   */
-  const esDiagrama = fase === 'creando-diagrama' || notaDerecha.data?.tipo === 'diagrama';
-  /**
-   * ¿ES UN DOCUMENTO? A diferencia de `esDiagrama`, no tiene una fase
-   * «creando-archivo» que mirar: como no hay nada que autoguardar, el único
-   * camino para que esto sea `true` es que la nota ya persistida (traída por
-   * `useNotaPorId`) diga `tipo: 'archivo'`.
+   * ¿ES UN DOCUMENTO? No tiene una fase «creando-archivo» que mirar: como no
+   * hay nada que autoguardar, el único camino para que esto sea `true` es que
+   * la nota ya persistida (traída por `useNotaPorId`) diga `tipo: 'archivo'`.
    */
   const esArchivo = notaDerecha.data?.tipo === 'archivo';
 
   const { estado: estadoGuardado, alCambiar } = useAutoguardado({
     destino,
     puertas: {
-      actualizar: (v) => (esDiagrama ? autoguardarDiagrama.mutateAsync({ id: v.id, diagrama: v.diagrama }) : editar.mutateAsync(v)),
-      crear: (v) => (esDiagrama ? crearDiagrama.mutateAsync({ diagrama: v.diagrama }) : crear.mutateAsync(v)),
+      actualizar: (v) => editar.mutateAsync(v),
+      crear: (v) => crear.mutateAsync(v),
     },
     alCrear: (id) => {
       // La creación y la división son DOS escrituras, pero desde afuera se ven
@@ -152,18 +132,20 @@ export function PantallaDividida({
     (n) => n.origen === 'nota' && n.id !== paginaIzquierdaId,
   );
 
-  if (divididaId !== null || fase === 'creando' || fase === 'creando-diagrama') {
+  if (divididaId !== null || fase === 'creando') {
     const notaLista = divididaId !== null ? notaDerecha.data : undefined;
     const cargando = divididaId !== null && notaDerecha.isPending;
     const fallo = divididaId !== null && notaDerecha.isError;
-    const titulo = notaLista ? tituloDeNota(notaLista) || 'Sin título' : esDiagrama ? 'Nuevo diagrama' : 'Página nueva';
+    const titulo = notaLista ? tituloDeNota(notaLista) || 'Sin título' : 'Página nueva';
 
     return (
       <div role="region" aria-label="Pantalla dividida">
         {/*
-          EL MISMO PAR `pt-8 pb-4` + `w-[21cm]` QUE `anchoDeAcciones` EN
-          `Libreta.tsx` (19-ago-2026) — antes esto era `h-11 border-b px-4` y
-          la mitad izquierda usaba `pt-8` + botones con borde: dos cajas
+          EL MISMO PAR `pt-4 pb-4` + `w-[21cm]` QUE `anchoDeAcciones` EN
+          `Libreta.tsx` (19-ago-2026, bajado de `pt-8` a `pt-4` el
+          03-sep-2026 a pedido explícito — ver el comentario 🔴 de ese
+          archivo) — antes esto era `h-11 border-b px-4` y la mitad
+          izquierda usaba su propio padding + botones con borde: dos cajas
           distintas, dos alturas distintas, y la hoja de cada lado arrancaba
           a una altura diferente. `min-h-7` en el renglón de abajo es la otra
           mitad de ESE acuerdo — mide lo mismo tenga un botón (con borde, más
@@ -174,17 +156,16 @@ export function PantallaDividida({
           margen angosto de `.hoja-a4--dividida` — el mismo acuerdo que
           `anchoDeAcciones` en `Libreta.tsx`, rama `dividiendo`.
         */}
-        <div className="mx-auto box-border w-[21cm] max-w-full px-[1.27cm] pt-8 pb-4">
+        <div className="mx-auto box-border w-[21cm] max-w-full px-[1.27cm] pt-4 pb-4">
           <div className="flex min-h-7 items-center gap-2">
-            {/* NOMBRAR EL DIAGRAMA O EL DOCUMENTO desde acá también — mismo
-                campo que en la mitad izquierda (`AccionesDePagina`). Solo
-                cuando ya existe de verdad: uno recién creado sin id todavía
-                no tiene qué editar (`notaLista` es `undefined` hasta que el
-                server confirma). */}
-            {(esDiagrama || esArchivo) && notaLista ? (
+            {/* NOMBRAR EL DOCUMENTO desde acá también — mismo campo que en la
+                mitad izquierda (`AccionesDePagina`). Solo cuando ya existe de
+                verdad: uno recién creado sin id todavía no tiene qué editar
+                (`notaLista` es `undefined` hasta que el server confirma). */}
+            {esArchivo && notaLista ? (
               <TituloEditable
                 valor={notaLista.texto}
-                placeholder={esDiagrama ? 'Nombra el diagrama' : 'Nombra el documento'}
+                placeholder="Nombra el documento"
                 onGuardar={(texto) => mutaciones.editar.mutate({ id: notaLista.id, texto })}
                 className="h-7 min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-1.5 text-xs font-medium text-muted-foreground outline-none hover:border-input focus:border-ring focus:text-foreground"
               />
@@ -192,7 +173,7 @@ export function PantallaDividida({
               <p className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">{titulo}</p>
             )}
             {(() => {
-              const r = renglonDeEstado(estadoGuardado, Boolean(notaLista?.editadoAt));
+              const r = renglonDeEstado(estadoGuardado, notaLista?.editadoAt ?? null);
               if (!r.texto) return null;
               return (
                 <span
@@ -217,25 +198,20 @@ export function PantallaDividida({
         {cargando && <p className="px-6 py-8 text-sm text-muted-foreground">Cargando…</p>}
         {fallo && <p className="px-6 py-8 text-sm text-destructive">No se pudo traer esa página.</p>}
 
-        {/* El diagrama arma su PROPIA barra de herramientas y necesita todo el
-            ancho — a diferencia del editor de texto, no pasa por la hoja A4
-            de `ColumnaDeEscritura`. Un documento tampoco: es de solo lectura,
-            así que la hoja A4 (con su margen para escribir) no aplica. */}
-        {esDiagrama
-          ? (fase === 'creando-diagrama' || notaLista) && (
-              <DiagramaPerezoso
-                key={divididaId !== null ? `div-${divididaId}` : 'div-nueva-diagrama'}
-                contenidoInicial={notaLista?.diagrama ?? undefined}
-                onCambio={(v) => alCambiar({ diagrama: v })}
-              />
+        {/* Un documento es de solo lectura, así que la hoja A4 (con su
+            margen para escribir) no aplica.
+            ⚠️ SIN `pt-3` — mismo motivo que en `Libreta.tsx`: la cabecera de
+            arriba ya mide lo mismo que la de la mitad izquierda (`pt-4 pb-4`
+            + `min-h-7` en las dos), así que un relleno propio acá bajaba el
+            visor 12px respecto de la hoja de al lado. Si cambia acá, cambiar
+            en `Libreta.tsx` también. */}
+        {esArchivo
+          ? notaLista && (
+              <div className="px-3 pb-3">
+                <PaginaDocumento key={`div-${divididaId}`} nota={notaLista} />
+              </div>
             )
-          : esArchivo
-            ? notaLista && (
-                <div className="px-3 py-3">
-                  <PaginaDocumento key={`div-${divididaId}`} nota={notaLista} />
-                </div>
-              )
-            : (fase === 'creando' || notaLista) && (
+          : (fase === 'creando' || notaLista) && (
               // Misma hoja A4 que la mitad izquierda (`.hoja-a4` se achica a
               // proporción, no se desborda): las dos mitades quedan del
               // mismo tamaño, aprovechando el ancho que el panel realmente
@@ -282,10 +258,10 @@ export function PantallaDividida({
           />
         </div>
 
-        {/* LAS TRES FORMAS DE ARRANCAR, una al lado de la otra — «Página
-            nueva» y «Nuevo Diagrama» ya estaban; «Adjuntar» es el tercer
-            botón (26-ago-2026), mismo trato que las otras dos: un clic y
-            queda dividida contra lo nuevo, sin un paso intermedio. */}
+        {/* LAS DOS FORMAS DE ARRANCAR, una al lado de la otra — «Página
+            nueva» ya estaba; «Adjuntar» es la segunda (26-ago-2026), mismo
+            trato: un clic y queda dividida contra lo nuevo, sin un paso
+            intermedio. */}
         <div className="mb-2 flex gap-1.5">
           <button
             type="button"
@@ -294,15 +270,6 @@ export function PantallaDividida({
           >
             <Plus className="size-4" />
             Página nueva
-          </button>
-          <button
-            type="button"
-            onClick={() => setFase('creando-diagrama')}
-            title="Un lienzo de nodos y conexiones (React Flow), en vez de texto"
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition hover:bg-muted"
-          >
-            <Workflow className="size-4" />
-            Nuevo Diagrama
           </button>
           <button
             type="button"

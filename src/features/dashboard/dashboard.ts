@@ -1,15 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/datos/cliente';
 import { intervaloConStream, streamVivo } from '../../lib/datos/latido';
-import type { Conversacion } from '../../dominio/conversaciones';
 
 /**
- * EL RADAR — datos y derivaciones del dashboard.
+ * EL RADAR DE ANTES — `GET /api/dashboard`, lo que el Dashboard pedía hasta ADR 0104.
  *
- * El server manda lo crudo unificado (chats + lead-ads + landings, con los
- * mapas de etapa y etiquetas); acá viven las derivaciones de PRESENTACIÓN:
- * el país desde el código telefónico y la relevancia desde las señales.
- * Derivar en el front lo que es presentación mantiene el server honesto.
+ * Desde el 10-sep-2026 el Dashboard mide («Hoy», `hoy.ts») y el radar vive en el
+ * Pipeline. Esta consulta se queda porque la leen otras dos pantallas: el recibo de
+ * venta (`FormularioVenta`, la foto del embudo) y la cola despachada (la cifra del
+ * día). Por eso los tipos siguen describiendo la respuesta entera.
  */
 
 export interface LeadChat {
@@ -38,8 +37,7 @@ export interface LeadChat {
   /**
    * Los días que quedan de la Ventana de Meta (#22). `null` donde no hay ventana
    * —WhatsApp y todo lo que no sea un comentario de FB/IG—, `0` cuando ya se
-   * cerró. `null` y `0` NO son lo mismo: «no aplica» contra «se te pasó», y la
-   * fila los dice distinto.
+   * cerró. `null` y `0` NO son lo mismo: «no aplica» contra «se te pasó».
    */
   ventana_dias: number | null;
   ventana_abierta: boolean;
@@ -48,22 +46,14 @@ export interface LeadChat {
   cayo_at: string;
   /**
    * El seguimiento agendado más viejo que sigue pendiente, y DE QUÉ se trata
-   * (#23). `seguimiento_nota` es la nota de esa misma fila — sin ella la fila
-   * solo podría decir «vencido», que no dice qué hacer. El server ya mandaba la
-   * fecha desde #38; nadie la leía porque no estaba en este tipo.
+   * (#23). `seguimiento_nota` es la nota de esa misma fila.
    */
   seguimiento_en: string | null;
   seguimiento_nota: string | null;
   /**
    * QUIÉN LA TIENE (`cola/asignadaSql.ts`, misma regla que la cola: una tenencia
-   * vencida se lee como `null`). Es lo que deja que el chip de asignar de la
-   * fila diga a quién está asignada en vez de ofrecer «Asignar» sobre algo que
-   * ya tiene dueña.
-   *
-   * ⚠️ **Opcional a propósito, y ausente no es un error**: falta en un server
-   * anterior a este frente y en una respuesta rehidratada del caché de IndexedDB
-   * (ADR 0007). Ausente y `null` se dibujan igual —sin dueña— así que el peor
-   * caso es el chip de antes, nunca un hueco.
+   * vencida se lee como `null`). Opcional: falta en un server anterior y en una
+   * respuesta rehidratada del caché de IndexedDB (ADR 0007).
    */
   asignada_a?: string | null;
   /** Nivel de urgencia (0 vivo … 5 archivo). Lo decide el server, ver cola/urgencia.ts. */
@@ -111,19 +101,9 @@ export interface PuntoLeadsDia {
 }
 
 /**
- * Lo que mandó el SOFTWARE, agregado — el renglón al pie del cuadro «Equipo».
- *
- * `bot` y `goberna-admin` firman `envios_wa` igual que una vendedora, así que
- * salían como filas del equipo (537 de 618 mensajes, medido el 4-ago-2026). El
- * server los aparta en `dashboard/equipo.ts`; acá llegan sumados para decirlos
- * sin dibujarlos como personas.
- *
- * `null`/ausente = no hay nada automático que contar (o el server es viejo y no
- * manda el campo: el caché de IndexedDB rehidrata respuestas de antes de este
- * deploy, ADR 0007). En los dos casos el renglón no se dibuja.
- *
- * Solo mensajes: las conversaciones son un `DISTINCT` por actor y sumarlas
- * contaría dos veces a quien atendieron los dos.
+ * Lo que mandó el SOFTWARE, agregado. `bot` y `goberna-admin` firman `envios_wa`
+ * igual que una vendedora; el server los aparta en `dashboard/equipo.ts`.
+ * `null`/ausente = no hay nada automático que contar (o el server es viejo).
  */
 export interface Automaticos {
   mensajes_hoy: number;
@@ -144,57 +124,33 @@ export interface DatosDashboard {
   embudo: Record<string, number>;
   /** Qué cursos pide la gente: el ranking de intereses. */
   cursos: { curso: string; n: number }[];
-  /** Series de 14 días para las gráficas del riel — siempre 14 puntos, ceros incluidos. */
+  /** Series de 14 días — siempre 14 puntos, ceros incluidos. */
   series: {
     leads_dia: PuntoLeadsDia[];
     envios_dia: { dia: string; n: number }[];
     ventas_dia: { dia: string; n: number }[];
   };
-  /**
-   * ¿Quien mira ve TODO? Lo decide el server (`HERMES_SUPERVISORES`), acá no hay
-   * ninguna lista ni ningún `if` que decida antes de preguntar: la pantalla
-   * dibuja lo que llegó. Ausente = server viejo, o una respuesta rehidratada del
-   * caché de IndexedDB (ADR 0007) — y ahí `false` sería mentir sobre un recorte
-   * que no se aplicó, así que se lee como «no se sabe».
-   */
+  /** ¿Quien mira ve TODO? Lo decide el server. Ausente = server viejo o caché (ADR 0007). */
   supervisor?: boolean;
-  /**
-   * Lo que vino está recortado a las conversaciones asignadas de quien mira.
-   *
-   * Es lo que permite que un radar vacío diga el MOTIVO. Sin esto, la pantalla
-   * diría «nada cayó con estos filtros», que es falso: cayó, no es tuyo. Y los
-   * chips de Landing/Lead Ad se apagan, porque un lead de formulario no tiene
-   * dueño posible y serían ceros permanentes.
-   */
+  /** Lo que vino está recortado a las conversaciones asignadas de quien mira. */
   soloMisAsignadas?: boolean;
   /** Nadie configurado como supervisor (fail-closed): todas ven solo lo suyo. */
   sinSupervisores?: boolean;
 }
 
 /**
- * ══ EL DASHBOARD SE PIDE DONDE SE MIRA, Y LATE DONDE SE MIRA ═══════════════
+ * ══ LA CONSULTA SE DECLARA UNA VEZ, Y QUIEN LA USA DICE SI LA QUIERE VIVA ════
  *
- * 🔴 **Hasta acá vivía en la RAÍZ de la app, o sea en las diez vistas.**
- * `App.tsx` lo montaba antes de decidir qué se dibuja, así que la consulta más
- * cara del repo —14 consultas, la CTE del embudo corriendo el 29 % del tiempo
- * de Postgres— corría cada 30 s toda la jornada, para todas, mirando el chat.
- * Medido el 18-ago-2026 en producción: **12.751 pedidos en un día con 203
- * mensajes reales**, o sea 63 corridas por mensaje. El único consumidor fuera
- * del Dashboard era un lookup roto (ver `ColaUnificada`), así que ese costo no
- * compraba nada.
+ * 🔴 **Hasta el 18-ago-2026 vivía en la RAÍZ de la app**, o sea en las diez vistas:
+ * 12.751 pedidos en un día con 203 mensajes reales (`dashboardFueraDeLaRaiz.test.ts`).
  *
- * ── POR QUÉ LA LIVENESS ES UN PARÁMETRO Y NO UNA CONSTANTE ───────────────
- * Es el issue #5: `ColaUnificada` tenía su propio `useQuery` sobre la MISMA
- * `queryKey` con `staleTime` en vez de `refetchInterval`, y cuál ganaba
- * dependía de qué componente montó primero. Con dos definiciones eso no se
- * puede arreglar, solo empatar. Ahora la query se declara UNA vez y quien la
- * usa dice si además la quiere VIVA — que es lo que de verdad los diferencia:
- * el radar se mira fijo y se refresca solo; el recibo de una venta y la cifra
- * del día se leen una vez y se cierran.
+ * Es el issue #5: con dos `useQuery` sobre la MISMA `queryKey` y políticas
+ * distintas, cuál ganaba dependía de qué componente montó primero. Ahora la query
+ * se declara UNA vez y quien la usa dice si además la quiere VIVA.
  *
- * ⚠️ **No colapsar `activa` con `vivo`.** Una pantalla puede querer el dato y
- * no querer el latido (es el caso de los dos consumidores de afuera); apagar
- * el latido apagando la query los dejaría sin dato.
+ * ⚠️ **No colapsar `activa` con `vivo`.** Una pantalla puede querer el dato y no el
+ * latido (el recibo de una venta); apagar el latido apagando la query la dejaría
+ * sin dato.
  */
 export function useDashboard({ activa = true, vivo = false }: OpcionesDashboard = {}) {
   return useQuery({
@@ -202,21 +158,10 @@ export function useDashboard({ activa = true, vivo = false }: OpcionesDashboard 
     queryFn: () => api<DatosDashboard>('/api/dashboard'),
     enabled: activa,
     /**
-     * Red de seguridad del radar; el SSE lo invalida al instante (agrupado,
-     * `lib/datos/tiempoReal.ts`). `false` y no un número grande cuando no está
-     * `vivo`: un intervalo apagado no programa un timer.
-     *
-     * ⚠️ **Dos «vivo» distintos, y no se confunden**: el `vivo` del parámetro
-     * es «¿esta pantalla quiere el latido?» (una vista de radar sí, un recibo
-     * que se lee una vez no); `streamVivo()` es «¿el push está conectado?». El
-     * segundo decide CUÁNTO, nunca SI — sin él acá, cada radar abierto pedía
-     * cada 30 s aunque el SSE ya lo estuviera empujando al instante
-     * (`docs/plan-borrar-el-polling.md` §6 PR 1).
+     * `false` y no un número grande cuando no está `vivo`: un intervalo apagado no
+     * programa un timer. `streamVivo()` decide CUÁNTO, nunca SI.
      */
     refetchInterval: () => (vivo ? intervaloConStream(streamVivo(), 30_000) : false),
-    // El mismo número que el latido, así el radar no cambia de comportamiento
-    // en régimen: lo que evita es la ráfaga de re-pedidos al ir y volver de la
-    // vista, que es tráfico sin dato nuevo.
     staleTime: 30_000,
   });
 }
@@ -226,94 +171,4 @@ export interface OpcionesDashboard {
   activa?: boolean;
   /** ¿Se refresca solo cada 30 s? Solo la pantalla que se queda mirándolo. */
   vivo?: boolean;
-}
-
-// ── País desde el código telefónico (códigos LATAM + los usuales) ──────────
-
-const PREFIJOS: [string, string][] = [
-  ['51', 'Perú'],
-  ['52', 'México'],
-  ['54', 'Argentina'],
-  ['55', 'Brasil'],
-  ['56', 'Chile'],
-  ['57', 'Colombia'],
-  ['58', 'Venezuela'],
-  ['502', 'Guatemala'],
-  ['503', 'El Salvador'],
-  ['504', 'Honduras'],
-  ['505', 'Nicaragua'],
-  ['506', 'Costa Rica'],
-  ['507', 'Panamá'],
-  ['509', 'Haití'],
-  ['53', 'Cuba'],
-  ['591', 'Bolivia'],
-  ['593', 'Ecuador'],
-  ['595', 'Paraguay'],
-  ['598', 'Uruguay'],
-  ['1809', 'Rep. Dominicana'],
-  ['1829', 'Rep. Dominicana'],
-  ['1849', 'Rep. Dominicana'],
-  ['34', 'España'],
-  ['1', 'EE.UU.'],
-];
-
-/**
- * El país, con la fuente que haya: el dato declarado (landing/lead-ad) gana;
- * si no, el código del teléfono; si no hay nada, null — y la celda lo dice.
- * Los prefijos de 4 y 3 dígitos se prueban antes que los de 2 (1809 antes que 1).
- */
-export function paisDe(paisDato: string | null | undefined, telefono: string | null | undefined): string | null {
-  if (paisDato?.trim()) return paisDato.replace(/\s+\d+$/, '').trim(); // "Perú 51" → "Perú"
-  const digitos = (telefono ?? '').replace(/\D/g, '');
-  if (digitos.length < 8) return null;
-  const orden = [...PREFIJOS].sort((a, b) => b[0].length - a[0].length);
-  for (const [pref, pais] of orden) if (digitos.startsWith(pref)) return pais;
-  return null;
-}
-
-// ── Deuda: leer el nivel que mandó el server, nunca recalcularlo ───────────
-
-/**
- * ¿El turno es NUESTRO? Los niveles 0–3 son Deuda (vivo, vencido, expira,
- * espera); el 4 es Silencio y el 5 archivo. Ver `CONTEXT.md` y `cola/urgencia.ts`.
- *
- * Acá vivía `relevanciaDe`, que recalculaba la urgencia en el front con una
- * regla propia y peor: marcaba como «alta» todo lo de menos de 24 h, y como el
- * radar solo trae siete días terminaba marcando TODO igual. Peor: la lista y el
- * botón «Atender a» ordenaban con criterios distintos, así que la pantalla
- * recomendaba a alguien y lo escondía al fondo. Ahora el nivel lo decide el
- * server, una sola vez — esto solo lo lee.
- */
-export function esDeuda(nivel: number): boolean {
-  return nivel <= 3;
-}
-
-/** La `Conversacion` mínima para abrir un chat del radar en la Bandeja. */
-export function conversacionDeChat(c: LeadChat): Conversacion {
-  return {
-    clave: c.clave,
-    canal: c.canal as Conversacion['canal'],
-    tipo: c.tipo as Conversacion['tipo'],
-    persona_id: c.persona_id,
-    persona_nombre: c.persona_nombre,
-    numero_propio: c.numero_propio,
-    // De quién es: sin esto el chip de asignar de la fila del radar ofrecería
-    // «Asignar» sobre una conversación que ya tiene dueña — y la hoja que se
-    // abre desde el radar diría lo mismo que la fila, o sea nada.
-    asignada_a: c.asignada_a ?? null,
-    texto: c.texto,
-    contexto_texto: c.contexto_texto,
-    respondida: c.respondida,
-    ventana_abierta: c.ventana_abierta,
-    pregunto: c.pregunto,
-    solo_clic: c.solo_clic,
-    n: 1,
-    referencia: c.referencia,
-    ultimo_at: c.cayo_at,
-    dias: Math.floor((Date.now() - new Date(c.cayo_at).getTime()) / 86_400_000),
-    // Desde #37 la cola y el radar hablan la MISMA escala (0–5, cola/urgencia.ts),
-    // pero este nivel no viaja con el chat del radar y la cola recalcula el suyo
-    // al cargar — acá va un valor neutro («resto») a propósito.
-    nivel: 5,
-  };
 }

@@ -21,12 +21,20 @@ import {
 import { repartirEnCuotas } from './cuotas';
 import { LineaProducto } from './LineaProducto';
 import { VentaSinCerberus } from '../auth/AvisoCerberus';
+import { medioDeVenta, type MedioVenta } from '../../dominio/medioVenta';
 
 /** Cerberus llama "Origen" al canal por donde llegó el lead. Se infiere, no se elige. */
 const ORIGEN_POR_CANAL: Record<string, { id: string; nombre: string }> = {
   whatsapp: { id: 'whatsapp', nombre: 'WhatsApp' },
   facebook: { id: 'facebook', nombre: 'Facebook' },
   instagram: { id: 'instagram', nombre: 'Instagram' },
+};
+
+/** Lo que se ve en la píldora del formulario, para cada `MedioVenta` de Cerberus. */
+const MEDIO_NOMBRE: Record<MedioVenta, string> = {
+  organico: 'Orgánico',
+  pagado: 'Pagado',
+  postventa: 'PostVenta',
 };
 
 /** Referencia estable para el «todavía no hay locales»: si no, el efecto de precarga se redispara siempre. */
@@ -50,11 +58,16 @@ function hoyLocal(): string {
  * EL FORMULARIO DE VENTA, DENTRO DE HERMES.
  *
  * La vendedora llena esto y Hermes lo manda a Cerberus con su sesión — ella nunca
- * abre Cerberus. **Medio y Origen se llenan solos** desde la atribución que ya
- * capturamos: vino por WhatsApp (origen), y si fue de un anuncio, el medio es
- * "pagado". Sigue editable por si hace falta. Al cerrar, el RECIBO: folio
- * copiable, el embudo con Cierre creciendo, y la siguiente jugada (agendar la
- * bienvenida) servida.
+ * abre Cerberus. **El Origen se llena solo** (vino por WhatsApp) y **el Medio se
+ * elige, arrancando en lo inferido**: la precedencia es `dominio/medioVenta.ts`
+ * — **postventa gana**: si la persona ya le compró a Goberna antes, la venta es
+ * una recompra aunque ESTA conversación haya venido de un anuncio (decisión del
+ * dueño, 8-sep-2026 — bug reportado por Luz: antes el medio salía de un binario
+ * anuncio/no-anuncio y Cerberus acepta cinco). Y desde el 11-sep-2026 se puede
+ * corregir: Hermes no siempre sabe que ya compró, y un rótulo fijo dejaba la
+ * venta como «Orgánico» sin salida (pedido del dueño).
+ * Al cerrar, el RECIBO: folio copiable, el embudo con Cierre creciendo, y la
+ * siguiente jugada (agendar la bienvenida) servida.
  */
 
 interface Props {
@@ -73,6 +86,14 @@ interface Props {
   paisNombre?: string | null;
   /** La siguiente jugada del recibo: agendar la bienvenida (cae en la Agenda vía puente). Sin esto, el botón no se muestra. */
   onAgendarBienvenida?: (telefono: string | null) => void;
+  /**
+   * Ya le compró a Goberna antes de ESTA venta — quien llama lo sabe por la
+   * ficha de Cerberus (`useFicha`, `data.ventasCount > 0`) o por el padrón
+   * (`clientes_padron` / `cliente_nivel` de la fila de la cola). Con esto en
+   * `true` el medio sale `postventa` sin importar el anuncio: la precedencia
+   * vive en `dominio/medioVenta.ts`. Por defecto `false` (lead nuevo).
+   */
+  yaCompro?: boolean;
   /**
    * Lo que ya se eligió en el «Carrito» de la ficha (`panel/CarritoDeseado`),
    * si eligió algo — arranca el carrito de acá con esos productos ya puestos.
@@ -134,7 +155,7 @@ interface Recibo {
   ventaId: number | null;
 }
 
-export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, clave, personaNombre, numeroPropio, paisNombre, onAgendarBienvenida, onCerrar, lineasIniciales, monedaInicial, onMonedaCambiar }: Props) {
+export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, clave, personaNombre, numeroPropio, paisNombre, yaCompro = false, onAgendarBienvenida, onCerrar, lineasIniciales, monedaInicial, onMonedaCambiar }: Props) {
   const { data: form, isPending: cargandoForm } = useFormularioVenta(true);
   const crear = useCrearVenta();
   const enviarCotizacion = useEnviarCotizacion();
@@ -149,12 +170,21 @@ export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, cla
     staleTime: 60_000,
   });
 
-  // NO se muestran ni se eligen: se INFIEREN de dónde vino el lead.
-  //  · Origen = el canal (WhatsApp / Facebook / Instagram).
-  //  · Medio  = pagado si llegó por un anuncio; si no, orgánico.
+  //  · Origen = el canal (WhatsApp / Facebook / Instagram). Se infiere.
+  //  · Medio  = SE ELIGE, y arranca en la precedencia de `dominio/medioVenta.ts`
+  //    (postventa gana). Hasta el 11-sep-2026 era un rótulo que no se podía
+  //    cambiar, y la venta a quien ya había comprado salía «Orgánico» cada vez
+  //    que Hermes no lo sabía (pedido del dueño).
   const origenInfo = ORIGEN_POR_CANAL[canal] ?? ORIGEN_POR_CANAL.whatsapp;
-  const medio = conv?.origen?.fuente === 'anuncio' ? 'pagado' : 'organico';
-  const medioNombre = medio === 'pagado' ? 'Pagado' : 'Orgánico';
+  const medioInferido = medioDeVenta({ vinoDeAnuncio: conv?.origen?.fuente === 'anuncio', yaCompro });
+  /**
+   * `null` = la vendedora no tocó el select, y manda lo inferido. Es un `null` y
+   * no una copia del inferido a propósito: el origen del lead llega en OTRA
+   * consulta, y lo inferido puede cambiar después del primer render — hasta que
+   * ella elija, tiene que poder cambiar; después, nunca le pisa lo que eligió.
+   */
+  const [medioElegido, setMedioElegido] = useState<string | null>(null);
+  const medio = medioElegido ?? medioInferido;
 
   // Arranca en la moneda que ya se eligió en el carrito, si vino alguna — le
   // gana a la de `localStorage` (abajo) porque es la elección de ESTA venta,
@@ -555,7 +585,7 @@ export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, cla
                   <Select value={paisId} onChange={setPaisId} placeholder="Elige país" opciones={form.paises} />
                   {paisDeFicha && paisId === paisDeFicha.id && (
                     <span className="text-[11px] text-muted-foreground">
-                      precargado de la ficha — cambialo si hace falta
+                      precargado de la ficha — cámbialo si hace falta
                     </span>
                   )}
                 </Campo>
@@ -577,13 +607,32 @@ export function FormularioVenta({ clienteId, clienteNombre, telefono, canal, cla
                 Preventa (cursos sin stock: no reserva stock)
               </label>
 
-              {/* Origen y Medio NO se eligen: se infieren de dónde vino el lead. */}
-              <div className="flex items-center gap-2 rounded-lg bg-secondary/60 px-3 py-2 text-xs text-secondary-foreground">
-                <Megaphone size={13} className="shrink-0" />
-                <span>
-                  Origen <b>{origenInfo.nombre}</b> · Medio <b>{medioNombre}</b>
-                  <span className="text-muted-foreground"> — inferidos de por dónde vino el lead</span>
-                </span>
+              {/* EL MEDIO SE ELIGE; el Origen sigue inferido del canal. Las
+                  opciones son las que publica el server (`cerberus/venta.ts`),
+                  las mismas cinco que Cerberus guarda. Arranca en lo inferido
+                  —postventa le gana al anuncio, `dominio/medioVenta.ts`— y abajo
+                  dice por qué, para que corregirlo sea una decisión y no un
+                  descuido. */}
+              <div className="grid grid-cols-2 gap-3">
+                <Campo label="Medio">
+                  <Select value={medio} onChange={setMedioElegido} opciones={opcionesDeMedio(form.medios, medio)} />
+                  <span className="text-[11px] text-muted-foreground">
+                    {medioElegido !== null && medioElegido !== medioInferido
+                      ? `elegido a mano — Hermes sugería ${MEDIO_NOMBRE[medioInferido]}`
+                      : medioInferido === 'postventa'
+                        ? 'ya te había comprado antes — cámbialo si no es así'
+                        : medioInferido === 'pagado'
+                          ? 'vino de un anuncio — cámbialo si no es así'
+                          : 'sugerido — si ya compró antes, elige PostVenta'}
+                  </span>
+                </Campo>
+                <Campo label="Origen">
+                  <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground">
+                    <Megaphone size={13} className="shrink-0 text-muted-foreground" />
+                    {origenInfo.nombre}
+                  </div>
+                  <span className="text-[11px] text-muted-foreground">por dónde llegó la conversación</span>
+                </Campo>
               </div>
 
               {/* Productos */}
@@ -743,7 +792,18 @@ function Campo({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Select({ value, onChange, placeholder, opciones, autoFocus = false }: { value: string; onChange: (v: string) => void; placeholder: string; opciones: { id: string; nombre: string }[]; autoFocus?: boolean }) {
+/**
+ * Las opciones del Medio: las del server, y si por algún motivo no trae la que
+ * se infirió (un server que responde `medios: []`), esa va primero. Un select
+ * cuyo valor no está entre sus opciones muestra la primera y manda otra cosa —
+ * justo la clase de diferencia entre pantalla y POST que este campo vino a cerrar.
+ */
+function opcionesDeMedio(medios: Opcion[], medio: string): Opcion[] {
+  if (medios.some((m) => m.id === medio)) return medios;
+  return [{ id: medio, nombre: MEDIO_NOMBRE[medio as MedioVenta] ?? medio }, ...medios];
+}
+
+function Select({ value, onChange, placeholder, opciones, autoFocus = false }: { value: string; onChange: (v: string) => void; placeholder?: string; opciones: { id: string; nombre: string }[]; autoFocus?: boolean }) {
   return (
     <select
       value={value}
@@ -751,7 +811,8 @@ function Select({ value, onChange, placeholder, opciones, autoFocus = false }: {
       autoFocus={autoFocus}
       className="rounded-lg border border-border bg-muted px-3 py-2 text-sm outline-none focus:border-primary"
     >
-      <option value="">{placeholder}</option>
+      {/* Sin `placeholder` no hay opción vacía: el Medio nunca puede quedar en blanco. */}
+      {placeholder !== undefined && <option value="">{placeholder}</option>}
       {opciones.map((o) => (
         <option key={o.id} value={o.id}>
           {o.nombre}

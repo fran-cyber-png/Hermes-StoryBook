@@ -1,13 +1,16 @@
 import { useState } from 'react';
-import { Check, Layers, Loader2, MapPin, Megaphone, MessageSquare, Pencil, Phone, Plus, Star, User, X } from 'lucide-react';
+import { Check, Layers, Loader2, MapPin, Megaphone, MessageSquare, Pencil, Phone, Plus, Star, Trash2, User, X } from 'lucide-react';
 import { BotonLlamar } from '../gestion/BotonLlamar';
 import { FichaRapida } from '../panel/FichaRapida';
 import { RegistrarEvento } from '../eventos/RegistrarEvento';
-import { TOPE_NOTA, useEventos, useMutacionesEventos } from '../eventos/eventos';
+import { TOPE_NOTA, useEventos, useMutacionesEventos, type EventoContacto } from '../eventos/eventos';
 import { rotuloDeTipo } from '../eventos/eventos';
 import { fechaCorta, formatoTelefono, hace } from '../../lib/formato';
 import { useEscape } from '../../lib/teclado/useEscape';
 import { usePopover } from '../../lib/teclado/usePopover';
+import { mismaVendedora } from '../../dominio/dueno';
+import { quienDiceSer } from '../auth/sesion';
+import { tokenGuardado } from '../../lib/datos/token';
 import { EtiquetasContacto } from './EtiquetasContacto';
 import { claveRealDeContacto, conversacionDeFicha, esClaveDeContactoManual } from './conversacionDeContacto';
 import {
@@ -144,7 +147,7 @@ export function PanelContacto({
           <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Información de contacto
           </h3>
-          {/* La edición (teléfono, prioridad y también "Dónde vota") vive en
+          {/* La edición (teléfono, prioridad y también "Locación") vive en
               la misma ficha que registra el contacto — nunca acá, para no
               tener dos formularios diciendo lo mismo (#37). */}
           <button
@@ -165,9 +168,14 @@ export function PanelContacto({
             </>
           )}
           <dt className="flex items-center gap-1.5 text-muted-foreground">
-            <MapPin size={12} className="shrink-0" /> Dónde vota
+            <MapPin size={12} className="shrink-0" /> Locación
           </dt>
-          <dd className="text-foreground">{contacto.distrito ?? 'Sin especificar'}</dd>
+          {/* La ficha lleva la dirección COMPLETA que marcó el mapa (pedido del
+              1-sep-2026) — el distrito/ubicación derivada es lo que se ve en
+              la columna de la tabla, no acá. */}
+          <dd className="text-foreground" title={contacto.direccion ?? undefined}>
+            {contacto.direccion ?? 'Sin especificar'}
+          </dd>
           {contacto.campanaNombre && (
             <>
               <dt className="flex items-center gap-1.5 text-muted-foreground">
@@ -179,7 +187,7 @@ export function PanelContacto({
           {contacto.aviso && (
             <>
               <dt className="flex items-center gap-1.5 text-muted-foreground">
-                <Layers size={12} className="shrink-0" /> Aviso
+                <Layers size={12} className="shrink-0" /> Anuncio
               </dt>
               <dd className="text-foreground">{contacto.aviso}</dd>
             </>
@@ -212,9 +220,14 @@ export function PanelContacto({
 /** Notas + Actividad reciente — las dos secciones del mismo `eventos_contacto`. */
 function ActividadDeContacto({ clave }: { clave: string }) {
   const { data } = useEventos(clave);
+  const { editar, borrar } = useMutacionesEventos(clave);
   const eventos = data?.eventos ?? [];
   const notas = eventos.filter((e) => e.tipo === 'nota');
   const actividad = eventos.filter((e) => e.tipo !== 'nota');
+  // Solo se toca lo propio — misma regla que `EventoLinea` en el panel del
+  // chat (ADR 0059/#37): comparar exacto haría que Luz no reconozca sus
+  // propias notas si entró como `luz` y Cerberus le empujó `Luz`.
+  const miId = quienDiceSer(tokenGuardado() ?? '')?.id;
 
   return (
     <>
@@ -228,12 +241,13 @@ function ActividadDeContacto({ clave }: { clave: string }) {
         ) : (
           <ul className="flex flex-col gap-2">
             {notas.map((n) => (
-              <li key={n.id} className="rounded-lg bg-warning/10 p-2 text-xs text-foreground">
-                <p className="whitespace-pre-wrap">{n.nota}</p>
-                <p className="mt-1 text-[10px] text-muted-foreground">
-                  {quienRegistro(n.vendedoraId)} · {hace(n.creadoAt)}
-                </p>
-              </li>
+              <NotaFila
+                key={n.id}
+                nota={n}
+                puedeTocar={miId != null && mismaVendedora(miId, n.vendedoraId)}
+                onEditar={(nota) => editar.mutate({ id: n.id, nota, curso: n.curso })}
+                onBorrar={() => borrar.mutate(n.id)}
+              />
             ))}
           </ul>
         )}
@@ -261,6 +275,125 @@ function ActividadDeContacto({ clave }: { clave: string }) {
         <RegistrarEvento clave={clave} esDeCampana />
       </section>
     </>
+  );
+}
+
+/**
+ * Una nota, con Editar y Borrar — mismo gesto que `EventoLinea` en el panel
+ * del chat: los íconos solo aparecen al pasar el mouse (o con foco, para
+ * teclado) y solo si la nota es de quien mira. Sin `puedeTocar` no se dibuja
+ * ni un botón inerte: un ícono sin acción es la misma clase de defecto que ya
+ * se sacó de `EventoLinea` (ver su docblock).
+ */
+function NotaFila({
+  nota,
+  puedeTocar,
+  onEditar,
+  onBorrar,
+}: {
+  nota: EventoContacto;
+  puedeTocar: boolean;
+  onEditar: (nota: string) => void;
+  onBorrar: () => void;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [borrando, setBorrando] = useState(false);
+  const [texto, setTexto] = useState(nota.nota ?? '');
+
+  function confirmarEdicion() {
+    const limpio = texto.trim();
+    if (limpio) onEditar(limpio);
+    setEditando(false);
+  }
+
+  return (
+    <li className="group/nota rounded-lg bg-warning/10 p-2 text-xs text-foreground">
+      {editando ? (
+        <div className="flex flex-col gap-1.5">
+          <textarea
+            value={texto}
+            maxLength={TOPE_NOTA}
+            autoFocus
+            rows={3}
+            onChange={(e) => setTexto(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                setEditando(false);
+              }
+            }}
+            className="w-full resize-none rounded-lg border border-primary bg-card px-2 py-1.5 text-xs outline-none"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={confirmarEdicion}
+              disabled={!texto.trim()}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary py-1 text-[11px] font-bold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
+            >
+              <Check size={11} /> Guardar
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditando(false)}
+              className="rounded-lg border border-border px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : borrando ? (
+        <p className="flex items-center gap-1.5 text-[11px] font-semibold">
+          <span className="text-muted-foreground">¿Borrar esta nota?</span>
+          <button
+            type="button"
+            onClick={onBorrar}
+            className="rounded px-1 text-destructive transition-colors hover:bg-destructive/10"
+          >
+            Sí
+          </button>
+          <button
+            type="button"
+            onClick={() => setBorrando(false)}
+            className="rounded px-1 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            No
+          </button>
+        </p>
+      ) : (
+        <>
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 whitespace-pre-wrap">{nota.nota}</p>
+            {puedeTocar && (
+              <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/nota:opacity-100 group-focus-within/nota:opacity-100">
+                <button
+                  type="button"
+                  aria-label="Editar nota"
+                  onClick={() => {
+                    setTexto(nota.nota ?? '');
+                    setEditando(true);
+                  }}
+                  className="grid min-h-6 min-w-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Pencil size={12} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Borrar nota"
+                  onClick={() => setBorrando(true)}
+                  className="grid min-h-6 min-w-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <Trash2 size={12} aria-hidden />
+                </button>
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            {quienRegistro(nota.vendedoraId)} · {hace(nota.creadoAt)}
+          </p>
+        </>
+      )}
+    </li>
   );
 }
 

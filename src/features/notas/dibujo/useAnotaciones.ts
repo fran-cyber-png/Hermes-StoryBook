@@ -55,6 +55,17 @@ export interface Anotaciones {
   vistaPrevia(figuras: Figura[]): void;
   /** Cierra un gesto: apila lo anterior, fija lo nuevo y lo baja a guardar. */
   confirmar(nuevas: Figura[], previas: Figura[]): void;
+  /**
+   * EL REFLOW DE `dibujo/anclaje.ts`: corre las figuras que siguen a un bloque
+   * que se movió, y desancla las que siguen a uno que ya no existe.
+   *
+   * 🔴 A propósito **no pasa por el historial**: sería rarísimo que escribir un
+   * párrafo arriba le sume un paso de deshacer al dibujo de más abajo — la
+   * vendedora nunca pidió mover nada, el documento se movió solo. Sí se
+   * persiste (`onGuardar`), para que la posición que se ve sea la que se
+   * guarda.
+   */
+  reubicarPorAncla(cambios: { id: string; dx: number; dy: number }[], bloquesPerdidos: string[]): void;
   /** Suma figuras nuevas y las deja elegidas. Para pegar y duplicar. */
   agregar(nuevas: Figura[]): void;
   borrarSeleccion(): void;
@@ -76,6 +87,13 @@ export interface Anotaciones {
   ordenarSeleccion(a: Reordenamiento): void;
   /** Muda de capa todo lo que estaba en una. Lo usa borrar una capa. */
   mudarDeCapa(desde: string, hacia: string): void;
+  /**
+   * Muda de capa lo ELEGIDO, sea de la capa que sea. A diferencia de
+   * `mudarDeCapa` (que se lleva una capa entera), esto es «tomá este objeto
+   * puntual y ponelo en esta otra capa» — lo que hace falta para no tener que
+   * crear la capa ANTES de tener a mano lo que va a llevar.
+   */
+  moverSeleccionACapa(hacia: string): void;
   deshacer(): void;
   rehacer(): void;
   limpiar(): void;
@@ -130,6 +148,35 @@ export function useAnotaciones({
     setAviso(null);
     onGuardarRef.current(nuevas);
   }, []);
+
+  const reubicarPorAncla = useCallback(
+    (cambios: { id: string; dx: number; dy: number }[], bloquesPerdidos: string[]) => {
+      if (cambios.length === 0 && bloquesPerdidos.length === 0) return;
+      setFiguras((actuales) => {
+        const porId = new Map(cambios.map((c) => [c.id, c]));
+        const perdidos = new Set(bloquesPerdidos);
+        let huboCambio = false;
+        const nuevas = actuales.map((f) => {
+          const c = porId.get(f.id);
+          if (c) {
+            huboCambio = true;
+            return moverFigura(f, c.dx, c.dy);
+          }
+          // El bloque al que seguía ya no está: se desancla y se queda donde
+          // estaba, en vez de seguir cargando la referencia a un id muerto.
+          if (f.ancla && perdidos.has(f.ancla.bloqueId)) {
+            huboCambio = true;
+            return { ...f, ancla: undefined };
+          }
+          return f;
+        });
+        if (!huboCambio) return actuales;
+        onGuardarRef.current(nuevas);
+        return nuevas;
+      });
+    },
+    [],
+  );
 
   /**
    * UNA OPERACIÓN SOBRE LO QUE HAY AHORA, en un solo paso de deshacer.
@@ -229,6 +276,19 @@ export function useAnotaciones({
     [operar],
   );
 
+  const moverSeleccionACapa = useCallback(
+    (hacia: string) => {
+      operar((actuales) => {
+        // Filtra las que YA están ahí: sin esto, moverla a su propia capa
+        // gastaría un paso de deshacer que no cambió nada.
+        const tocadas = actuales.filter((f) => seleccionadas.includes(f.id) && f.capaId !== hacia);
+        if (tocadas.length === 0) return null;
+        return { figuras: actuales.map((f) => (seleccionadas.includes(f.id) ? { ...f, capaId: hacia } : f)) };
+      });
+    },
+    [operar, seleccionadas],
+  );
+
   const opacarSeleccion = useCallback(
     (opacidad: number) => {
       // A diferencia del color, la opacidad SÍ vale para una imagen: atenuar una
@@ -307,6 +367,7 @@ export function useAnotaciones({
     alternar,
     vistaPrevia,
     confirmar,
+    reubicarPorAncla,
     agregar,
     borrarSeleccion,
     duplicarSeleccion,
@@ -316,6 +377,7 @@ export function useAnotaciones({
     reemplazar,
     ordenarSeleccion,
     mudarDeCapa,
+    moverSeleccionACapa,
     deshacer,
     rehacer,
     limpiar,

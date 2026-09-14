@@ -233,6 +233,15 @@ describe('lecturaDeError — un rechazo por diseño no se lee como una falla', (
     expect(l.reintentable).toBe(false);
   });
 
+  it('🔴 el 503 de «no pudimos leer tus líneas» NO es el SMTP: dice lo del server y se puede reintentar (ADR 0108)', () => {
+    // Detrás del guard `deVentas`, un hipo de la base también llega como 503. Leído por el status,
+    // mandaba a pedirle a sistemas un SMTP que no falta.
+    const l = lecturaDeError(new ErrorApi('lo que dijo el server', 503, undefined, undefined, 'lineas_no_leidas'));
+    expect(l.texto).not.toContain('SMTP');
+    expect(l.texto).toContain('lo que dijo el server');
+    expect(l.reintentable).toBe(true);
+  });
+
   it('el 403 habla de administrar remitentes, no de perder el permiso de escribirle a un lead', () => {
     const l = lecturaDeError(new ErrorApi('', 403, undefined, undefined, 'no_es_supervisor'));
     expect(l.texto).toContain('supervisor');

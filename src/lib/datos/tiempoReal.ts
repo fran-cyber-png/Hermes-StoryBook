@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../../config';
 import { crearAgrupador } from './agrupador';
+import { claves } from './cliente';
 import { consumirStream } from './streamAutenticado';
 import { tokenGuardado } from './token';
 import { esMensajeEntrante } from '../notificaciones/decidir';
@@ -9,6 +10,7 @@ import { reproducirSonidoMensaje } from '../notificaciones/sonido';
 import { notificarEscritorio, pedirPermisoDeNotificacion } from '../notificaciones/escritorio';
 import { formatoTelefono } from '../formato';
 import { emitirPulsoDeRuteo, type PulsoDeRuteo } from './pulsoDeRuteo';
+import { emitirSenalDeLlamada, senalDeLlamadaDe } from './senalDeLlamada';
 
 /**
  * TIEMPO REAL — el frontend escucha lo que el server empuja.
@@ -93,6 +95,32 @@ const JITTER_COLA_MS = 4000;
  */
 const VENTANA_CARAS_MS = 15_000;
 
+/**
+ * 🔴 HOTFIX «el negocio no tumba producción» — `['dashboard']` YA NO invalida
+ * `['dashboard', 'negocio', ...]`.
+ *
+ * El radar (`GET /`) es barato y quiere el refresco agrupado de siempre. El
+ * panel del negocio es la consulta de 9-13 s: `useNegocio` (`staleTime` de
+ * 120 s) ya decide sola cuándo refrescarse, y esta invalidación de cada
+ * mensaje/reconexión la pisaba cada 15-19 s — la mitad de la tormenta era
+ * ESTO, no solo la falta de caché en el server. Se usa `predicate` en vez de
+ * una `queryKey` exacta porque lo que hay que EXCLUIR es un prefijo, no una
+ * clave puntual.
+ */
+/**
+ * Y desde ADR 0104 tampoco `['dashboard', 'hoy', ...]` ni `['dashboard', 'series']`:
+ * cada pedido de «Hoy» arma en el server la `todo` de la cola (1 a 2 s medidos), y la
+ * serie de 14 días cambia una vez por día. Las dos deciden solas cuándo refrescarse
+ * (`features/dashboard/hoy.ts`, `series.ts`). Candado: `tiempoRealNegocio.test.tsx`.
+ */
+const DASHBOARD_SIN_SSE: readonly unknown[] = ['negocio', 'hoy', 'series'];
+
+function invalidarDashboardSinNegocio(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({
+    predicate: (query) => query.queryKey[0] === 'dashboard' && !DASHBOARD_SIN_SSE.includes(query.queryKey[1]),
+  });
+}
+
 export function useTiempoReal(sesionActiva: boolean, alNoAutorizado?: () => void) {
   const qc = useQueryClient();
 
@@ -134,17 +162,30 @@ export function useTiempoReal(sesionActiva: boolean, alNoAutorizado?: () => void
      * pestañas con la pantalla abierta no disparen en el mismo segundo.
      */
     const agTablero = crearAgrupador(() => VENTANA_CARAS_MS + Math.random() * JITTER_COLA_MS);
+    /**
+     * LAS PASTILLAS «QUIÉN LO TIENE ABIERTO» de la cola y del Pipeline (ADR 0121).
+     * Cada panel que se abre o se cierra emite `comentario`, así que sin ventana
+     * diez agentes moviéndose por la lista serían diez pedidos por pestaña. La
+     * ventana es corta y no la de la cola: es un dato de presencia, y quince
+     * segundos tarde ya no avisa a tiempo. El pedido es barato: memoria del
+     * proceso y una lectura por índice.
+     */
+    const agPresencias = crearAgrupador(() => 2_000 + Math.random() * 1_000);
+    const invalidarPresenciasAgrupadas = () =>
+      agPresencias.pedir(() => {
+        if (!control.signal.aborted) void qc.invalidateQueries({ queryKey: claves.presenciasDeComentarios() });
+      });
     const invalidarColaAgrupada = () =>
       agCola.pedir(() => {
         if (!control.signal.aborted) void qc.invalidateQueries({ queryKey: ['conversaciones'] });
       });
     const invalidarDashboardAgrupado = () =>
       agDashboard.pedir(() => {
-        if (!control.signal.aborted) void qc.invalidateQueries({ queryKey: ['dashboard'] });
+        if (!control.signal.aborted) invalidarDashboardSinNegocio(qc);
       });
 
     const manejar = (data: string) => {
-      let e: { tipo?: string; telefono?: string | null; direccion?: string; que?: string };
+      let e: { tipo?: string; telefono?: string | null; direccion?: string; que?: string; interactionId?: number };
       try {
         e = JSON.parse(data);
       } catch {
@@ -219,6 +260,29 @@ export function useTiempoReal(sesionActiva: boolean, alNoAutorizado?: () => void
           void qc.invalidateQueries({ queryKey: ['routing', 'tablero'] });
           void qc.invalidateQueries({ queryKey: ['routing', 'historial'] });
         });
+      } else if (e.tipo === 'comentario') {
+        /**
+         * 🔴 ALGUIEN ABRIÓ, CERRÓ O RESPONDIÓ UN COMENTARIO (13-sep-2026).
+         *
+         * Es lo que le avisa a la segunda agente, antes de escribir, que otra ya
+         * lo tiene abierto o ya lo respondió. Se refresca SÓLO el estado de ese
+         * comentario: react-query vuelve a pedir una consulta sólo si hay un panel
+         * montado con esa clave, así que en las demás pestañas no cuesta nada. No
+         * se toca la cola: la respuesta publicada ya vuelve por el webhook como
+         * `mensaje`, y abrir un panel no cambia ninguna fila.
+         *
+         * Recortado (`realtime/visibilidad.ts`) llega sin id, y no hay nada que
+         * refrescar.
+         */
+        if (typeof e.interactionId === 'number') {
+          void qc.invalidateQueries({ queryKey: claves.estadoDeRespuesta(e.interactionId) });
+          invalidarPresenciasAgrupadas();
+        }
+      } else if (e.tipo === 'llamada') {
+        // Una llamada de WhatsApp cambió de fase (ADR 0123). Acá no se decide nada: la feature de
+        // llamadas se suscribe. La recortada no trae `callId` y no se emite.
+        const s = senalDeLlamadaDe(e);
+        if (s) emitirSenalDeLlamada(s);
       } else if (e.tipo === 'estado') {
         void qc.invalidateQueries({ queryKey: ['wa', 'sesion'] });
         // El webhook de landing emite 'estado' al persistir: el radar se refresca.
@@ -291,6 +355,7 @@ export function useTiempoReal(sesionActiva: boolean, alNoAutorizado?: () => void
       // vivos por cada montaje es una fuga que en un `StrictMode` se duplica.
       agCola.cancelar();
       agDashboard.cancelar();
+      agPresencias.cancelar();
     };
   }, [qc, sesionActiva, alNoAutorizado]);
 }

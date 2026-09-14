@@ -241,6 +241,13 @@ function envoltura(clase: ClaseBot): string {
       return 'border-navy/40 bg-navy/5';
     case 'sombra':
       return 'border-navy/25 bg-card';
+    // ⚠️ EXPLÍCITA, aunque caiga en el mismo valor que el `default`. Lo neutro es
+    // la DECISIÓN acá: `no-aplica` es lo único de esta lista que no se pudo leer
+    // y aun así **no es un problema** —en campaña el bot no existe—, así que es
+    // la única que no debe irse con `desconocida` al amarillo de advertencia. Sin
+    // el `case`, esa distinción quedaba a merced de cuál sea el `default` mañana.
+    case 'no-aplica':
+      return 'border-border bg-card';
     default:
       return 'border-border bg-card';
   }
@@ -248,6 +255,10 @@ function envoltura(clase: ClaseBot): string {
 
 function Icono({ clase }: { clase: ClaseBot }) {
   if (clase === 'frenado') return <AlertTriangle size={14} className="shrink-0 text-destructive" />;
+  // 🔴 `no-aplica` NO entra a esta lista, y es lo que separa «no te toca» de «se
+  // rompió». Un triángulo de advertencia permanente que nadie de campaña puede
+  // apagar enseña a no mirar el chip — y el día que el bot sí falle, ya nadie
+  // mira. Va con el ícono de bot neutro, como un estado sano cualquiera.
   if (clase === 'desconocida' || clase === 'sin-linea' || clase === 'sin-efecto')
     return <AlertTriangle size={14} className="shrink-0 text-warning" />;
 

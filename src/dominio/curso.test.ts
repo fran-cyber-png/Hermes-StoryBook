@@ -97,3 +97,28 @@ describe('colorDeCurso — determinista, sin oro y sin el neutro', () => {
     expect(PALETA_CURSO).toContain(colorDeCurso(''));
   });
 });
+
+/**
+ * 🔴 EN CAMPAÑA NO HAY CHIP DE CURSO (regla del dueño, 11-sep-2026: en campaña
+ * no sale nada de la Escuela). El server ya no manda `lead_curso` ni
+ * `interes_curso` a una fila de campaña; esto cierra también la tercera fuente,
+ * el título del anuncio: el anuncio de un candidato no es un curso, y el chip
+ * lo pintaría con la forma de uno.
+ */
+describe('cursoDeFila — en campaña no hay curso', () => {
+  const conTodo = {
+    interes_curso: 'Diplomado en Inteligencia y Contrainteligencia',
+    lead_curso: 'Diplomado en Inteligencia y Contrainteligencia',
+    origen_anuncio: { fuente: 'anuncio', titulo: 'Inteligencia Estratégica' },
+  };
+
+  test('con cualquiera de las tres fuentes, en campaña es null', () => {
+    expect(cursoDeFila(conTodo, { esDeCampana: true })).toBeNull();
+    expect(cursoDeFila({ origen_anuncio: conTodo.origen_anuncio }, { esDeCampana: true })).toBeNull();
+  });
+
+  test('en ventas —y sin decir el módulo— el chip sigue', () => {
+    expect(cursoDeFila(conTodo, { esDeCampana: false })?.fuente).toBe('interes');
+    expect(cursoDeFila(conTodo)?.fuente).toBe('interes');
+  });
+});

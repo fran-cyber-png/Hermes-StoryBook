@@ -1,3 +1,5 @@
+import { CODIGO_LINEAS_NO_LEIDAS } from '../../lib/datos/lineasNoLeidas';
+
 /**
  * QUÉ MUESTRA EL INTERRUPTOR DEL BOT — lógica pura, sin React y sin fetch.
  *
@@ -30,6 +32,18 @@
  * hay», lee «se rompió»— y la que el propio server aplica al contestar 503 en
  * vez de 200 cuando `bot_estado` no está.
  */
+
+/**
+ * EL CÓDIGO CON EL QUE EL SERVER DICE «esto es de otro módulo».
+ *
+ * Copia del `CODIGO_OTRO_MODULO` de `server/src/modulos/deEsteModulo.ts`, que es
+ * lo que contesta el candado `deVentas` delante de `/api/bot`. Está acá y no en
+ * un import porque son dos `tsconfig` y dos sistemas de módulos; el candado que
+ * impide que las dos copias se separen es `codigoDeOtroModulo.paridad.test.ts`,
+ * y hace falta porque separarse **no rompe nada**: el chip volvería a decir «sin
+ * señal» en campaña, que es justo el estado del que este cambio viene.
+ */
+export const CODIGO_OTRO_MODULO = 'otro_modulo_del_crm';
 
 /** Los tres modos, el vocabulario de `server/src/bot/modo.ts`. */
 export type ModoBot = 'apagado' | 'sombra' | 'automatico';
@@ -91,6 +105,11 @@ export interface RespuestaBotApi {
 export type ClaseBot =
   /** El server no tiene la ruta: es viejo. No hay nada que mostrar. */
   | 'ausente'
+  /**
+   * El bot es de VENTAS y quien mira trabaja en CAMPAÑA (ADR 0077 §3). No es un
+   * fallo ni un permiso que falte: de este lado esa máquina no existe.
+   */
+  | 'no-aplica'
   /** No se sabe: el server no contestó, o contestó algo que no se entiende. */
   | 'desconocida'
   /** El server no pudo decidir sobre qué línea se opera (400). */
@@ -196,6 +215,20 @@ export interface Contexto {
    * contrato para poder distinguirlas es otro frente.
    */
   sinLinea?: boolean;
+  /**
+   * El server contestó **403 con `codigo: 'otro_modulo_del_crm'`**: `/api/bot`
+   * está montada con el candado `deVentas` (`server/src/index.ts`) y quien mira
+   * trabaja en campaña.
+   *
+   * 🔴 **Se lee del `codigo`, NUNCA del 403 pelado.** Un 403 sin más también lo
+   * emite cualquier otro candado —y `porQueNoSeGuardo` ya lo lee como «la sesión
+   * venció»—, así que colgar «no aplica» del status haría que una sesión caída
+   * en ventas dijera que el bot no le toca. `ErrorApi` conserva `codigo` para
+   * exactamente esto (#175), y el valor lo fija el server en
+   * `CODIGO_OTRO_MODULO`; el candado que impide que se desincronicen es
+   * `codigoDeOtroModulo.paridad.test.ts`.
+   */
+  deOtroModulo?: boolean;
 }
 
 /**
@@ -220,6 +253,24 @@ export function verBot(datos: RespuestaBotApi | undefined, ctx: Contexto = {}): 
     queHace: QUE_HACE,
     elegibles: MODOS_BOT_ELEGIBLES_RESPALDO,
   } satisfies Partial<VistaBot>;
+
+  // Va PRIMERO, y el orden es la decisión: `deOtroModulo` es algo que el server
+  // **contestó** y las otras dos ramas son cosas que **faltan**. Un server que
+  // dice «esto es de ventas» sabe más que uno del que sólo sabemos que no trajo
+  // datos, así que su respuesta manda aunque el status también encaje en otra
+  // lectura.
+  if (!datos && ctx.deOtroModulo) {
+    return {
+      ...mudo,
+      clase: 'no-aplica',
+      // Nombra la feature igual que el resto de las etiquetas: un «no aplica»
+      // suelto no dice de qué.
+      etiqueta: 'bot: no aplica',
+      detalle:
+        'el bot comercial es del módulo de VENTAS (ADR 0077): desde campaña no hay nada que ' +
+        'prender ni apagar acá. No es un permiso que falte ni un error del server.',
+    };
+  }
 
   if (!datos && ctx.sinRuta) {
     return {
@@ -268,7 +319,7 @@ export function verBot(datos: RespuestaBotApi | undefined, ctx: Contexto = {}): 
   const comun = { frenado, frenadoMotivo, numero, fuente, queHace, elegibles };
 
   // Un modo que este front no conoce NO se colapsa al más parecido ni a `apagado`:
-  // se dice. Es lo contrario de la regla de `features/canales/bot.ts` (un motivo
+  // se dice. Es lo contrario de la regla de `dominio/bot.ts` (un motivo
   // desconocido cae en «Pidió ayuda») y la diferencia es qué se pierde al errar —
   // allá una etiqueta, acá el estado de una máquina que le escribe a la gente.
   if (!esModoBot(datos.modoEfectivo)) {
@@ -431,11 +482,17 @@ export function puertaDelFreno(vista: VistaBot): PuertaDelFreno {
  * frente, y cambia un contrato), la lectura se hace por status y se nombra la
  * causa MÁS PROBABLE sin afirmar que es la única.
  *
+ * 🔴 **La excepción es `codigo`, que `ErrorApi` sí conserva.** El guard `deVentas` delante
+ * de `/api/bot` contesta 503 `lineas_no_leidas` cuando no puede leer las líneas de quien
+ * pide (ADR 0108): el mismo status que la tabla que falta, y leído así mandaba a buscar
+ * una migración que no falta. Por eso el código se mira ANTES que el status.
+ *
  * Lo que ninguna de estas lecturas puede decir es «ya está apagado»: el server
  * contesta 503 en vez de 200 justamente para no dar un OK falso sobre un
  * interruptor, y este texto tiene que conservar esa honestidad.
  */
-export function porQueNoSeGuardo(status: number | null): string {
+export function porQueNoSeGuardo(status: number | null, codigo?: string): string {
+  if (codigo === CODIGO_LINEAS_NO_LEIDAS) return 'NO se guardó: no pudimos leer tus líneas, vuelve a intentar en unos segundos';
   if (status === 503) return 'NO se guardó: falta `bot_estado` en el server (migración)';
   if (status === 400) return 'NO se guardó: el server no sabe sobre qué línea operar';
   if (status === 401 || status === 403) return 'NO se guardó: la sesión venció, vuelve a entrar';

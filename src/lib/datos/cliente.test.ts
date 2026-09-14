@@ -253,3 +253,33 @@ describe('queryClient — que las reglas estén ENCHUFADAS, no solo escritas', (
     expect(retryDelay(0, new ErrorApi('', 500))).toBe(1000);
   });
 });
+
+/**
+ * EL OTRO NOMBRE DEL MENSAJE: `error`.
+ *
+ * 305 respuestas de error del server dicen `message`; **11 dicen `error`**
+ * (`routes/persona.ts` entre ellas, medido el 4-sep-2026). Este borde sólo leía
+ * la primera, así que el rechazo de Meta ya traducido —«Esta persona no puede
+ * recibir mensajes de la página…»— llegaba a la pantalla como «Error 502», y el
+ * hilo de Messenger mostraba su genérico. Misma lección que `reintentable`: el
+ * server distingue con cuidado y el cliente lo aplana.
+ */
+describe('el texto del error', () => {
+  it('un cuerpo con `error` en vez de `message` no se aplana a «Error 502»', async () => {
+    const e = await errorDe(
+      respuestaDeError({ type: 'meta_rechazo', error: 'Esta persona no puede recibir mensajes de la página.' }),
+    );
+    expect(e.message).toBe('Esta persona no puede recibir mensajes de la página.');
+    expect(e.tipo).toBe('meta_rechazo');
+  });
+
+  it('`message` sigue mandando cuando vienen los dos', async () => {
+    const e = await errorDe(respuestaDeError({ message: 'la canónica', error: 'la otra' }));
+    expect(e.message).toBe('la canónica');
+  });
+
+  it('y un `error` que no es texto no se cuela como mensaje', async () => {
+    const e = await errorDe(respuestaDeError({ error: { code: 551 } }));
+    expect(e.message).toBe('Error 502');
+  });
+});

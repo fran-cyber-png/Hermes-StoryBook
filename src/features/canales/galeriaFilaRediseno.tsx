@@ -317,11 +317,46 @@ const FILAS: Conversacion[] = [
   }),
 ];
 
+/**
+ * 🔴 EL CASO QUE REPORTÓ EL DUEÑO (11-sep-2026): la cola de Américo (módulo de
+ * campaña, línea `51912789170`) mostraba el chip «Inteligencia y Cont…» en la
+ * conversación de `+51 955 135 507`, un número con historia en la Escuela. La
+ * MISMA persona con los MISMOS datos de la Escuela, en las dos colas: en campaña
+ * sin chip ni marca de cliente, en ventas con los dos. El server ya no manda esos
+ * datos a campaña (`cola/cursoEnCampana.test.db.ts`); acá se ve la guarda del front.
+ */
+const DE_LA_ESCUELA: Partial<Conversacion> = {
+  persona_id: '51955135507',
+  persona_nombre: 'Estephano',
+  texto: 'Hola, quiero sumarme al equipo',
+  lead_curso: 'Diplomado en Inteligencia y Contrainteligencia',
+  cliente_nivel: 'recompro',
+  cliente_compras: 2,
+  referencia: haceHoras(2),
+  ultimo_at: haceHoras(2),
+};
+const EN_CAMPANA = fila({ ...DE_LA_ESCUELA, clave: 'conv:whatsapp:51955135507:51912789170', numero_propio: '51912789170' });
+const EN_VENTAS = fila({ ...DE_LA_ESCUELA, clave: 'conv:whatsapp:51955135507:51984429504' });
+
 function Galeria() {
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto max-w-[420px] space-y-2">
-        <header className="space-y-1 pb-3">
+        <header className="space-y-1 pb-3" data-galeria="campana-sin-escuela">
+          <h1 className="text-lg font-bold text-foreground">En campaña, nada de la Escuela (11-sep-2026)</h1>
+          <p className="text-sm text-muted-foreground">
+            La misma persona, con los mismos datos de la Escuela: en la cola de campaña de Américo, y en la de ventas.
+          </p>
+        </header>
+        <p className="pt-1 text-xs font-semibold text-muted-foreground">Campaña · línea 51912789170</p>
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <FilaConversacion c={EN_CAMPANA} indice={0} seleccionada={false} onAbrir={() => {}} esDeCampana />
+        </div>
+        <p className="pt-1 text-xs font-semibold text-muted-foreground">Ventas · la Escuela</p>
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <FilaConversacion c={EN_VENTAS} indice={0} seleccionada={false} onAbrir={() => {}} />
+        </div>
+        <header className="space-y-1 pb-3 pt-6">
           <h1 className="text-lg font-bold text-foreground">Fila de la cola — todos los casos (28-ago-2026)</h1>
           <p className="text-sm text-muted-foreground">
             1-5: los casos originales. 6-7: chip del bot (escalada / caliente). 8: chip de curso. 9-11:

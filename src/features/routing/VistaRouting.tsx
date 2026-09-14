@@ -3,9 +3,11 @@ import { AlertTriangle, Boxes, ChevronRight, RefreshCw, Route, Search } from 'lu
 import { Lienzo } from './Lienzo';
 import { Monitoreo } from './Monitoreo';
 import { HojaDeLaPieza } from './HojaDeLaPieza';
+import { HojaDelAnuncio } from './HojaDelAnuncio';
 import { conCambio, destinosDe, type CableLienzo } from './reglasDelLienzo';
 import {
   ID,
+  avisoDeReparto,
   cablesDe,
   cablesHuerfanos,
   cablesDeProducto,
@@ -65,6 +67,9 @@ import {
  */
 type Filtro = 'todo' | 'division' | 'producto' | 'campana' | 'formulario';
 
+/** La hoja de la derecha: de qué producto es una pieza, o cómo se reparte un anuncio. */
+type HojaAbierta = { tipo: 'producto'; pieza: string } | { tipo: 'anuncio'; campana: string; adId: string };
+
 export function VistaRouting() {
   const { data, isLoading, error } = useRouting();
   const conectar = useConectar();
@@ -89,15 +94,34 @@ export function VistaRouting() {
    */
   const [abierta, setAbierta] = useState<string | null>(null);
   /**
-   * QUÉ PIEZA TIENE LA HOJA DE PRODUCTO ABIERTA. `null` = ninguna.
+   * QUÉ HOJA ESTÁ ABIERTA — la de producto de una pieza, o la de reparto de un
+   * anuncio (#1002). `null` = ninguna.
    *
    * Es aparte de `elegido` porque son dos preguntas: `elegido` es «qué estoy
-   * cableando» y esto es «de qué producto es». Con un solo estado, abrir el
-   * detalle movería el lienzo y cerrar la hoja no tendría a dónde volver.
+   * cableando» y esto es «de qué producto es / cómo se reparte». Con un solo
+   * estado, abrir el detalle movería el lienzo y cerrar la hoja no tendría a
+   * dónde volver.
+   *
+   * 🔴 **UNA SOLA HOJA A LA VEZ, Y LO DICE EL TIPO.** Las dos ocupan el mismo
+   * lugar. Con dos estados sueltos había que acordarse de apagar una al abrir la
+   * otra en cada lugar que abre; con uno, abrir una ES cerrar la otra.
    */
-  const [detalle, setDetalle] = useState<string | null>(null);
+  const [hoja, setHoja] = useState<HojaAbierta | null>(null);
+  const detalle = hoja?.tipo === 'producto' ? hoja.pieza : null;
   const [cables, setCables] = useState<CableLienzo[]>([]);
   const anuncios = useAnunciosDeCampana(abierta ? leerId(abierta).clave : null);
+  /**
+   * ⚠️ **La hoja del anuncio guarda su campaña y se DERIVA**: sólo existe si esa
+   * campaña sigue abierta y el anuncio sigue en su lista. Así, cerrar la campaña
+   * —con el chevron, con Escape o cambiando de pieza— cierra la hoja sin que
+   * nadie tenga que acordarse de limpiar el estado, y volver a abrirla no hace
+   * reaparecer una hoja que nadie pidió.
+   */
+  const anuncioDeLaHoja =
+    hoja?.tipo === 'anuncio' && hoja.campana === abierta
+      ? (anuncios.data?.anuncios.find((a) => a.adId === hoja.adId) ?? null)
+      : null;
+  const hojaDeAnuncioAbierta = anuncioDeLaHoja !== null;
 
   /**
    * EL ESPEJO DE `cables`, para poder leer el estado ACTUAL desde un manejador.
@@ -142,6 +166,13 @@ export function VistaRouting() {
     function alTeclear(e: KeyboardEvent) {
       if (e.key !== 'z' && e.key !== 'Z') return;
       if (!e.metaKey && !e.ctrlKey) return;
+      /**
+       * 🔴 **⌘Z adentro de una casilla es deshacer lo TIPEADO, no un cable.**
+       * Con la hoja del anuncio (#1002) hay casillas de porcentaje encima del
+       * lienzo: sin esto, corregir un «70» con ⌘Z cortaba en silencio el último
+       * cable conectado atrás. Vale igual para el buscador de `HojaDeLaPieza`.
+       */
+      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, [contenteditable="true"]')) return;
       const ultima = deshacer.current.pop();
       if (!ultima) return;
       e.preventDefault();
@@ -160,10 +191,12 @@ export function VistaRouting() {
    * hoja registra también en captura y corta la propagación (ADR 0024): con los
    * dos vivos, un Escape cerraría la hoja **y** la campaña de una, y quien
    * estaba mirando el detalle perdería además el contexto de atrás. Es el mismo
-   * `escapeActivo` que `HojaContacto` paga en el Pipeline.
+   * `escapeActivo` que `HojaContacto` paga en el Pipeline. Y por lo mismo se
+   * apaga con la hoja del anuncio (#1002): ahí el contexto de atrás es la lista
+   * de los otros anuncios de la campaña, que es lo que se reparte uno tras otro.
    */
   useEffect(() => {
-    if (!abierta || detalle) return;
+    if (!abierta || detalle || hojaDeAnuncioAbierta) return;
     function alTeclear(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       e.preventDefault();
@@ -171,7 +204,7 @@ export function VistaRouting() {
     }
     window.addEventListener('keydown', alTeclear, true);
     return () => window.removeEventListener('keydown', alTeclear, true);
-  }, [abierta, detalle]);
+  }, [abierta, detalle, hojaDeAnuncioAbierta]);
 
   const piezas = data ? piezasDe(data) : [];
   const productos = data ? productosDe(data, piezas) : [];
@@ -606,7 +639,9 @@ export function VistaRouting() {
                     <Fila
                       key={p.id}
                       titulo={p.titulo}
-                      pie={`${p.pie} · ${p.vendedoras.length ? p.vendedoras.join(', ') : 'sin cables'}`}
+                      pie={[p.pie, p.vendedoras.length ? p.vendedoras.join(', ') : 'sin cables', avisoDeReparto(p)]
+                        .filter(Boolean)
+                        .join(' · ')}
                       activa={pieza?.id === p.id}
                       onElegir={() => setElegido(p.id)}
                       /**
@@ -616,7 +651,7 @@ export function VistaRouting() {
                        */
                       onDetalle={() => {
                         setElegido(p.id);
-                        setDetalle(p.id);
+                        setHoja({ tipo: 'producto', pieza: p.id });
                       }}
                       detalleAbierto={detalle === p.id}
                     />
@@ -645,6 +680,10 @@ export function VistaRouting() {
                 onConectar={(de, a) => aplicar(de, a, 'conectar')}
                 onCortar={(de, a) => aplicar(de, a, 'cortar')}
                 onEntrar={(id) => setAbierta((y) => (y === id ? null : id))}
+                onAdentro={(id) => {
+                  const { tipo, clave } = leerId(id);
+                  if (abierta && tipo === 'anuncio') setHoja({ tipo: 'anuncio', campana: abierta, adId: clave });
+                }}
               />
               {producto && (
                 <PieDeProducto
@@ -688,7 +727,23 @@ export function VistaRouting() {
          * no existe.
          */}
         {piezaDelDetalle && (
-          <HojaDeLaPieza pieza={piezaDelDetalle} onCerrar={() => setDetalle(null)} />
+          <HojaDeLaPieza pieza={piezaDelDetalle} onCerrar={() => setHoja(null)} />
+        )}
+        {/**
+         * La hoja del anuncio (#1002), con la MISMA regla de montaje: sólo
+         * mientras su campaña esté abierta Y en pantalla. `key` por anuncio: pasar
+         * de un anuncio a otro arranca el editor con lo guardado del nuevo, no con
+         * lo que quedó tipeado en el anterior.
+         */}
+        {anuncioDeLaHoja && apertura.id === abierta && (
+          <HojaDelAnuncio
+            key={anuncioDeLaHoja.adId}
+            anuncio={anuncioDeLaHoja}
+            campana={piezas.find((p) => p.id === abierta)?.titulo ?? ''}
+            destinos={data.destinos}
+            deBaja={data.deBaja ?? []}
+            onCerrar={() => setHoja(null)}
+          />
         )}
       </div>
 

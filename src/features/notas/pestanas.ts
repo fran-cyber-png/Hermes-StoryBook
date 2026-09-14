@@ -27,7 +27,7 @@ export interface RefPestana {
    *  activarla. `null` = Mi libreta. */
   espacioId: number | null;
   /** Para pintar el ícono correcto SIN esperar a que la página resuelva. */
-  tipo: 'texto' | 'diagrama' | 'archivo';
+  tipo: 'texto' | 'archivo';
 }
 
 const CLAVE_PESTANAS = 'libreta:pestanas';

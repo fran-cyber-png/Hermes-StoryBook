@@ -3,7 +3,14 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '../../index.css';
 import { VistaEmbudo } from './VistaEmbudo';
+import { semaforoDe, type EntradaSemaforo } from '../../dominio/semaforo';
+import type { FilaDesglose } from '../../dominio/desglose';
 import { TituloDeSeccion } from '../../components/TituloDeSeccion';
+import { CONTEOS_PROD_2026_09_10, DESGLOSE_PROD_2026_09_10 } from './galeriaDatosProd';
+import { LEYENDA_SEMAFORO } from './resumen';
+import type { PuentePipeline } from './puentePipeline';
+import { esRecorteDelDia, type RecorteDelDia } from '../../dominio/recortesDelDia';
+import { tableroDeCampana } from './galeriaCampana';
 
 /**
  * LA GALERÍA DEL PIPELINE — la evidencia de la ficha al costado, sin server ni base.
@@ -13,6 +20,15 @@ import { TituloDeSeccion } from '../../components/TituloDeSeccion';
  *
  *     npx vite --port 5199 → http://localhost:5199/galeria-embudo.html
  *     …/galeria-embudo.html?ficha=1 → con la hoja de la ficha abierta
+ *     …?vista=lista     → la Lista en vez del Tablero
+ *     …?luz=verde       → con esa luz de la leyenda puesta (el recorte de la mesa)
+ *     …?hoy=1           → siembra `nacioHoy` («N nuevas hoy» y «N hoy» por columna)
+ *     …?supervisor=1    → las líneas dicen `veTodo`: la dueña en cada tarjeta y el filtro de la Lista
+ *     …?rango=hoy       → toca ese rango de la fila de arriba (`hoy` · `d7`): `franjaEn=*`
+ *     …?puente=sinRespuesta24h → abre como lo abre el Dashboard (`escribioHoy` · `sinRespuesta24h`)
+ *     …?servidorViejo=1 → el tablero no publica `recortesDisponibles`: rango apagado, el puente avisa
+ *     …?campana=1       → el tablero de campaña, con lo medido de Betto y Américo (`galeriaCampana.ts`)
+ *                          y `mesaPorCanal`; con `&servidorViejo=1`, sin él
  *
  * Existe por la regla dura #2, y sobre todo para poder mirar UNA cosa a
  * 1280×720: el `GRID` del tablero declara mínimos que suman **1.000 px** y la
@@ -24,57 +40,110 @@ import { TituloDeSeccion } from '../../components/TituloDeSeccion';
 const PARAMS = new URLSearchParams(location.search);
 
 /**
- * Las columnas, con la forma real de producción (medida el 10-ago-2026).
- *
- * ⚠️ **`sin_respuesta` ya no está**: desde el 10-ago dejó de ser columna
- * (decisión del dueño — era el 65 % de la mesa y nadie la trabajaba). Sigue
- * derivándose en el server, así que si alguien la vuelve a poner acá la galería
- * mentiría sobre lo que la pantalla dibuja.
+ * Las columnas, con los conteos REALES de producción del 10-sep-2026
+ * (`galeriaDatosProd.ts`): Te esperan 1.109 · Nunca contestaron 7.505 ·
+ * Contestaron 421 · Saben el precio 3.410 · Compraron 86.
  */
-const POR_ETAPA: Record<string, number> = {
-  interesado: 377,
-  sin_respuesta: 4491,
-  contactado: 217,
-  cotizado: 798,
-  cierre: 12,
-  perdido: 47,
-};
+const POR_ETAPA: Record<string, number> = CONTEOS_PROD_2026_09_10;
 
 /**
- * ⚠️ **LOS 4.491 SILENCIOS, UNO POR UNO** — y no un número suelto.
+ * ⚠️ **LOS SILENCIOS, UNO POR UNO** — y no un número suelto (7.505, los de
+ * `POR_ETAPA.sin_respuesta` en la foto de producción del 10-sep-2026).
  *
  * La franja de tiempo (`franja.ts`) se prueba contando: «últimos 30 min» tiene
  * que dar un puñado y «hoy» un par de cientos. Con un total inventado por franja,
  * la captura probaría que sé escribir constantes, no que el filtro filtra. Así
- * que la galería siembra los 4.491 INSTANTES y el stub los cuenta como los
+ * que la galería siembra un INSTANTE por silencio y el stub los cuenta como los
  * contaría postgres — el mismo `ultimo_at >= desde` de `consultarCola.ts`.
  *
- * El reparto es parejo sobre los 30 días que mira la cola: 4.491 / 30 ≈ 150 por
- * día, ≈ 6 por hora. No es la forma real de un día de trabajo (que se apelotona
+ * El reparto es parejo sobre los 30 días que mira la cola: 7.505 / 30 ≈ 250 por
+ * día, ≈ 10 por hora. No es la forma real de un día de trabajo (que se apelotona
  * de mañana), y no hace falta que lo sea: lo que la captura tiene que mostrar es
  * que la cifra CAMBIA y que la lista es la de esa franja.
  */
 const MINUTOS_DE_LA_COLA = 30 * 24 * 60;
-const INSTANTES_SIN_RESPUESTA: number[] = Array.from({ length: POR_ETAPA.sin_respuesta }, (_, i) => {
-  const atras = ((i + 0.5) * MINUTOS_DE_LA_COLA) / POR_ETAPA.sin_respuesta;
-  return Date.now() - atras * 60_000;
-});
+/**
+ * Y un instante por conversación en CADA columna: fecha las tarjetas y cuenta la
+ * franja de «Cuándo». ⚠️ **El TOTAL del rango de arriba no sale de acá**: sale de
+ * lo medido en producción (`MEDIDO_2026_09_10_0710`). Esto sólo elige qué
+ * tarjetas se dibujan y con qué «hace».
+ *
+ * 🔴 **Las que nacieron hoy (`?hoy=1`) caen HOY**, y el resto parejo en los 30
+ * días: una conversación que nació hoy tiene mensajes de hoy, y repartidas por
+ * igual la galería se contradecía en la misma fila. Se arma al primer pedido y no
+ * al cargar el módulo, porque el desglose se declara más abajo.
+ */
+const INSTANTES_POR_ETAPA = new Map<string, number[]>();
+function instantesDe(etapa: string): number[] {
+  const hechos = INSTANTES_POR_ETAPA.get(etapa);
+  if (hechos) return hechos;
+  const n = POR_ETAPA[etapa] ?? 0;
+  const nacidas = DESGLOSE.filter((f) => f.etapa === etapa && f.nacioHoy).reduce((s, f) => s + f.n, 0);
+  const deHoy = Math.min(n, nacidas);
+  const ahora = Date.now();
+  const medianoche = new Date(ahora).setHours(0, 0, 0, 0);
+  const hoy = Array.from({ length: deHoy }, (_, i) => ahora - ((i + 0.5) * (ahora - medianoche)) / deHoy);
+  const resto = Array.from(
+    { length: n - deHoy },
+    (_, i) => ahora - (((i + 0.5) * MINUTOS_DE_LA_COLA) / (n - deHoy)) * 60_000,
+  );
+  const todos = [...hoy, ...resto].sort((a, b) => b - a);
+  INSTANTES_POR_ETAPA.set(etapa, todos);
+  return todos;
+}
 
 /**
- * CUÁNTAS DEJA CADA RECORTE — medido en producción el 8-ago-2026, y es lo que
- * hace que esta galería sirva de evidencia y no de dibujo: el punto del frente es
- * que «Para seguir 82» sea drásticamente más chico que «3.051».
+ * CUÁNTAS DEJA CADA RECORTE — contadas sobre el desglose real, fila por fila,
+ * como las contaría el server. Así la cabecera de la columna («764 de 3.410») y
+ * la lista que se ve salen de la MISMA foto, y no de dos constantes que se pueden
+ * desalinear (hasta el 10-sep-2026 eran números del 8-ago escritos a mano).
  */
-const POR_RECORTE: Record<string, Record<string, number>> = {
-  // ⚠️ En «Te esperan» el chip «En ventana» daría CASI EL TOTAL —te escribieron
-  // recién, por definición—, y ahí la otra mitad de la regla del cero lo esconde
-  // sola. Está puesto en el TOTAL a propósito: es el caso que hay que poder ver.
-  interesado: { ventana: 377, seguir: 88, precio: 0 },
-  // «Nunca contestaron», con los números que la pantalla muestra hoy.
-  sin_respuesta: { ventana: 0, seguir: 1349, precio: 2497 },
-  contactado: { ventana: 0, seguir: 24, precio: 0 },
-  cotizado: { ventana: 2, seguir: 82, precio: 798 },
+const CAMPO_DE_RECORTE = { ventana: 'ventana', seguir: 'paraSeguir', precio: 'precio', seCallo: 'seCallo' } as const;
+/**
+ * EL RANGO Y LOS RECORTES DEL DÍA (#946), MEDIDOS EN PRODUCCIÓN — no sembrados.
+ *
+ * Los midió hermes-97 el 10-sep-2026 a las 07:10 de Lima (12:10:24Z): el
+ * `consultarCola` de `integracion-arm-crm`, que ya trae #946, contra la base de
+ * producción, como la supervisora de Ventas y cada pedido en su transacción con
+ * ROLLBACK. Producción todavía no corre #946, así que no hay API que lo sirva.
+ * «7 d» es ahora − 7×24 h, igual que `limitesDe('d7')`.
+ *
+ * ⚠️ A las 7 a. m. «Hoy» y «escribió hoy» salen bajos: el día recién empieza.
+ * ⚠️ **Los CRUCES no están medidos** (`totalDelRango`): «Hoy» × «sin respuesta >
+ * 24 h» = 0 y «7 d» × «escribió hoy» = «escribió hoy» salen de las definiciones, y
+ * «7 d» × «sin respuesta > 24 h» es una COTA: el menor de los dos.
+ * ⚠️ El 0 de «Nunca contestaron» en los dos recortes del día no es un hueco: esa
+ * columna es «le escribimos y nunca escribió», y los dos piden a alguien que sí
+ * escribió.
+ */
+const MEDIDO_2026_09_10_0710: Record<'hoy' | 'd7' | RecorteDelDia, Record<string, number>> = {
+  hoy: { interesado: 48, sin_respuesta: 0, contactado: 0, cotizado: 18, cierre: 1 },
+  d7: { interesado: 442, sin_respuesta: 5103, contactado: 209, cotizado: 2448, cierre: 55 },
+  escribioHoy: { interesado: 42, sin_respuesta: 0, contactado: 0, cotizado: 5, cierre: 0 },
+  sinRespuesta24h: { interesado: 467, sin_respuesta: 0, contactado: 3, cotizado: 240, cierre: 23 },
 };
+function totalDeRecorte(etapa: string, recorte: string): number {
+  if (esRecorteDelDia(recorte)) return MEDIDO_2026_09_10_0710[recorte][etapa] ?? 0;
+  const campo = CAMPO_DE_RECORTE[recorte as keyof typeof CAMPO_DE_RECORTE];
+  if (!campo) return 0;
+  return DESGLOSE.filter((f) => f.etapa === etapa && f[campo]).reduce((s, f) => s + f.n, 0);
+}
+
+/**
+ * El total de una columna con el rango de arriba puesto, de lo medido. El rango
+ * CONVIVE con un recorte del día, y el server da la intersección.
+ */
+function totalDelRango(etapa: string, recorte: string | undefined, desde: number): number {
+  const rango = desde >= new Date().setHours(0, 0, 0, 0) ? 'hoy' : 'd7';
+  const delRango = MEDIDO_2026_09_10_0710[rango][etapa] ?? 0;
+  if (!esRecorteDelDia(recorte)) return delRango;
+  // «Escribió hoy» cae entero adentro de cualquier rango: tiene mensajes de hoy.
+  if (recorte === 'escribioHoy') return MEDIDO_2026_09_10_0710.escribioHoy[etapa] ?? 0;
+  // «Sin respuesta > 24 h» no tiene mensajes en las últimas 24 h: «Hoy» no deja a nadie.
+  if (rango === 'hoy') return 0;
+  // ⚠️ «7 d» × «sin respuesta > 24 h» NO está medido todavía: se sirve la cota, el menor de los dos.
+  return Math.min(delRango, MEDIDO_2026_09_10_0710.sinRespuesta24h[etapa] ?? 0);
+}
 
 /**
  * LAS DOS LÍNEAS QUE CORREN HOY, con sus números y rótulos reales (medido el
@@ -90,6 +159,88 @@ const POR_RECORTE: Record<string, Record<string, number>> = {
 const LINEAS = [
   { numero: '51984429504', etiqueta: 'Ventas Meta', estado: 'conectado', mias: true, compartida: true },
   { numero: '51963139984', etiqueta: 'Betto', estado: 'conectado', mias: true, compartida: false },
+];
+
+
+/**
+ * LOS OCHO CASOS REALES DEL SEMÁFORO DE VENTAS — y por qué están acá.
+ *
+ * 🔴 **Hasta el 9-set-2026 esta galería no fijaba `luz` en absoluto**, así que
+ * las tarjetas salían todas grises y la pieza más cara del Pipeline no tenía
+ * evidencia posible. Una galería que no sirve los valores REALES de producción
+ * no es evidencia (candado 10 del CLAUDE.md), y ésta ni siquiera servía uno.
+ *
+ * Los textos son literales de la cola de producción del 8 y 9 de setiembre (las
+ * piezas `osint_socmint_*` y `agente_ia_*`). Las SEÑALES son las que el server
+ * manda en la fila; la LUZ la calcula `semaforoDe`, que es exactamente la regla
+ * que cambió — así que esta galería muestra el cambio, no un dibujo de él.
+ *
+ * Los seis del medio son los que se ven distinto antes y después:
+ * un contestador de empresa y un ex-cliente pasan de VERDE a gris, el curso del
+ * formulario pasa de VERDE a ámbar (y sólo si contestó), el rechazo nuevo entra
+ * al rojo, y quien rechazó en julio y volvió a preguntar el precio deja de estar
+ * enterrado en rojo.
+ */
+const SIN_SENAL: EntradaSemaforo = {
+  hablo: false,
+  entranteConSustancia: false,
+  preguntoPrecio: false,
+  nombroUnCurso: false,
+  dijoQueNo: false,
+  autoRespuestaDeNegocio: false,
+  incoherente: false,
+  perdidoDeclarado: false,
+  botTemperatura: null,
+  enfriada: false,
+};
+
+const CASOS_REALES: ReadonlyArray<{
+  texto: string;
+  senales: Partial<EntradaSemaforo>;
+  /** El nivel del padrón, para el chip «Cliente» — que ahora vive en la tarjeta. */
+  cliente?: { nivel: string; compras: number };
+}> = [
+  {
+    texto: '¿Cuánto cuesta el diploma? Quiero inscribirme',
+    senales: { hablo: true, entranteConSustancia: true, preguntoPrecio: true },
+  },
+  {
+    // Antes: gris. El diccionario de ocho frases no lo veía.
+    texto: 'Ya no necesito que me envíen nada',
+    senales: { hablo: true, entranteConSustancia: true, dijoQueNo: true },
+  },
+  {
+    // El «ahora no» del dueño: ámbar, nunca rojo.
+    texto: 'Más adelante tal vez',
+    senales: { hablo: true, entranteConSustancia: true },
+  },
+  {
+    // Antes VERDE, porque su saludo automático menciona precios.
+    texto: 'Gracias por comunicarse con BALISTIK SEGURIDAD INTEGRAL. Consulte precios y formas de pago',
+    senales: { hablo: true, entranteConSustancia: true, preguntoPrecio: true, autoRespuestaDeNegocio: true },
+  },
+  {
+    // Antes VERDE por «compró». Era el 79 % de los verdes.
+    texto: null as unknown as string,
+    senales: {},
+    cliente: { nivel: 'recompro', compras: 3 },
+  },
+  {
+    // Antes VERDE por el curso del formulario, sin haber dicho una palabra.
+    texto: null as unknown as string,
+    senales: { nombroUnCurso: true },
+  },
+  {
+    // Antes VERDE; ahora ámbar, que es el limbo que el dueño describió.
+    texto: 'Estoy revisando mis horarios estas semanas, después te cuento',
+    senales: { hablo: true, entranteConSustancia: true, nombroUnCurso: true },
+  },
+  {
+    // 🔴 EL CASO QUE ESTABA ENTERRADO: rechazó en julio y hoy pregunta el precio.
+    // Antes ROJO para siempre, y «Atender siguiente» nunca abre un rojo.
+    texto: '¿Sigue abierta la inscripción? ¿Cuánto cuesta?',
+    senales: { hablo: true, entranteConSustancia: true, preguntoPrecio: true, dijoQueNo: true },
+  },
 ];
 
 const NOMBRES = [
@@ -116,6 +267,56 @@ const DESDE: Record<string, number> = {
   cierre: 200,
   perdido: 300,
 };
+
+/**
+ * LO QUE EL BOT CALIFICÓ, con la proporción real de producción.
+ *
+ * Medido el 7-sep-2026 sobre `bot_calificaciones`: **85 filas, 51 calientes y 34
+ * tibias**, y sólo sobre la línea «Ventas Meta» —la única de Cloud API, el 9 %
+ * de los entrantes—. Por eso acá la mayoría de las tarjetas NO trae veredicto:
+ * una galería donde todas están calificadas mostraría una columna que no existe.
+ *
+ * Las tres sembradas son las tres que hay que poder mirar en la misma captura:
+ *
+ *   · **i = 0 · tibia** — y ES LA PRIMERA a propósito, porque `?ficha=1` abre la
+ *     hoja de ésa. La tarjeta NO dibuja nada (tibio y frío no entran a una
+ *     lista) y la ficha SÍ: es exactamente el tercio del dato que hasta el
+ *     7-sep-2026 no se veía en ninguna pantalla de Hermes, y la única forma de
+ *     probar las dos mitades de la decisión con una sola foto.
+ *   · **i = 1 · escalada por «por_cerrar», y además caliente** — el chip rojo, el
+ *     hecho más caro de la tabla. En la tarjeta gana la escalada (entra un
+ *     chip); en la ficha se ven los dos.
+ *   · **i = 4 · caliente** con el motivo en texto libre del modelo, que es como
+ *     viene cuando calificó sin escalar.
+ */
+function veredictoDelBot(i: number) {
+  if (i === 0) return { bot_temperatura: 'tibio', bot_motivo: 'preguntó por el temario y la duración, todavía no por el precio' };
+  if (i === 1) return { bot_escalada: true, bot_temperatura: 'caliente', bot_motivo: 'por_cerrar' };
+  if (i === 4) return { bot_temperatura: 'caliente', bot_motivo: 'pidió el precio y la forma de pago en cuotas' };
+  return {};
+}
+
+/**
+ * LOS CASOS REALES QUE ESTA COLUMNA PUEDE MOSTRAR: sólo los de una luz que la
+ * columna tiene de verdad en el desglose de producción. Sin esto, con «Verdes»
+ * puesto, «Nunca contestaron» decía «0 de 7.505» encima de una tarjeta verde —
+ * la galería contradiciéndose en la misma captura (lo mostró la captura).
+ */
+function casosDeEtapa(etapa: string) {
+  const luces = new Set(DESGLOSE.filter((f) => f.etapa === etapa && f.n > 0).map((f) => f.luz));
+  return CASOS_REALES.filter((caso) => luces.has(semaforoDe({ ...SIN_SENAL, ...caso.senales }).luz));
+}
+
+/**
+ * A QUIÉN ESTÁ ASIGNADA — con la forma medida el 10-sep-2026: vacío en casi toda
+ * la mesa, salvo «Compraron» (45 %). Por eso sólo se siembra ahí, en la mitad de
+ * sus tarjetas, y con dos personas del equipo: «Sin asignar» tiene que verse bien
+ * porque es lo que más se va a ver.
+ */
+function asignadaDeGaleria(etapa: string, i: number): string | null {
+  if (etapa !== 'cierre' || i % 2 !== 0) return null;
+  return i % 4 === 0 ? 'sindy.rojas' : 'luz';
+}
 
 /** Una tarjeta con la forma que sirve la cola (`/api/conversaciones`). */
 function tarjetas(etapa: string, cuantas: number, instantes?: number[]) {
@@ -169,7 +370,20 @@ function tarjetas(etapa: string, cuantas: number, instantes?: number[]) {
         etapa_desde: null,
         nivel: 0,
       };
+    /**
+     * EL SEMÁFORO DE VENTAS, DERIVADO — no clavado. Las primeras ocho tarjetas
+     * de cada columna son los casos reales de producción; el resto queda sin
+     * señal, que es como se ve la mayoría de la mesa.
+     */
+    const real = casosDeEtapa(etapa)[i] ?? null;
+    const sem = semaforoDe({ ...SIN_SENAL, ...(real?.senales ?? {}) });
     return {
+      luz: sem.luz,
+      porque: sem.porque,
+      origen_semaforo: sem.origen ?? null,
+      cliente_nivel: real?.cliente?.nivel ?? null,
+      cliente_compras: real?.cliente?.compras ?? null,
+      asignada_a: asignadaDeGaleria(etapa, i),
       clave: `conv:whatsapp:${telefono}:${LINEAS[0].numero}`,
       canal: 'whatsapp',
       tipo: 'mensaje',
@@ -177,7 +391,7 @@ function tarjetas(etapa: string, cuantas: number, instantes?: number[]) {
       persona_nombre: nombre,
       lead_nombre: nombre,
       numero_propio: LINEAS[0].numero,
-      texto: i % 3 === 0 ? '¿me puede pasar más información del diplomado?' : null,
+      texto: real ? real.texto : i % 3 === 0 ? '¿me puede pasar más información del diplomado?' : null,
       contexto_texto: null,
       // En «Te esperan» la pelota es NUESTRA: la persona escribió y nadie le
       // contestó, así que `respondida` es false — es lo que deriva esa etapa.
@@ -212,45 +426,48 @@ function tarjetas(etapa: string, cuantas: number, instantes?: number[]) {
           ? new Date(Date.now() - 4 * 3_600_000).toISOString()
           : new Date(Date.now() - (2 + i * 4) * 86_400_000).toISOString(),
       nivel: i % 2 === 0 ? 4 : 0,
+      // El veredicto del bot viaja en la MISMA fila que todo lo demás: `GET /` y
+      // `GET /tablero` comparten `consultarCola`, así que esto no es un dato de
+      // galería, es la forma real de la respuesta.
+      ...veredictoDelBot(i),
     };
   });
 }
 
-/** El desglose que alimenta la bandeja y los conteos por columna. */
-const DESGLOSE = [
-  // «Te esperan» es columna desde el 10-ago, así que estas dos filas ya no
-  // alimentan una tira: alimentan su cabecera («sin abrir» vs «volvieron») y su
-  // conteo. `ventana: true` en las dos es lo real —te acaban de escribir— y es
-  // lo que hace que el chip «En ventana» dé el total y la regla lo esconda.
-  // Las «sin abrir» son 238 y solo una parte está escribiendo AHORA (<24 h). Van
-  // en dos filas para que los tres números de la cabecera sean distintos: con
-  // `viva` en las 238, decía «238 ahora · 238 sin abrir» y se leía como un bug.
-  // ⚠️ En producción hoy `vivas` es 0 —hace días que no escribe nadie—, así que
-  // ese segmento no se dibuja; acá se siembra para poder verlo.
-  { etapa: 'interesado', yaLeHablamos: false, precio: false, viva: true, ventana: true, paraSeguir: false, n: 12 },
-  { etapa: 'interesado', yaLeHablamos: false, precio: false, viva: false, ventana: true, paraSeguir: false, n: 226 },
-  { etapa: 'interesado', yaLeHablamos: true, precio: false, viva: false, ventana: true, paraSeguir: true, n: 88 },
-  { etapa: 'interesado', yaLeHablamos: true, precio: false, viva: false, ventana: true, paraSeguir: false, n: 51 },
-  // ⚠️ Desde el 8-ago-2026 NINGUNA fila de `contactado` puede tener `precio`:
-  // `precio_enviado` deriva `cotizado` (`cola/etapaEfectivaSql.ts`), así que esa
-  // combinación ya no existe. Por eso el chip «Con precio» desaparece de
-  // Contactados solo — la regla «un recorte que daría cero no se ofrece».
-  // Los números son los MEDIDOS en producción el 8-ago-2026 (ver `POR_RECORTE`):
-  // «en ventana» deja 0 de 544 y 2 de 3.051 —por eso ese chip casi no aparece— y
-  // «para seguir» es el único que recorta de verdad.
-  // «Nunca contestaron»: le escribimos y nunca dijo una palabra. `yaLeHablamos`
-  // en true y `ventana` en false — la ventana la abre un ENTRANTE, y acá no hubo.
-  { etapa: 'sin_respuesta', yaLeHablamos: true, precio: true, viva: false, ventana: false, paraSeguir: true, n: 1349 },
-  { etapa: 'sin_respuesta', yaLeHablamos: true, precio: true, viva: false, ventana: false, paraSeguir: false, n: 1148 },
-  { etapa: 'sin_respuesta', yaLeHablamos: true, precio: false, viva: false, ventana: false, paraSeguir: false, n: 1994 },
-  { etapa: 'contactado', yaLeHablamos: true, precio: false, viva: false, ventana: false, paraSeguir: true, n: 24 },
-  { etapa: 'contactado', yaLeHablamos: true, precio: false, viva: false, ventana: false, paraSeguir: false, n: 193 },
-  { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, ventana: true, paraSeguir: false, n: 2 },
-  { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, ventana: false, paraSeguir: true, n: 82 },
-  { etapa: 'cotizado', yaLeHablamos: true, precio: true, viva: false, ventana: false, paraSeguir: false, n: 714 },
-  { etapa: 'cierre', yaLeHablamos: true, precio: true, viva: false, paraSeguir: false, n: 12 },
-  { etapa: 'perdido', yaLeHablamos: true, precio: false, viva: false, paraSeguir: false, n: 47 },
-];
+/**
+ * EL DESGLOSE — el de producción del 10-sep-2026, literal (`galeriaDatosProd.ts`).
+ *
+ * ⚠️ **`?hoy=1` SIEMBRA `nacioHoy`**: el server ya lo cuenta (#946), pero esta
+ * foto de producción es de antes, y las capturas que lo usan lo dicen. No se
+ * combina con el rango de arriba, que sirve lo medido a las 7 a. m.: 2.175 nuevas
+ * no entran en los 48 con mensajes de hoy. Los números salen de lo
+ * medido, no de un caso ideal: en «Nunca contestaron» nacieron 2.175 —la
+ * difusión de ese día, medida por la sesión orquestadora—. En «Te esperan» se
+ * marcan las que escribieron en las últimas 24 h y a las que nunca les habíamos
+ * hablado (`viva` y no `yaLeHablamos`, 83). Es una APROXIMACIÓN: nacer hoy es el
+ * primer mensaje de la historia, y `viva` sólo mira el último entrante. Las demás
+ * columnas quedan en cero. Sin `?hoy=1` la galería muestra lo que ve hoy
+ * producción: la frase de siempre, sin «nuevas hoy».
+ */
+const DESGLOSE: FilaDesglose[] = PARAMS.has('hoy') ? conNacioHoy(DESGLOSE_PROD_2026_09_10) : DESGLOSE_PROD_2026_09_10;
+
+function conNacioHoy(filas: readonly FilaDesglose[]): FilaDesglose[] {
+  let difusionPorRepartir = 2175;
+  return filas.flatMap((f): FilaDesglose[] => {
+    if (f.etapa === 'interesado') return [{ ...f, nacioHoy: f.viva && !f.yaLeHablamos }];
+    if (f.etapa !== 'sin_respuesta' || difusionPorRepartir === 0) return [{ ...f, nacioHoy: false }];
+    // Una fila del desglose es un conteo: partirla en dos no inventa gente, sólo
+    // dice cuántas de esas nacieron hoy.
+    const deHoy = Math.min(f.n, difusionPorRepartir);
+    difusionPorRepartir -= deHoy;
+    return deHoy === f.n
+      ? [{ ...f, nacioHoy: true }]
+      : [
+          { ...f, n: deHoy, nacioHoy: true },
+          { ...f, n: f.n - deHoy, nacioHoy: false },
+        ];
+  });
+}
 
 /** Lo que la hoja de la ficha le pregunta a Cerberus. */
 const FICHA_CERBERUS = {
@@ -285,13 +502,19 @@ const FICHA_CERBERUS = {
 /**
  * La franja que pide la URL, si es la de ESTA columna. Es la misma guarda que el
  * server (`cola/franjaPedida.ts`): sin `franjaEn` la franja no se aplica a nadie,
- * porque aplicada a todas vaciaría las columnas que la vendedora no tocó.
+ * porque aplicada a todas vaciaría las columnas que la vendedora no tocó. Con
+ * `franjaEn=*` —el rango de la fila de arriba, #946— se aplica a todas porque
+ * alguien lo pidió.
  */
-function franjaDe(q: URLSearchParams, etapa: string): { desde: number; hasta: number | null } | null {
+function franjaDe(
+  q: URLSearchParams,
+  etapa: string,
+): { desde: number; hasta: number | null; enTodas: boolean } | null {
   const desde = q.get('desde');
-  if (!desde || q.get('franjaEn') !== etapa) return null;
+  const en = q.get('franjaEn');
+  if (!desde || (en !== etapa && en !== '*')) return null;
   const hasta = q.get('hasta');
-  return { desde: new Date(desde).getTime(), hasta: hasta ? new Date(hasta).getTime() : null };
+  return { desde: new Date(desde).getTime(), hasta: hasta ? new Date(hasta).getTime() : null, enTodas: en === '*' };
 }
 
 /**
@@ -303,24 +526,47 @@ function franjaDe(q: URLSearchParams, etapa: string): { desde: number; hasta: nu
  * frente hace. Es el mismo cuidado que la clave única por columna.
  *
  * Y la franja se cuenta de verdad, instante por instante (ver
- * `INSTANTES_SIN_RESPUESTA`): es lo que hace que «Últimos 30 minutos · 3 de
+ * `instantesDe`): es lo que hace que «Últimos 30 minutos · 3 de
  * 4.491» sea una medición del filtro y no un número escrito a mano.
  */
 function paginaDe(etapa: string, recorte: string | undefined, franja: ReturnType<typeof franjaDe>) {
-  if (franja) {
-    const dentro = INSTANTES_SIN_RESPUESTA.filter(
-      (t) => t >= franja.desde && (franja.hasta == null || t < franja.hasta),
-    );
-    const cuantas = Math.min(dentro.length, 8);
-    return {
-      conversaciones: tarjetas(etapa, cuantas, dentro),
-      total: dentro.length,
-      hayMas: dentro.length > cuantas,
-    };
-  }
-  const total = recorte ? (POR_RECORTE[etapa]?.[recorte] ?? 0) : (POR_ETAPA[etapa] ?? 0);
-  const cuantas = Math.min(total, etapa === 'contactado' || etapa === 'interesado' ? 8 : 4);
-  return { conversaciones: tarjetas(etapa, cuantas), total, hayMas: total > cuantas };
+  const dentro = franja
+    ? instantesDe(etapa).filter((t) => t >= franja.desde && (franja.hasta == null || t < franja.hasta))
+    : null;
+  const total = totalDePagina(etapa, recorte, franja, dentro);
+  const tope = dentro || etapa === 'contactado' || etapa === 'interesado' ? 8 : 4;
+  const cuantas = Math.min(total, tope);
+  // Las tarjetas se fechan con el recorte del día si hay uno, si no con la
+  // franja; con menos instantes que tarjetas, con el reparto genérico.
+  const fechas = instantesDelRecorte(etapa, recorte) ?? dentro;
+  const instantes = fechas && fechas.length >= cuantas ? fechas : undefined;
+  return { conversaciones: tarjetas(etapa, cuantas, instantes), total, hayMas: total > cuantas };
+}
+
+/** Cuántas hay en la columna pedida, tomado de donde es verdadero. */
+function totalDePagina(
+  etapa: string,
+  recorte: string | undefined,
+  franja: ReturnType<typeof franjaDe>,
+  dentro: number[] | null,
+): number {
+  // El rango de arriba (`franjaEn=*`): lo medido en producción.
+  if (franja?.enTodas) return totalDelRango(etapa, recorte, franja.desde);
+  // La franja de «Cuándo»: contada instante por instante.
+  if (dentro) return dentro.length;
+  if (recorte) return totalDeRecorte(etapa, recorte);
+  return POR_ETAPA[etapa] ?? 0;
+}
+
+/**
+ * Un recorte del día fecha sus tarjetas como el recorte dice: «sin respuesta hace
+ * más de 24 h» encima de una tarjeta de «hace 2 h» sería la captura
+ * contradiciéndose a sí misma. `null` = cualquier otro recorte, que no fecha nada.
+ */
+function instantesDelRecorte(etapa: string, recorte: string | undefined): number[] | null {
+  if (recorte === 'sinRespuesta24h') return instantesDe(etapa).filter((t) => Date.now() - t > 86_400_000);
+  if (recorte === 'escribioHoy') return instantesDe(etapa).filter((t) => t >= new Date().setHours(0, 0, 0, 0));
+  return null;
 }
 
 /** Todo endpoint responde de mentira: la galería no toca la red ni una vez. */
@@ -340,7 +586,7 @@ window.fetch = (async (entrada: RequestInfo | URL) => {
   // Las líneas por las que se le puede escribir a alguien: es lo que decide si
   // el botón de la tarjeta lleva derecho al chat o pregunta primero.
   if (url.includes('/api/whatsapp/lineas')) {
-    return respuesta({ lineas: LINEAS });
+    return respuesta({ lineas: LINEAS, veTodo: PARAMS.has('supervisor') });
   }
 
   /**
@@ -354,18 +600,36 @@ window.fetch = (async (entrada: RequestInfo | URL) => {
    */
   if (url.includes('/api/conversaciones/tablero')) {
     const q = new URL(url, location.origin).searchParams;
+    // `?campana=1`: la mesa de Betto y Américo, con lo medido en producción
+    // (`galeriaCampana.ts`). Nunca la foto de ventas: «no combines Escuela con campaña».
+    if (PARAMS.has('campana')) {
+      return respuesta(tableroDeCampana(q, Date.now(), { servidorViejo: PARAMS.has('servidorViejo') }));
+    }
     const columnas: Record<string, unknown> = {};
     for (const pedida of (q.get('columnas') ?? '').split(',').filter(Boolean)) {
       const [etapa, recorte] = pedida.split(':');
       columnas[etapa] = paginaDe(etapa, recorte, franjaDe(q, etapa));
     }
-    return respuesta({ columnas, conteos: POR_ETAPA, desglose: DESGLOSE });
+    return respuesta({
+      columnas,
+      conteos: POR_ETAPA,
+      desglose: DESGLOSE,
+      // La lista del server de #946, tal cual (`cola/recortesDeColumna.ts`).
+      ...(PARAMS.has('servidorViejo')
+        ? {}
+        : { recortesDisponibles: ['precio', 'ventana', 'seguir', 'seCallo', 'nacioHoy', 'escribioHoy', 'sinRespuesta24h'] }),
+    });
   }
 
   if (url.includes('/api/conversaciones')) {
+    // «Ver más» en campaña: la galería no tiene una página 2 medida que servir, y la de
+    // ventas mezclaría la Escuela en el tablero de campaña.
+    if (PARAMS.has('campana')) return respuesta({ conversaciones: [], hayMas: false });
     const q = new URL(url, location.origin).searchParams;
     const etapa = q.get('etapa') ?? 'contactado';
-    const recorte = ['ventana', 'seguir', 'precio'].find((r) => q.get(r) === '1');
+    const recorte = ['ventana', 'seguir', 'precio', 'seCallo', 'escribioHoy', 'sinRespuesta24h'].find(
+      (r) => q.get(r) === '1',
+    );
     return respuesta({
       ...paginaDe(etapa, recorte, franjaDe(q, etapa)),
       conteos: POR_ETAPA,
@@ -373,7 +637,21 @@ window.fetch = (async (entrada: RequestInfo | URL) => {
     });
   }
 
-  const cuerpo = url.includes('/api/contactos/ficha')
+  // #1033 — el panel lee UNA consulta de perfil, con la misma ficha y el mismo formulario de abajo.
+  const cuerpo = url.includes('/api/contactos/perfil')
+    ? {
+        ficha: FICHA_CERBERUS,
+        lead: {
+          nombre: 'Javier Peralta Ríos',
+          fuente: 'meta',
+          campana: 'Gestión Pública · julio',
+          anuncio: 'Adquiérelo ahora',
+          fecha: '2026-07-02T15:12:00.000Z',
+        },
+        padron: null,
+        errores: [],
+      }
+    : url.includes('/api/contactos/ficha')
     ? FICHA_CERBERUS
     : url.includes('/api/contactos/lead')
     ? {
@@ -417,14 +695,14 @@ function respuesta(cuerpo: unknown) {
  * esa persona costaba **irse a Mensajes** y perder el tablero.
  */
 /**
- * `?seguir=1` toca el chip «Para seguir» de Cotizados — la evidencia del frente:
- * la columna pasa de 3.051 tarjetas a 82, con el total todavía a la vista.
+ * `?seguir=1` toca el chip «Para seguir» de «Saben el precio» — la columna pasa
+ * de 3.410 tarjetas a 764, con el total todavía a la vista.
  */
 if (PARAMS.has('seguir')) {
   setTimeout(() => {
-    const chips = document.querySelectorAll<HTMLElement>('button[aria-pressed]');
+    const chips = document.querySelectorAll<HTMLElement>('section[aria-label="Saben el precio"] button[aria-pressed]');
     for (const chip of chips) {
-      if (chip.textContent?.startsWith('Para seguir 82')) {
+      if (chip.textContent?.startsWith('Para seguir')) {
         chip.click();
         break;
       }
@@ -506,6 +784,53 @@ if (PARAMS.has('ficha')) {
   }, 500);
 }
 
+/**
+ * `?vista=lista` abre en la Lista: la preferencia vive en `localStorage`, igual
+ * que en la app, así que se escribe ANTES del primer render. `?luz=verde` toca esa
+ * luz de la leyenda, el mismo botón que toca la vendedora.
+ */
+if (PARAMS.has('vista')) {
+  try {
+    window.localStorage.setItem('hermes.embudo.vista', JSON.stringify(PARAMS.get('vista') === 'lista' ? 'lista' : 'tablero'));
+  } catch {
+    /* sin storage: abre en el tablero */
+  }
+}
+
+if (PARAMS.has('luz')) {
+  const rotulo = LEYENDA_SEMAFORO.find((l) => l.luz === PARAMS.get('luz'))?.label;
+  setTimeout(() => {
+    [...document.querySelectorAll<HTMLElement>('section[aria-label="Resumen del tablero"] button')]
+      .find((b) => rotulo != null && b.textContent?.trim().startsWith(rotulo))
+      ?.click();
+  }, 700);
+}
+
+/**
+ * `?rango=hoy` (o `d7`) toca ese botón de la fila de arriba, el mismo que toca la
+ * vendedora. Después del puente, que aplica su recorte con la primera respuesta.
+ */
+if (PARAMS.has('rango')) {
+  const rotulo = PARAMS.get('rango') === 'd7' ? '7 d' : PARAMS.get('rango') === 'cola' ? '30 d' : 'Hoy';
+  setTimeout(() => {
+    [...document.querySelectorAll<HTMLElement>('section[aria-label="Resumen del tablero"] [role="group"][aria-label="Rango"] button')]
+      .find((b) => b.textContent?.trim() === rotulo)
+      ?.click();
+  }, 900);
+}
+
+/**
+ * `?puente=escribioHoy` (o `sinRespuesta24h`): el Pipeline abierto desde una
+ * cifra de «Hoy» del Dashboard. Constante de módulo: el puente se consume una vez.
+ */
+const PUENTE: PuentePipeline | null =
+  PARAMS.get('puente') === 'escribioHoy'
+    ? { tipo: 'pipeline', recorte: { escribioHoy: true } }
+    : PARAMS.get('puente') === 'sinRespuesta24h'
+      ? { tipo: 'pipeline', recorte: { sinRespuesta24h: true } }
+      : null;
+const consumirPuente = () => {};
+
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 createRoot(document.getElementById('galeria')!).render(
@@ -519,7 +844,16 @@ createRoot(document.getElementById('galeria')!).render(
         <header className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-3 pb-3 pt-4">
           <TituloDeSeccion>Pipeline</TituloDeSeccion>
         </header>
-        <VistaEmbudo onAbrir={() => {}} />
+        {/* `?campana=1`: el tablero de campaña, con su fila de canales y las cabeceras
+            por canal (13-sep-2026), servido con lo medido en producción el 13-sep-2026
+            (`galeriaCampana.ts`). Simpatizan, Se comprometieron y Son voluntarios salen
+            vacías porque en producción también lo están. */}
+        <VistaEmbudo
+          onAbrir={() => {}}
+          recorteInicial={PUENTE}
+          onConsumido={consumirPuente}
+          esDeCampana={PARAMS.has('campana')}
+        />
       </div>
     </QueryClientProvider>
   </StrictMode>,

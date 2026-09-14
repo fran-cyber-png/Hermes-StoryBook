@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Building2, Check, Loader2, Mail, MapPin, Phone, UserPlus, X } from 'lucide-react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { Building2, Check, Loader2, Mail, MapPin, Pencil, Phone, Plus, UserPlus, X } from 'lucide-react';
 import { avisar } from '../../lib/avisos';
 import { useEscape } from '../../lib/teclado/useEscape';
 import type { Conversacion } from '../../dominio/conversaciones';
@@ -8,7 +8,17 @@ import { useFicha } from '../cerberus/useFicha';
 import type { Ficha } from '../cerberus/ficha';
 import { useLeadForm } from '../cerberus/BloqueLeadForm';
 import { Intereses } from '../gestion/Intereses';
-import { useAnotarTerritorio, useDistritosDeCampana, useTerritorio } from '../territorio/territorio';
+import { useAnotarTerritorio, useTerritorio } from '../territorio/territorio';
+
+/**
+ * `lazy`, MISMO motivo que `BloqueTerritorio.tsx`: `leaflet` toca `window» al
+ * cargarse, y con un `import` estático cualquier test que importe este
+ * archivo de pasada (la inmensa mayoría, que nunca abre el mapa) revienta sin
+ * DOM.
+ */
+const ModalDireccion = lazy(() =>
+  import('../territorio/ModalDireccion').then((m) => ({ default: m.ModalDireccion })),
+);
 import {
   faltaLoMinimo,
   prellenar,
@@ -91,21 +101,24 @@ export function FichaRapida({
   const guardar = useGuardarFicha(conversacion.clave);
 
   /**
-   * DÓNDE VOTA — solo en campaña (ADR 0063), y editable directo acá desde el
-   * 24-ago-2026: antes solo se anotaba desde el panel de Contactos, y el pedido
-   * fue que viva en la MISMA ficha que el resto del contacto, sea alta nueva o
-   * edición. `distritoTocado` evita que la respuesta del server (hasta 12 s en
-   * un mal día) pise una elección que la vendedora ya hizo — el mismo cuidado
-   * que ya tiene `datos` con el prellenado de Cerberus.
+   * LOCACIÓN — solo en campaña (ADR 0063/0088), y editable directo acá desde
+   * el 24-ago-2026: antes solo se anotaba desde el panel de Contactos, y el
+   * pedido fue que viva en la MISMA ficha que el resto del contacto, sea alta
+   * nueva o edición. `ubicacionTocada` evita que la respuesta del server
+   * (hasta 12 s en un mal día) pise una elección que la vendedora ya hizo — el
+   * mismo cuidado que ya tiene `datos` con el prellenado de Cerberus.
    */
   const territorio = useTerritorio(conversacion.clave, esDeCampana);
-  const distritos = useDistritosDeCampana(esDeCampana);
-  const { anotar } = useAnotarTerritorio(conversacion.clave);
-  const [distritoId, setDistritoId] = useState<number | null>(null);
-  const [distritoTocado, setDistritoTocado] = useState(false);
+  const { anotar, sacar } = useAnotarTerritorio(conversacion.clave);
+  const [ubicacion, setUbicacion] = useState<{ direccion: string; lat: number; lon: number } | null>(null);
+  const [ubicacionTocada, setUbicacionTocada] = useState(false);
+  const [mapaAbierto, setMapaAbierto] = useState(false);
   useEffect(() => {
-    if (!distritoTocado && territorio.data?.actual) setDistritoId(territorio.data.actual.distritoId);
-  }, [territorio.data, distritoTocado]);
+    const actual = territorio.data?.actual;
+    if (!ubicacionTocada && actual?.direccion && actual.lat != null && actual.lon != null) {
+      setUbicacion({ direccion: actual.direccion, lat: actual.lat, lon: actual.lon });
+    }
+  }, [territorio.data, ubicacionTocada]);
 
   const cliente = fichaDeCliente(cerberus.data);
   const inicial = prellenar({
@@ -144,11 +157,13 @@ export function FichaRapida({
       forzar,
     });
     if (r.ok) {
-      // El distrito es OTRA tabla (`contacto_territorio`, ADR 0063): se guarda
-      // aparte, después de que la ficha existe — anotar contra una clave que
-      // la vendedora terminó cancelando dejaría un territorio huérfano.
-      if (esDeCampana && distritoId != null) {
-        await anotar.mutateAsync({ distritoId });
+      // La ubicación es OTRA tabla (`contacto_territorio`, ADR 0063/0088): se
+      // guarda aparte, después de que la ficha existe — anotar contra una
+      // clave que la vendedora terminó cancelando dejaría un territorio
+      // huérfano.
+      if (esDeCampana && ubicacionTocada) {
+        if (ubicacion) await anotar.mutateAsync(ubicacion);
+        else await sacar.mutateAsync();
       }
       avisar(ficha.data ? 'Ficha actualizada' : 'Contacto registrado');
       onCerrar();
@@ -261,45 +276,74 @@ export function FichaRapida({
               />
             </Campo>
 
-            {/* Solo campaña (ADR 0063): en ventas nadie pregunta dónde vota
-                alguien. Se guarda aparte de la ficha (`enviar()`), en
+            {/* Solo campaña (ADR 0063/0088): en ventas nadie pregunta dónde
+                vive alguien. Se guarda aparte de la ficha (`enviar()`), en
                 `contacto_territorio`, pero vive en el MISMO formulario porque
-                para quien la tipea es un dato más del alta. */}
+                para quien la tipea es un dato más del alta. El mapa es el
+                MISMO componente que `BloqueTerritorio.tsx` (panel del chat):
+                acá solo cambia que la mutación se difiere hasta guardar la
+                ficha, en vez de ir directo al server. */}
             {esDeCampana && (
               <section className="px-4 py-3">
                 <h3 className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <MapPin size={11} /> Dónde vota
+                  <MapPin size={11} /> Locación
                 </h3>
-                {distritos.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    Esta campaña todavía no tiene distritos cargados.
-                  </p>
+                {ubicacion ? (
+                  <div className="flex items-start gap-2">
+                    <MapPin size={13} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs text-foreground" title={ubicacion.direccion}>
+                        {ubicacion.direccion}
+                      </p>
+                      <div className="mt-1 flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setMapaAbierto(true)}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary transition-colors hover:underline"
+                        >
+                          <Pencil size={10} aria-hidden /> Cambiar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUbicacionTocada(true);
+                            setUbicacion(null);
+                          }}
+                          className="text-[11px] font-semibold text-muted-foreground transition-colors hover:text-destructive"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
-                  <select
-                    value={distritoId ?? ''}
-                    onChange={(e) => {
-                      setDistritoTocado(true);
-                      setDistritoId(e.target.value ? Number(e.target.value) : null);
-                    }}
-                    aria-label="Dónde vota"
-                    // `bg-card`/`text-foreground` explícitos en el `<select>` Y en
-                    // cada `<option>`: un `<select>` nativo pinta su popup con el
-                    // motor del SO, y `bg-transparent` ahí se resuelve a blanco
-                    // del sistema — en modo oscuro quedaba texto oscuro sobre
-                    // fondo claro. Los `<option>` SÍ heredan `background-color`/
-                    // `color` (a diferencia del padding o el radio).
-                    className="w-full rounded-lg border border-border bg-card px-2 py-1.5 text-sm text-foreground outline-none transition-colors focus:border-primary"
+                  <button
+                    type="button"
+                    onClick={() => setMapaAbierto(true)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-full border border-dashed border-border py-2 text-xs font-bold text-primary transition-[background-color,border-color,transform] duration-200 ease-house hover:border-primary hover:bg-primary/5 active:scale-[0.99]"
                   >
-                    <option value="" className="bg-card text-foreground">
-                      Sin especificar
-                    </option>
-                    {distritos.map((d) => (
-                      <option key={d.id} value={d.id} className="bg-card text-foreground">
-                        {d.nombre}
-                        {d.zona ? ` · ${d.zona}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                    <Plus size={13} aria-hidden /> Marcar en el mapa
+                  </button>
+                )}
+                {mapaAbierto && (
+                  <Suspense
+                    fallback={
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/30" aria-hidden="true">
+                        <Loader2 size={28} className="animate-spin text-white" />
+                      </div>
+                    }
+                  >
+                    <ModalDireccion
+                      inicial={ubicacion}
+                      guardando={false}
+                      onConfirmar={(v) => {
+                        setUbicacionTocada(true);
+                        setUbicacion(v);
+                        setMapaAbierto(false);
+                      }}
+                      onCerrar={() => setMapaAbierto(false)}
+                    />
+                  </Suspense>
                 )}
               </section>
             )}

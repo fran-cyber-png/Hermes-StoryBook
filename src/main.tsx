@@ -7,6 +7,7 @@ import { queryClient } from './lib/datos/cliente'
 import { arrancarCacheDeHermes } from './lib/datos/cacheDeHermes'
 import { conectarEnlacesExternos } from './lib/enlacesExternos'
 import { arrancarTema } from './lib/tema'
+import { registrarServiceWorker } from './lib/pwa/registrarServiceWorker'
 
 // En la cáscara Tauri, los target=_blank van al navegador del sistema.
 conectarEnlacesExternos()
@@ -15,6 +16,10 @@ conectarEnlacesExternos()
 // esperara al efecto del botón, el primer cuadro saldría con el tema del sistema
 // y recién después saltaría al elegido. Ver `lib/tema.ts`.
 arrancarTema()
+
+// El service worker, para que Hermes se pueda instalar en el celular. No guarda
+// nada, y nunca se registra en la cáscara Tauri (ADR 0111).
+registrarServiceWorker()
 
 /**
  * El caché del estado del SERVIDOR envuelve toda la app.

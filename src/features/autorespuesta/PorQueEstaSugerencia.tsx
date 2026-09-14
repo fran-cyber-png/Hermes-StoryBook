@@ -1,5 +1,6 @@
 import { Clock, Megaphone, MessageSquareQuote, Timer } from 'lucide-react';
 import { useConversacionWa } from '../whatsapp/conversacionWa';
+import { deDondeVino } from '../../dominio/origen';
 import { vencimiento, type MensajeBandeja } from './bandeja';
 import { horaCorta } from './estado';
 import { loQueDijo, type LoQueDijo } from './loQueDijo';
@@ -43,7 +44,7 @@ export function PorQueEstaSugerencia({
   // más. Y no dispara nada — `marcarLeido` solo lo llama `HiloWhatsapp` al abrir.
   const { hilo } = useConversacionWa(sugerencia.telefono);
   const dijo = loQueDijo(hilo.data?.mensajes ?? []);
-  const origen = hilo.data?.origen ?? null;
+  const procedencia = deDondeVino({ tipo: 'mensaje', canal: 'whatsapp', resuelto: hilo.data?.origen ?? null });
   const cadena = porQueEstaCampana(sugerencia.campanaFuente);
   const v = vencimiento(sugerencia.caducaEn, new Date());
 
@@ -59,10 +60,16 @@ export function PorQueEstaSugerencia({
       <div className="space-y-3 px-3 py-2.5">
         <LoQuePregunto dijo={dijo} cargando={hilo.isPending} />
 
-        {origen?.fuente === 'anuncio' && (
+        {/* La MISMA lectura que la fila de la cola y la ficha (`dominio/origen.ts`):
+            acá se escribía a mano por tercera vez —«el anuncio, si no el título, si
+            no “sin título”»— sobre el hecho que los otros dos ya sabían decir. Es
+            la copia que la regla «UNA sola palabra para el origen» prohíbe. */}
+        {procedencia?.clase === 'anuncio' && (
           <Dato icono={<Megaphone size={12} />} rotulo="Vino del anuncio">
-            {origen.anuncio ?? origen.titulo ?? 'sin título'}
-            {origen.campana ? <span className="text-muted-foreground"> · {origen.campana}</span> : null}
+            {procedencia.anuncio ?? 'sin título'}
+            {procedencia.campana ? (
+              <span className="text-muted-foreground"> · {procedencia.campana}</span>
+            ) : null}
           </Dato>
         )}
 

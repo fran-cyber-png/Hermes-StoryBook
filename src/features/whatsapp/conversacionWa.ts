@@ -6,6 +6,7 @@ import { API_URL } from '../../config';
 import type { PiezaDeclarada } from './procedenciaComposer';
 import type { CitaHilo } from './cita';
 import { esLineaQueNoCorre, intervaloDelHilo, intervaloDeLaSesion } from './cadencia';
+import { ondaEnBase64 } from './notaDeVoz';
 
 /** Un adjunto del hilo: el archivo ya vive en el server, esto es la referencia. */
 export interface MediaHilo {
@@ -13,6 +14,12 @@ export interface MediaHilo {
   archivo: string;
   mime: string | null;
   nombre?: string | null;
+  /**
+   * Presente solo si el audio es una NOTA DE VOZ y no un archivo de audio. Ausente
+   * también en las notas de voz viejas: la marca se guarda desde el 11-sep-2026.
+   * `segundos` es `null` cuando el proveedor no la manda (la Cloud API no).
+   */
+  voz?: { segundos: number | null } | null;
 }
 
 /**
@@ -129,6 +136,22 @@ export interface MensajeHilo {
    * WhatsApp: no lo pisa, lo marca.
    */
   editado?: { texto: string; editadoEn: string } | null;
+  /**
+   * SI SE ELIMINÓ (o se OCULTÓ): cuándo, y si eso le llegó de verdad a
+   * WhatsApp. No hay texto ni contenido que mostrar — la burbuja se tacha.
+   *
+   * **`revocadoEnWhatsapp` cambia lo que dice la marca, y no es cosmético**:
+   * `true` es un SALIENTE con «delete for everyone» real (whatsmeow,
+   * ADR 0100) — al lead ya no le queda. `false` es un ENTRANTE que la
+   * vendedora ocultó solo en Hermes (`ocultarMensaje`) — el lead lo sigue
+   * teniendo intacto en su teléfono, y la burbuja tiene que decirlo así:
+   * mostrar «se eliminó» sobre algo que el lead todavía ve sería mentir sobre
+   * el estado real de la conversación.
+   *
+   * **Opcional, y ausente ≠ no eliminado a secas**: mismo trato que `editado`,
+   * un server viejo no lo manda.
+   */
+  eliminado?: { eliminadoEn: string; revocadoEnWhatsapp: boolean } | null;
 }
 
 /**
@@ -170,6 +193,12 @@ export type EstadoSesionWa = {
    * mismo criterio conservador que el resto de estas banderas opcionales.
    */
   puedeEditar?: boolean;
+  /**
+   * ¿ESTA LÍNEA PUEDE ELIMINAR («delete for everyone») UN MENSAJE YA MANDADO?
+   * Mismo criterio que `puedeEditar`, y por la misma razón: la Cloud API de
+   * Meta tampoco expone esto.
+   */
+  puedeEliminar?: boolean;
   /**
    * ¿ESTA LÍNEA PUEDE MANDAR UNA PLANTILLA APROBADA COMO HSM REAL? (ADR 0072).
    * Al revés que `puedeEditar`: hoy SOLO la Cloud API la tiene. El selector de
@@ -302,15 +331,59 @@ function ultimoMensajeDelHilo(hilo: HiloWa | undefined): string | null {
 const claveDelHilo = (telefono: string | null, numeroPropio: string | undefined) =>
   ['wa', 'conversacion', telefono, numeroPropio ?? ''] as const;
 
+/**
+ * La URL del hilo, en UN solo lugar.
+ *
+ * ⚠️ **Dos observadores comparten esta entrada de caché** (`useConversacionWa`,
+ * el chat, y `useOrigenWa`, la ficha). Con la clave y la URL escritas dos veces,
+ * el día que una gane un parámetro las dos se separan sin un solo síntoma: la
+ * ficha pediría un hilo distinto del que muestra el chat, o —peor— el mismo con
+ * otra clave, duplicando el pedido. Es la cicatriz #37 en chiquito.
+ */
+const urlDelHilo = (telefono: string | null, numeroPropio: string | undefined) =>
+  `/api/whatsapp/conversacion/${telefono}${numeroPropio ? `?numeroPropio=${encodeURIComponent(numeroPropio)}` : ''}`;
+
+/**
+ * SÓLO DE DÓNDE VINO — para la ficha, que se abre sin el chat al lado.
+ *
+ * ══ POR QUÉ PIDE EL HILO ENTERO PARA LEER UN CAMPO ═════════════════════════
+ *
+ * Porque `GET /api/whatsapp/conversacion/:telefono` es el ÚNICO lugar del
+ * sistema donde el origen sale con los nombres humanos puestos: la ruta llama a
+ * `resolverAnuncio()` contra la Graph API y, de paso, guarda el resultado en
+ * `anuncio_resuelto` (`routes/whatsapp.ts`, «DE PASO, para Contactos»). O sea
+ * que **este pedido no sólo lee el nombre del anuncio: es lo que hace que
+ * exista** — para esta ficha y para la columna «Campaña» de Contactos, que
+ * nunca pregunta. Un endpoint nuevo que devolviera sólo el origen ahorraría
+ * bytes y perdería eso.
+ *
+ * ⚠️ **La MISMA clave que `useConversacionWa`, con las cuatro partes.** Con el
+ * chat abierto no hay un pedido de más: los dos observadores comparten la
+ * entrada del caché. `FormularioVenta` usa una clave de TRES (sin la línea) y
+ * por eso sí pide aparte, aunque su comentario diga lo contrario — no se
+ * arregla acá para no meter otro frente en este PR.
+ *
+ * Sin `refetchInterval` a propósito: el ritmo del hilo lo gobierna el observador
+ * del chat (`cadencia.ts`). El origen es de los datos más quietos que hay —el
+ * primer mensaje de la conversación no cambia— así que este observador no
+ * agrega un solo pedido periódico.
+ */
+export function useOrigenWa(telefono: string | null, numeroPropio?: string) {
+  return useQuery({
+    queryKey: claveDelHilo(telefono, numeroPropio),
+    queryFn: () => api<HiloWa>(urlDelHilo(telefono, numeroPropio)),
+    enabled: Boolean(telefono),
+    staleTime: 5 * 60_000,
+    select: (h: HiloWa) => h.origen,
+  });
+}
+
 export function useConversacionWa(telefono: string | null, numeroPropio?: string) {
   const qc = useQueryClient();
 
   const hilo = useQuery({
     queryKey: claveDelHilo(telefono, numeroPropio),
-    queryFn: () =>
-      api<HiloWa>(
-        `/api/whatsapp/conversacion/${telefono}${numeroPropio ? `?numeroPropio=${encodeURIComponent(numeroPropio)}` : ''}`,
-      ),
+    queryFn: () => api<HiloWa>(urlDelHilo(telefono, numeroPropio)),
     enabled: Boolean(telefono),
     /**
      * EL RITMO DEPENDE DE QUÉ TAN VIVA ESTÁ LA CONVERSACIÓN, no del reloj.
@@ -510,6 +583,8 @@ export function useConversacionWa(telefono: string | null, numeroPropio?: string
       referencia: string;
       archivo: File;
       caption: string;
+      /** Solo una nota de voz grabada en el compositor (ver `notaDeVoz.ts`). */
+      voz?: { segundos: number; onda: number[] | null };
     }) => {
       const token = tokenGuardado();
       const q = new URLSearchParams({
@@ -518,6 +593,13 @@ export function useConversacionWa(telefono: string | null, numeroPropio?: string
         referencia: vars.referencia,
         nombre: vars.archivo.name,
         ...(vars.caption.trim() ? { caption: vars.caption.trim() } : {}),
+        ...(vars.voz
+          ? {
+              voz: '1',
+              segundos: String(vars.voz.segundos),
+              ...(vars.voz.onda ? { onda: ondaEnBase64(vars.voz.onda) } : {}),
+            }
+          : {}),
       });
       const res = await fetch(`${API_URL}/api/whatsapp/enviar-media?${q}`, {
         method: 'POST',
@@ -671,5 +753,81 @@ export function useConversacionWa(telefono: string | null, numeroPropio?: string
     onSettled: () => void qc.invalidateQueries({ queryKey: ['wa', 'conversacion', telefono] }),
   });
 
-  return { hilo, enviar, enviarMedia, enviarPlantillaHsm, marcarLeido, reaccionar, editar };
+  /**
+   * ELIMINAR («delete for everyone») un mensaje SALIENTE ya mandado.
+   *
+   * Optimista, como editar: la burbuja se tacha al instante y se corrige sola
+   * si el server dice que no (línea sin la capacidad, sesión caída, WhatsApp
+   * lo rechazó por protocolo).
+   */
+  const eliminar = useMutation({
+    mutationFn: (vars: { numeroPropio: string; telefono: string; mensajeId: string }) =>
+      api<{ ok: true }>('/api/whatsapp/eliminar', {
+        method: 'POST',
+        body: JSON.stringify(vars),
+      }),
+    onMutate: async (vars) => {
+      const clave = claveDelHilo(telefono, numeroPropio);
+      await qc.cancelQueries({ queryKey: clave });
+      const antes = qc.getQueryData(clave);
+      const ahora = new Date().toISOString();
+      qc.setQueryData(clave, (viejo: { mensajes: MensajeHilo[] } | undefined) => {
+        if (!viejo) return viejo;
+        return {
+          ...viejo,
+          mensajes: viejo.mensajes.map((m) =>
+            m.external_id === `wa:${vars.mensajeId}` || m.external_id === vars.mensajeId
+              ? { ...m, eliminado: { eliminadoEn: ahora, revocadoEnWhatsapp: true } }
+              : m,
+          ),
+        };
+      });
+      return { antes, clave };
+    },
+    onError: (_e, _v, ctx) => {
+      // Se deshace: una burbuja tachada que no se eliminó de verdad es peor
+      // que no haberla tocado — el lead sigue viendo el mensaje original.
+      if (ctx?.antes) qc.setQueryData(ctx.clave, ctx.antes);
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['wa', 'conversacion', telefono] }),
+  });
+
+  /**
+   * OCULTAR el mensaje de un LEAD — «eliminar para mí», nunca «para todos».
+   * WhatsApp no deja revocar lo que uno no mandó (ver `ocultarMensaje` en el
+   * server): esto no manda NADA a WhatsApp, así que a diferencia de `eliminar`
+   * no depende de `puedeEliminar` ni de la sesión — funciona con cualquier
+   * transporte y con la línea caída, porque no hay ninguna línea de por medio.
+   */
+  const ocultar = useMutation({
+    mutationFn: (vars: { numeroPropio: string; telefono: string; mensajeId: string }) =>
+      api<{ ok: true }>('/api/whatsapp/ocultar', {
+        method: 'POST',
+        body: JSON.stringify(vars),
+      }),
+    onMutate: async (vars) => {
+      const clave = claveDelHilo(telefono, numeroPropio);
+      await qc.cancelQueries({ queryKey: clave });
+      const antes = qc.getQueryData(clave);
+      const ahora = new Date().toISOString();
+      qc.setQueryData(clave, (viejo: { mensajes: MensajeHilo[] } | undefined) => {
+        if (!viejo) return viejo;
+        return {
+          ...viejo,
+          mensajes: viejo.mensajes.map((m) =>
+            m.external_id === `wa:${vars.mensajeId}` || m.external_id === vars.mensajeId
+              ? { ...m, eliminado: { eliminadoEn: ahora, revocadoEnWhatsapp: false } }
+              : m,
+          ),
+        };
+      });
+      return { antes, clave };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.antes) qc.setQueryData(ctx.clave, ctx.antes);
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['wa', 'conversacion', telefono] }),
+  });
+
+  return { hilo, enviar, enviarMedia, enviarPlantillaHsm, marcarLeido, reaccionar, editar, eliminar, ocultar };
 }

@@ -97,6 +97,8 @@ const ASIGNADA: Conversacion = { ...CONTACTO_VENTAS, asignada_a: 'ventas11@grupo
  * el prefijo corto, esta galería seguiría dibujando el defecto que se arregló.
  */
 const DE_VENTAS = [
+  // #1033 — la consulta única del perfil también es de `ventas`.
+  '/api/contactos/perfil',
   '/api/contactos/ficha',
   '/api/contactos/lead',
   '/api/contactos/registrar-venta',
@@ -127,6 +129,17 @@ globalThis.fetch = (async (entrada: Parameters<typeof fetch>[0], init?: RequestI
   }
   const esCliente = url.includes('51900111222');
 
+  // #1033 — en los casos de ventas el panel lee UNA consulta de perfil: se arma con
+  // las mismas respuestas de abajo. Para quien no es cliente la ficha se cuelga, y
+  // el perfil también: el mismo «cargando» de verdad.
+  if (url.includes('/api/contactos/perfil')) {
+    const pedir = async (ruta: string) => (await globalThis.fetch(url.replace('/api/contactos/perfil', ruta))).json();
+    const [ficha, lead] = await Promise.all([pedir('/api/contactos/ficha'), pedir('/api/contactos/lead')]);
+    return new Response(JSON.stringify({ ficha, lead: lead?.lead ?? null, padron: null, errores: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
   // La ficha de Cerberus: para el cliente contesta; para los demás **se cuelga**,
   // que es el estado «cargando» de verdad (donde vivía el skeleton eterno).
   if (url.includes('/api/contactos/ficha') || url.includes('/api/cerberus')) {

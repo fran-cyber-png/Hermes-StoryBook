@@ -111,13 +111,13 @@ export function ModalDireccion({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Dónde vota"
+          aria-label="Locación"
           onClick={(e) => e.stopPropagation()}
           className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-card shadow-panel"
         >
           <header className="flex shrink-0 items-center justify-between border-b border-border bg-navy px-5 py-3 text-white">
             <div className="flex items-center gap-2 font-heading text-sm font-bold">
-              <MapPin size={15} /> Dónde vota
+              <MapPin size={15} /> Locación
             </div>
             <button
               type="button"

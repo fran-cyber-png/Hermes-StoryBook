@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import type { EditorLibreta } from '../editor';
 import { imagenDelPortapapeles, medidaAlPegar, subirImagen, traerBitmap } from './adjuntos';
 import { dibujaAlgo, type Herramienta } from './BarraDeDibujo';
 import {
+  type Ancla,
   type Caja,
   type Esquina,
   type Figura,
@@ -14,10 +17,12 @@ import {
   figurasEnCaja,
   moverFigura,
   nuevaBase,
+  puntoDeAncla,
   redimensionarCaja,
   redimensionarImagen,
   tiradorTocado,
 } from './figuras';
+import { resolverAncla, useReflowPorAnclas } from './anclaje';
 import { CajaFlotante } from './CajaFlotante';
 import { type Capa, opacidadEfectiva, seleccionables, visibles } from './capas';
 import { LADO_TIRADOR, pintar } from './pintar';
@@ -28,22 +33,33 @@ import type { Anotaciones } from './useAnotaciones';
  *
  * ══ CÓMO SE PARA ENCIMA DEL TEXTO SIN TAPARLO ═══════════════════════════════
  *
- * Va `absolute inset-0` adentro del contenedor del documento, que es `relative`.
- * Eso le da **exactamente** el alto y el ancho del contenido —no de la ventana—,
- * y es lo que hace que todo lo demás funcione solo:
+ * 🔴 **VIVE DENTRO DE `.hoja-a4`, VÍA PORTAL — y no siempre fue así**
+ * (08-sep-2026). Hasta acá el canvas era `absolute inset-0` adentro del
+ * `<div>` de `Hoja` (`Libreta.tsx`), un hermano de `.hoja-a4`. Eso funcionaba
+ * mientras `.hoja-a4` crecía con su contenido; desde que tiene ALTURA FIJA y
+ * scroll PROPIO (`index.css`, 04-sep-2026), es `.hoja-a4` quien de verdad
+ * mueve el texto al scrollear — y un canvas que vive AFUERA de esa caja no se
+ * entera: se queda quieto en pantalla mientras el texto se escapa por dentro.
+ * Medido: círculo dibujado alrededor de una palabra, la palabra se va scroll
+ * abajo y el círculo se queda flotando donde estaba. Por eso ahora
+ * `createPortal` lo manda literalmente ADENTRO de `.hoja-a4` (ver el `return`,
+ * más abajo) — recién ahí vuelve a ser cierto que:
  *
  *  · **El scroll no necesita una línea de código.** El canvas es parte del
  *    contenido que scrollea, así que un círculo alrededor de una palabra se va
- *    con esa palabra. Si en cambio la capa estuviera fija al viewport, habría
- *    que restarle el `scrollTop` a cada figura en cada rueda del mouse, y
- *    cualquier desincronización se vería como el dibujo despegándose del texto.
+ *    con esa palabra. Si en cambio la capa estuviera fija al viewport (o,
+ *    como pasó, fuera de la caja que scrollea), habría que restarle el
+ *    `scrollTop` a cada figura en cada rueda del mouse, y cualquier
+ *    desincronización se vería como el dibujo despegándose del texto.
  *
  *  · **Las coordenadas del puntero son las del documento.** `getBoundingClientRect`
  *    ya descuenta el scroll, así que `clientX - caja.left` cae directo en el
  *    sistema de coordenadas en el que se guardan las figuras. No hay conversión.
  *
- *  · **El canvas crece con la página.** Un `ResizeObserver` sobre el contenedor
- *    reajusta el buffer cuando el texto se hace más largo.
+ *  · **El canvas crece con la página.** Ya no mide su contenedor —que ahora
+ *    es `.hoja-a4`, de alto FIJO— sino `editor.domElement` (el texto de
+ *    verdad, que sigue creciendo con su contenido igual que siempre). Ver el
+ *    docblock de la sección «Medir».
  *
  * ══ LO QUE DECIDE SI ESTO ES USABLE: `pointer-events` ═══════════════════════
  *
@@ -54,6 +70,12 @@ import type { Anotaciones } from './useAnotaciones';
  *
  * Al elegir una herramienta pasa a `auto` y la capa captura el puntero. Volver
  * al puntero la vuelve a apagar.
+ *
+ * ⚠️ **Y desde el portal, ese `auto` tiene que ser EXPLÍCITO.** El `<div>` que
+ * se porta entero lleva `pointer-events-none` (para no tapar el editor con un
+ * envoltorio transparente que no dibuja nada), y `pointer-events` SE HEREDA —
+ * a diferencia de casi todo en CSS. «No poner `-none`» en el canvas ya no
+ * alcanza para recuperar el puntero: hace falta `pointer-events-auto` a mano.
  */
 
 /** El radio del borrador y del agarre, en píxeles del documento. */
@@ -92,6 +114,9 @@ export function CapaDeAnotaciones({
   pedirImagen,
   onSubiendo,
   onSalirDelDibujo,
+  editor,
+  hojaA4,
+  contenedorArchivo,
 }: {
   anotaciones: Anotaciones;
   herramienta: Herramienta;
@@ -114,10 +139,64 @@ export function CapaDeAnotaciones({
   onSubiendo?: (subiendo: boolean) => void;
   /** Para que Escape devuelva la página al modo texto sin ir hasta la barra. */
   onSalirDelDibujo(): void;
+  /**
+   * LA INSTANCIA VIVA DE BLOCKNOTE, o `null/undefined` sin una (solo lectura
+   * histórica, página-archivo). Anclar una figura al párrafo (`dibujo/
+   * anclaje.ts`) la necesita, y desde el 08-sep-2026 TAMBIÉN mide el alto real
+   * de la página con ella (ver el docblock de la sección «Medir», más abajo) —
+   * sin editor, la capa entera no tiene dónde apoyarse y no se pinta nada.
+   */
+  editor?: EditorLibreta | null;
+  /**
+   * EL NODO DOM DE `.hoja-a4` — DÓNDE se porta todo lo que sigue (el canvas,
+   * las cajas flotantes, el input del rótulo, el aviso), CUANDO existe.
+   * `.hoja-a4` es la única caja que de verdad scrollea el texto (`index.css`,
+   * altura fija + `overflow-y: auto` desde el 04-sep-2026); un dibujo
+   * posicionado AFUERA de ella —que es como vivía antes— se queda quieto en
+   * pantalla mientras el texto se escapa por su propio scroll.
+   *
+   * ⚠️ **`null` NO significa "no dibujar", significa "sin portar A ESTE
+   * nodo".** Una página de TEXTO sin este nodo (todavía no montó — instante
+   * transitorio) simplemente espera. Una página-ARCHIVO (PDF/Word/txt,
+   * `PaginaDocumento.tsx`) JAMÁS tiene `.hoja-a4` —no pasa por BlockNote— y
+   * ahí se mira `contenedorArchivo` en su lugar (o, sin ninguno de los dos —
+   * un PDF—, el camino de antes del 08-sep-2026: canvas de hijo directo, sin
+   * portar). Ver el `return` de más abajo y el docblock de «Medir».
+   */
+  hojaA4?: HTMLDivElement | null;
+  /**
+   * EL GEMELO DE `hojaA4` PARA UNA PÁGINA-ARCHIVO (08-sep-2026): el
+   * `<div>`/`<pre>` que scrollea de verdad un Word o un .txt subido
+   * (`VisorDocx`/`VisorTxt` en `PaginaDocumento.tsx`). Mismo motivo que
+   * `.hoja-a4` — esos visores TAMBIÉN tienen altura fija y scroll propio
+   * (`ALTO_VISOR`, `overflow-y-auto`/`overflow-auto`), así que un canvas
+   * afuera de ellos se queda quieto mientras el documento se escapa por su
+   * scroll.
+   *
+   * ⚠️ **Un PDF no tiene equivalente.** `VisorPdf` usa un `<embed>` —el
+   * visor NATIVO del navegador—, y ese visor no le presta su DOM a nadie: no
+   * hay forma de saber, desde acá, a qué página o a qué scroll está el PDF
+   * en un momento dado. Con un PDF, `hojaA4` y `contenedorArchivo` quedan los
+   * dos en `null`, y el dibujo cae al camino de siempre: correcto mientras se
+   * ve la PRIMERA pantalla del documento, pero sin acompañar el scroll
+   * INTERNO del visor si el PDF tiene más de una pantalla de alto — una
+   * limitación real, no un descuido, y no hay arreglo posible sin cambiar el
+   * visor entero por uno que renderice a un `<canvas>` propio (pdf.js).
+   */
+  contenedorArchivo?: HTMLElement | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const archivoRef = useRef<HTMLInputElement>(null);
   const [medida, setMedida] = useState({ ancho: 0, alto: 0 });
+  /**
+   * DÓNDE EMPIEZA EL TEXTO DENTRO DE `.hoja-a4`, en el espacio de su
+   * CONTENIDO (invariante al scroll — ver el docblock de la sección «Medir»).
+   * `.hoja-a4` tiene 2,5cm de padding (1,27cm dividiendo): un envoltorio
+   * `inset-0` ahí adentro cae en el borde de ESE padding, no donde el texto
+   * arranca de verdad. Sin este offset, todo lo dibujado aparece corrido esos
+   * mismos centímetros — el defecto que motivó medirlo.
+   */
+  const [origen, setOrigen] = useState({ x: 0, y: 0 });
   const [enCurso, setEnCurso] = useState<Figura | null>(null);
   const [lazo, setLazo] = useState<Caja | null>(null);
   const [escribiendo, setEscribiendo] = useState<{ en: Punto; valor: string } | null>(null);
@@ -164,21 +243,183 @@ export function CapaDeAnotaciones({
   const paraVer = visibles(figuras, capas);
   const paraTocar = seleccionables(figuras, capas);
 
+  /* ── Ancla al párrafo ──────────────────────────────────────────────────── */
+
+  /**
+   * A QUÉ BLOQUE ANCLAR UNA FIGURA NUEVA (o una que se acaba de mover). Sin
+   * `editor` —solo lectura sin editor vivo— no hay nada que resolver: la
+   * figura nace o queda sin `ancla`, que es exactamente el comportamiento de
+   * siempre.
+   */
+  const anclarA = useCallback(
+    (punto: Punto): Ancla | undefined => {
+      if (!editor) return undefined;
+      const contenedor = canvasRef.current?.getBoundingClientRect();
+      if (!contenedor) return undefined;
+      return resolverAncla(editor, contenedor, punto) ?? undefined;
+    },
+    [editor],
+  );
+
+  useReflowPorAnclas(
+    editor,
+    figuras,
+    hojaA4 ?? null,
+    useCallback((r) => anotaciones.reubicarPorAncla(r.cambios, r.perdidos), [anotaciones]),
+  );
+
+  /**
+   * RE-ANCLA las figuras de `ids` contra su posición ACTUAL en `fs`. Se llama
+   * al terminar un arrastre o un redimensionado: sin esto, mover un dibujo a
+   * otro párrafo lo dejaría anclado al de antes, y el próximo reflow lo
+   * tironearía hacia donde ya no está.
+   *
+   * ⚠️ No se usa para el paso de las flechas del teclado ni para duplicar: los
+   * dos corren pocos píxeles (1 a 10, o el desplazamiento fijo de `duplicar`),
+   * así que cruzan a otro bloque tan rara vez que no vale la complejidad extra
+   * de hacer llegar el DOM hasta `useAnotaciones` (que es puro a propósito).
+   * Si el usuario de verdad lo movió lejos, el arrastre con el mouse sí pasa
+   * por acá.
+   */
+  const reancorar = useCallback(
+    (fs: Figura[], ids: string[]): Figura[] => {
+      if (ids.length === 0) return fs;
+      const elegidos = new Set(ids);
+      return fs.map((f) => (elegidos.has(f.id) ? { ...f, ancla: anclarA(puntoDeAncla(f)) } : f));
+    },
+    [anclarA],
+  );
+
   /* ── Medir ─────────────────────────────────────────────────────────────── */
 
+  /**
+   * 🔴 SE MIDE EL EDITOR, NO EL CONTENEDOR (08-sep-2026, corrige el bug de
+   * "todo se mueve al scrollear").
+   *
+   * Hasta acá se medía `canvasRef.current?.parentElement` — que, desde que el
+   * canvas se porta dentro de `.hoja-a4` (ver el retorno de este componente,
+   * más abajo), ES `.hoja-a4`: una caja de ALTO FIJO (`.hoja-a4` en
+   * `index.css`, 04-sep-2026) que scrollea su contenido por dentro. Medir su
+   * `clientHeight` daría el alto VISIBLE (unos 776px en una pantalla común),
+   * nunca el del texto completo — el canvas quedaría recortado a la primera
+   * pantalla y cualquier dibujo más abajo del corte no se vería NUNCA.
+   *
+   * `editor.domElement` (el `.bn-editor` de verdad) no tiene alto fijo: crece
+   * con su contenido igual que antes de esa fecha. Medirlo A ÉL da el alto
+   * real del texto, sea cual sea, y es lo que hace que el canvas — ahora dentro
+   * de `.hoja-a4` — cubra la página ENTERA y scrollee con ella.
+   *
+   * ══ Y POR QUÉ TAMBIÉN SE MIDE `origen` ══════════════════════════════════════
+   *
+   * 🔴 `.hoja-a4` tiene 2,5cm de padding (1,27cm dividiendo). Un envoltorio
+   * `absolute inset-0` puesto ADENTRO de ella cae en el borde de SU padding —
+   * que es el borde de la tarjeta, no donde el texto arranca después de ese
+   * padding— así que todo lo dibujado aparecía corrido esos centímetros hacia
+   * arriba y a la izquierda (medido: 94,5px, exactos los 2,5cm). `origen` es
+   * ese offset, y se resta la posición actual de scroll para que el número
+   * quede fijo en el espacio del CONTENIDO — invariante a cuánto se haya
+   * scrolleado en el momento de medir.
+   *
+   * ══ Y UN WORD/TXT SUBIDO SE MIDE CONTRA SU PROPIO VISOR ═════════════════════
+   *
+   * `contenedorArchivo` (`VisorDocx`/`VisorTxt`) es a la vez la caja que
+   * scrollea Y el lugar donde vive el contenido —a diferencia de `.hoja-a4`,
+   * que solo scrollea y le presta el contenido a `.bn-editor`—, así que
+   * `origen` acá es simplemente su padding (`p-6`/`p-4`, leído del `computed
+   * style` en vez de a mano, para no duplicar el número de Tailwind), y el
+   * alto es su `scrollHeight` — el contenido real, no la caja fija. Un
+   * `ResizeObserver` sobre ESTE contenedor no ve crecer su contenido interno
+   * (la caja no cambia de tamaño cuando el documento es más largo, solo su
+   * `scrollHeight`), así que la señal de que hay algo nuevo que medir es un
+   * `MutationObserver` sobre sus hijos — es como `docx-preview` y el texto
+   * de `VisorTxt` entran, así que es lo único que de verdad avisa.
+   *
+   * ══ Y SIN NINGUNO DE LOS DOS (un PDF) NO HAY NADA DE ESTO QUE MEDIR ════════
+   *
+   * 🔴 El visor nativo del PDF (`<embed>`) no le presta su DOM a nadie —ver el
+   * docblock de `contenedorArchivo`—, así que acá se vuelve al método de
+   * ANTES del 08-sep-2026: medir el contenedor de VERDAD (el `<div>` de
+   * `Hoja`) y renderizar sin portar —ver el `return`, más abajo—, `origen` en
+   * `{0, 0}` porque ese contenedor no tiene ningún padding ajeno que
+   * corregir. Sin este camino, la capa entera quedaba en blanco sobre un
+   * archivo: ni `hojaA4` ni `contenedorArchivo` llegan a existir con un PDF,
+   * y antes de este arreglo eso hacía que ni el canvas se montara.
+   *
+   * ⚠️ **`canvasRef.current?.parentElement` NO ES `Hoja`, es EL PROPIO
+   * ENVOLTORIO** (`contenido`, el `<div>` `absolute` de más abajo) — y medir
+   * SU tamaño para decidir SU PROPIO tamaño es un lazo que nunca despega
+   * (nace en `{0, 0}` y se queda ahí para siempre). Hace falta subir un nivel
+   * más, a `.parentElement.parentElement`, que es recién `Hoja`.
+   */
   useLayoutEffect(() => {
-    const caja = canvasRef.current?.parentElement;
-    if (!caja) return;
+    if (editor && hojaA4) {
+      const raiz = editor.domElement;
+      if (!raiz) return;
 
-    const medir = () => setMedida({ ancho: caja.clientWidth, alto: caja.clientHeight });
+      const medir = () => {
+        const r = raiz.getBoundingClientRect();
+        const base = hojaA4.getBoundingClientRect();
+        setMedida({ ancho: r.width, alto: r.height });
+        setOrigen({
+          x: r.left - base.left + hojaA4.scrollLeft,
+          y: r.top - base.top + hojaA4.scrollTop,
+        });
+      };
+      medir();
+      if (typeof ResizeObserver === 'undefined') return;
+      const observador = new ResizeObserver(medir);
+      observador.observe(raiz);
+      return () => observador.disconnect();
+    }
+
+    if (contenedorArchivo) {
+      const medir = () => {
+        const cs = getComputedStyle(contenedorArchivo);
+        const relleno = {
+          arriba: parseFloat(cs.paddingTop) || 0,
+          izq: parseFloat(cs.paddingLeft) || 0,
+          derecha: parseFloat(cs.paddingRight) || 0,
+          abajo: parseFloat(cs.paddingBottom) || 0,
+        };
+        setMedida({
+          ancho: contenedorArchivo.clientWidth - relleno.izq - relleno.derecha,
+          alto: Math.max(
+            contenedorArchivo.scrollHeight - relleno.arriba - relleno.abajo,
+            contenedorArchivo.clientHeight - relleno.arriba - relleno.abajo,
+          ),
+        });
+        setOrigen({ x: relleno.izq, y: relleno.arriba });
+      };
+      medir();
+
+      let observadorResize: ResizeObserver | undefined;
+      if (typeof ResizeObserver !== 'undefined') {
+        observadorResize = new ResizeObserver(medir);
+        observadorResize.observe(contenedorArchivo);
+      }
+      let observadorMutacion: MutationObserver | undefined;
+      if (typeof MutationObserver !== 'undefined') {
+        observadorMutacion = new MutationObserver(medir);
+        observadorMutacion.observe(contenedorArchivo, { childList: true, subtree: true, characterData: true });
+      }
+      return () => {
+        observadorResize?.disconnect();
+        observadorMutacion?.disconnect();
+      };
+    }
+
+    const caja = canvasRef.current?.parentElement?.parentElement;
+    if (!caja) return;
+    const medir = () => {
+      setMedida({ ancho: caja.clientWidth, alto: caja.clientHeight });
+      setOrigen({ x: 0, y: 0 });
+    };
     medir();
     if (typeof ResizeObserver === 'undefined') return;
-    // Observa al PADRE y no al canvas: el canvas está `absolute`, así que su
-    // tamaño lo dicta el contenedor — observarse a sí mismo sería un lazo.
     const observador = new ResizeObserver(medir);
     observador.observe(caja);
     return () => observador.disconnect();
-  }, []);
+  }, [editor, hojaA4, contenedorArchivo]);
 
   /* ── Traer las imágenes ────────────────────────────────────────────────── */
 
@@ -208,8 +449,6 @@ export function CapaDeAnotaciones({
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx || medida.ancho === 0) return;
     pintar(ctx, enCurso ? [...paraVer, enCurso] : paraVer, {
-      ancho: medida.ancho,
-      alto: medida.alto,
       dpr,
       seleccionadas,
       lazo,
@@ -243,7 +482,15 @@ export function CapaDeAnotaciones({
     anotaciones.confirmar(
       [
         ...base,
-        { ...nuevaBase({ opacidad, capaId }), clase: 'rotulo', color, tamano: tamanoDeRotulo(grosor), en: escribiendo.en, texto },
+        {
+          ...nuevaBase({ opacidad, capaId }),
+          ancla: anclarA(escribiendo.en),
+          clase: 'rotulo',
+          color,
+          tamano: tamanoDeRotulo(grosor),
+          en: escribiendo.en,
+          texto,
+        },
       ],
       base,
     );
@@ -276,6 +523,7 @@ export function CapaDeAnotaciones({
     if (herramienta === 'caja') {
       const nueva: Figura = {
         ...nuevaBase({ opacidad, capaId }),
+        ancla: anclarA(p),
         clase: 'caja',
         x: p[0],
         y: p[1],
@@ -355,6 +603,7 @@ export function CapaDeAnotaciones({
     if (herramienta === 'lapiz' || herramienta === 'resaltador') {
       setEnCurso({
         ...nuevaBase({ opacidad, capaId }),
+        ancla: anclarA(p),
         clase: herramienta === 'lapiz' ? 'trazo' : 'resaltador',
         color,
         grosor,
@@ -362,7 +611,15 @@ export function CapaDeAnotaciones({
       });
       return;
     }
-    setEnCurso({ ...nuevaBase({ opacidad, capaId }), clase: herramienta, color, grosor, desde: p, hasta: p });
+    setEnCurso({
+      ...nuevaBase({ opacidad, capaId }),
+      ancla: anclarA(p),
+      clase: herramienta,
+      color,
+      grosor,
+      desde: p,
+      hasta: p,
+    });
   };
 
   const alMover = (e: React.PointerEvent) => {
@@ -437,9 +694,16 @@ export function CapaDeAnotaciones({
         anotaciones.elegir(figurasEnCaja(paraTocar, lazo));
         setLazo(null);
       } else if ((arrastre.current || escalado.current) && base && base !== figuras) {
+        // Los ids que de verdad se movieron: el arrastre trae varios, el
+        // redimensionado uno solo.
+        const movidos = arrastre.current
+          ? arrastre.current.originales.map((f) => f.id)
+          : escalado.current
+            ? [escalado.current.original.id]
+            : [];
         // Solo se apila si de verdad cambió algo: un clic para elegir no es un
         // cambio y no tiene por qué gastar un paso de deshacer.
-        anotaciones.confirmar(figuras, base);
+        anotaciones.confirmar(reancorar(figuras, movidos), base);
       }
       arrastre.current = null;
       escalado.current = null;
@@ -498,6 +762,7 @@ export function CapaDeAnotaciones({
         anotaciones.agregar([
           {
             ...nuevaBase({ opacidad, capaId }),
+            ancla: anclarA(centro),
             clase: 'imagen',
             archivo: subido.archivo,
             x: centro[0] - ancho / 2,
@@ -514,7 +779,7 @@ export function CapaDeAnotaciones({
         setSubiendo(false);
       }
     },
-    [anotaciones, medida.ancho, medida.alto],
+    [anotaciones, medida.ancho, medida.alto, anclarA],
   );
 
   /** Le da a la barra el abridor del buscador de archivos. */
@@ -680,8 +945,42 @@ export function CapaDeAnotaciones({
   const cursor =
     herramienta === 'rotulo' ? 'cursor-text' : herramienta === 'seleccion' ? 'cursor-default' : 'cursor-crosshair';
 
-  return (
-    <>
+  /**
+   * ══ TODO EL CONTENIDO — portado, o inline según haya `.hoja-a4` o no ═══════
+   *
+   * Con `.hoja-a4` (una página de TEXTO, con editor), esto se porta ahí
+   * adentro con `createPortal` (ver más abajo): es la única caja que de
+   * verdad scrollea el texto, así que dibujar arriba de ella exige vivir
+   * ADENTRO. Una página-ARCHIVO Word/txt no tiene `.hoja-a4` —nunca pasa por
+   * BlockNote— pero SÍ tiene su propio visor con scroll propio
+   * (`contenedorArchivo`, ver su docblock): ahí se porta A ÉSE en su lugar.
+   * Solo con NINGUNO de los dos (un PDF, o el instante transitorio antes de
+   * que el nodo exista) este MISMO árbol se renderiza EN SU LUGAR de siempre,
+   * hermano de `{children}` dentro de `Hoja` — el comportamiento de antes del
+   * 08-sep-2026, que sigue siendo el correcto ahí porque no hay ninguna caja
+   * con scroll propio de la que colgarse.
+   *
+   * Un solo `div` es lo que se porta (o se planta): `.hoja-a4 > *`
+   * (`index.css`) le da `flex` a TODO hijo directo, y un `<canvas>`/`<input>`
+   * sueltos como hijos directos heredarían esa regla junto con ella. Este
+   * envoltorio, `absolute`, queda afuera del flujo —la regla no le hace
+   * nada— y es el ÚNICO que la hereda cuando se porta; los de adentro se
+   * posicionan contra ÉL. `pointer-events-none` porque es un div sin nada
+   * propio que decir: si no, taparía cada clic al texto de abajo, aunque no
+   * haya ni un trazo puesto.
+   *
+   * ⚠️ `left`/`top` son `origen`, NO `0`: con `.hoja-a4`, `origen` corrige su
+   * padding (ver el docblock de «Medir»); sin ella, ya viene en `{0, 0}`. El
+   * ancho/alto explícitos son los mismos que ya lleva el canvas — puestos acá
+   * además, todo lo de adentro (`CajaFlotante` incluida) queda en el MISMO
+   * sistema de coordenadas sin que cada una tenga que saber de este offset
+   * por su cuenta.
+   */
+  const contenido = (
+    <div
+      className="pointer-events-none absolute"
+      style={{ left: origen.x, top: origen.y, width: medida.ancho, height: medida.alto }}
+    >
       <canvas
         ref={canvasRef}
         width={Math.max(1, Math.round(medida.ancho * dpr))}
@@ -697,7 +996,16 @@ export function CapaDeAnotaciones({
         tabIndex={activa ? 0 : undefined}
         // 🔴 LA LÍNEA QUE DECIDE TODO. Ver el docblock: sin el `none`, la capa se
         // come cada clic del editor de texto que hay debajo.
-        className={'absolute inset-0 z-10 outline-none ' + (activa ? `touch-none ${cursor}` : 'pointer-events-none')}
+        // ⚠️ `pointer-events` SE HEREDA (a diferencia de casi todo lo demás en
+        // CSS): desde que este canvas vive dentro del `div` envoltorio con
+        // `pointer-events-none` (ver el `return` de más abajo), «no poner
+        // `-none`» YA NO ALCANZA para volver a capturar el puntero — hace
+        // falta el `-auto` explícito, o se hereda el `none` del padre y la
+        // capa activa se queda sorda a cada clic.
+        className={
+          'absolute inset-0 z-10 outline-none ' +
+          (activa ? `pointer-events-auto touch-none ${cursor}` : 'pointer-events-none')
+        }
         // No es una imagen con contenido propio: es una capa sobre el documento.
         role="application"
         aria-label={
@@ -743,8 +1051,23 @@ export function CapaDeAnotaciones({
             figura={{ ...f, opacidad: opacidadEfectiva(f, capas) }}
             editando={editandoCaja === f.id}
             elegida={seleccionadas.includes(f.id)}
-            // Con la capa en reposo, la caja deja pasar el clic al editor.
-            interactiva={activa}
+            /**
+             * 🔴 SOLO en modo SELECCIÓN, no con «cualquier herramienta activa»
+             * (08-sep-2026, corrige "a veces no deja dibujar"). La caja es un
+             * `<div>` de verdad, POR ENCIMA del canvas (z-index 11 contra 10,
+             * ver su docblock) — con cualquier otra herramienta puesta
+             * (lápiz, elipse, borrador…), su `onPointerDown` no hace nada
+             * para esos casos, pero mientras `interactiva` fuera `activa`
+             * (cualquier herramienta) el clic SE QUEDABA en la caja igual: el
+             * navegador entrega el evento al elemento de MÁS ARRIBA, y ese
+             * clic nunca llegaba al canvas. Medido: un trazo que empieza
+             * adentro del rectángulo de una caja existente —así no se vea
+             * nada ahí, el fondo es transparente— no dispara ni `alBajar`.
+             * Con la capa en reposo (`activa` falso) esto ya pasaba lo mismo
+             * de siempre; el arreglo es que TAMPOCO bloquee con el lápiz en
+             * la mano.
+             */
+            interactiva={herramienta === 'seleccion'}
             onTexto={(t) => textoDeCaja(f.id, t)}
             onAlto={(alto) => altoDeCaja(f.id, alto)}
             onEmpezarAEditar={() => {
@@ -781,7 +1104,9 @@ export function CapaDeAnotaciones({
           }}
           aria-label="Texto de la anotación"
           placeholder="Escribe y Enter"
-          className="absolute z-20 rounded border border-dashed border-primary bg-card/90 px-1 outline-none"
+          // `pointer-events-auto`: mismo motivo que el canvas — el padre lo
+          // hereda en `none` y esta caja SIEMPRE está activa mientras existe.
+          className="pointer-events-auto absolute z-20 rounded border border-dashed border-primary bg-card/90 px-1 outline-none"
           style={{
             left: escribiendo.en[0],
             top: escribiendo.en[1],
@@ -805,6 +1130,10 @@ export function CapaDeAnotaciones({
           {anotaciones.aviso ?? 'Subiendo la imagen…'}
         </p>
       )}
-    </>
+    </div>
   );
+
+  if (hojaA4) return createPortal(contenido, hojaA4);
+  if (contenedorArchivo) return createPortal(contenido, contenedorArchivo);
+  return contenido;
 }

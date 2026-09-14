@@ -24,6 +24,16 @@ export interface ContactoRegistrado {
   prioridad: string | null;
   vendedoraId: string;
   distrito: string | null;
+  direccion: string | null;
+  /**
+   * La geografía real (INEI): «distrito, departamento» o «provincia,
+   * departamento» — lo más específico que devolvió el mapa, aunque no calce
+   * con ningún distrito del catálogo propio.
+   */
+  ubicacion: string | null;
+  /** El punto que marcó el mapa al anotar la dirección (ADR 0088). `null` si nunca se marcó. */
+  lat: number | null;
+  lon: number | null;
   linea: string;
   favorito: boolean;
   /** Si fue registrado a mano en ficha o ingresó por chat/anuncio */
@@ -108,9 +118,22 @@ export function useReclamarContactoManual() {
  * fila que dice «Sin nombre» sobre un número que está ahí al lado no informa
  * nada: esconde el único dato que hay.
  */
-export function nombreVisible(c: ContactoRegistrado): string {
+export function nombreVisible(c: Pick<ContactoRegistrado, 'nombre' | 'apellido' | 'telefono'>): string {
   const nombre = [c.nombre, c.apellido].filter(Boolean).join(' ').trim();
   return nombre || c.telefono || '—';
+}
+
+/**
+ * LA COLUMNA «LOCACIÓN» — el distrito PROPIO de la campaña si el punto cayó
+ * ahí, o si no, la geografía real (pedido del 1-sep-2026): «distrito,
+ * departamento» o «provincia, departamento», nunca un nombre suelto sin decir
+ * de qué departamento es. `distrito` es más específico y es la pregunta que
+ * la campaña se hace todos los días («¿cuántos tengo en Comas?»), así que
+ * gana cuando existe; `ubicacion` es el resto del país, que la campaña no
+ * cargó como distrito propio pero que igual dice algo en vez de un «—» mudo.
+ */
+export function locacionDe(c: Pick<ContactoRegistrado, 'distrito' | 'ubicacion'>): string | null {
+  return c.distrito ?? c.ubicacion;
 }
 
 /** Las iniciales del avatar: hasta dos letras de `nombreVisible`. */
@@ -131,12 +154,23 @@ export function inicialesDe(nombre: string): string {
  * ⚠️ **Le saca el prefijo `centurion:`** además de cortar en el `@`. Las dos
  * familias de identidad conviven en producción y la columna es angosta; el
  * prefijo es lo único que no aporta nada al leer una fila.
+ *
+ * 🔴 **NORMALIZA MAYÚSCULAS/MINÚSCULAS DEL TODO, no solo la primera letra —
+ * la regla dura #4 del repo, aplicada al RÓTULO.** En producción el mismo
+ * `vendedora_id` vive con grafías distintas (`Luz`, `LUZ`, `luz`); antes esta
+ * función solo forzaba mayúscula la primera letra y dejaba el resto tal cual,
+ * así que `LUZ` y `luz` quedaban como DOS rótulos distintos («LUZ» y «Luz»).
+ * `productividad()` agrupa por el rótulo que devuelve esta función, así que
+ * esa diferencia partía a una sola persona en dos filas de «Cuántos registró
+ * cada uno», cada una con parte del total — el conteo se veía mal sin que el
+ * `GROUP BY` del server estuviera mal: estaba agrupando bien, por grafías que
+ * de verdad son distintas.
  */
 export function quienRegistro(id: string): string {
   const sinPrefijo = id.startsWith('centurion:') ? id.slice('centurion:'.length) : id;
   const corto = sinPrefijo.split('@')[0]?.trim() ?? '';
   if (!corto) return id;
-  return corto.charAt(0).toUpperCase() + corto.slice(1);
+  return corto.charAt(0).toUpperCase() + corto.slice(1).toLowerCase();
 }
 
 /**

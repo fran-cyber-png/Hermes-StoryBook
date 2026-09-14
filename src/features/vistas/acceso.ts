@@ -19,7 +19,7 @@ import { mismoUsuario } from '../notas/espacios';
  * da que la vista **no aparece nunca**, sin un solo síntoma. Por eso se reusa
  * `mismoUsuario` y no se escribe un cuarto normalizador (#37).
  */
-export const VEN_ROUTING = ['alan', 'Usuario1'] as const;
+export const VEN_ROUTING = ['alan', 'Usuario1', 'gsifuentes'] as const;
 
 /** ¿Esta vendedora tiene la vista Routing en su riel? */
 export function veRouting(vendedoraId: string | null | undefined): boolean {

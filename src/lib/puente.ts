@@ -28,8 +28,56 @@
  */
 export type DestinoCorreo = { para: string; clave?: string; nombre?: string };
 
+/**
+ * CON QUÉ RECORTE EL DASHBOARD LE ABRE EL PIPELINE (pestaña «Hoy», ADR 0104).
+ *
+ * La regla que parte las dos pantallas: **lo que se TRABAJA está en el Pipeline;
+ * lo que se MIDE está en el Dashboard**. Por eso cada cifra de «Hoy» es un enlace:
+ * una cifra que no se puede abrir no le sirve a nadie para decidir qué hacer.
+ *
+ * 🔴 **UN solo recorte, no banderas combinables.** El Pipeline aplica un eje por vez
+ * y el server acepta UN recorte por columna (`cola/columnasPedidas.ts` responde 400
+ * con dos): con tres opcionales sueltos se podrían mandar combinaciones que la
+ * pantalla no sabe dibujar ni apagar.
+ *
+ * ⚠️ `escribioHoy` y `sinRespuesta24h` se llaman igual que los recortes de columna
+ * del server (`?columnas=`), y las dos reglas viven en `server/src/cola/predicadosDeHoy.ts`.
+ * Hasta que el tablero los publique, el Pipeline recibe el puente y avisa que todavía
+ * no puede aplicarlos: nunca los ignora en silencio.
+ *
+ * 🔴 **`escribioHoy` NO es «nació hoy».** «Nació» cuenta también nuestra difusión
+ * (1.800 conversaciones el 9-sep-2026, 1.240 de ellas nunca contestaron); «escribió
+ * por primera vez» cuenta a quien levantó la mano (450 ese día). El Pipeline dice
+ * «N nuevas hoy» con la primera; el Dashboard, «escribieron por primera vez» con la
+ * segunda.
+ */
+export type RecorteDelPipeline =
+  | { luz: 'verde' | 'ambar' | 'gris' | 'rojo' }
+  | { escribioHoy: true }
+  | { sinRespuesta24h: true };
+
 export type Puente =
   | { tipo: 'chat'; telefono: string } // → Mensajes: abre (o crea) el chat con ese número
   | { tipo: 'persona'; telefono: string } // → Contactos: busca la ficha
   | { tipo: 'correo'; para: string; clave?: string; nombre?: string } // → Correos: prellena el Para y ata el correo a su conversación
-  | { tipo: 'agenda'; telefono: string | null; nota?: string }; // → Agenda: abre Crear precargado (p. ej. bienvenida post-venta)
+  | { tipo: 'agenda'; telefono: string | null; nota?: string } // → Agenda: abre Crear precargado (p. ej. bienvenida post-venta)
+  | {
+      tipo: 'pipeline'; // → Pipeline: abre con un recorte («Hoy» del Dashboard)
+      recorte?: RecorteDelPipeline;
+      /**
+       * A QUIÉN — es alcance, no recorte, y por eso va aparte. `null` = sin asignar;
+       * ausente = todas. Mismo nombre que `asignada_a` de la fila, y se compara
+       * normalizando los dos lados (candado 4: `Luz` y `luz` son la misma persona).
+       */
+      asignadaA?: string | null;
+      /** POR DÓNDE — el número propio. Ausente = todas las líneas. */
+      linea?: string;
+      /**
+       * POR QUÉ CANAL, para lo que NO entró por ninguna línea: un DM de Messenger o
+       * de Instagram no tiene número propio, así que `linea` no lo puede nombrar y
+       * sin esto su cifra no se podría abrir (259 DMs sin respuesta > 24 h el
+       * 9-sep-2026). Es el recorte `?canal=` que la cola ya sabe hacer. Nunca va
+       * junto con `linea`.
+       */
+      canal?: 'facebook' | 'instagram';
+    };

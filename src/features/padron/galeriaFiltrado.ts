@@ -1,5 +1,5 @@
-import { DIMENSIONES, type Dimension, type FiltrosPadron } from './padron';
-import { FACETAS, TOTAL_PADRON } from './galeriaDatos';
+import { DIMENSIONES, type FiltrosPadron } from './padron';
+import { FACETAS, SIN_ASIGNAR } from './galeriaDatos';
 
 /**
  * QUÉ FILTRO SIMULA DE VERDAD ESTE MOCK, Y CUÁL NO — declarado, no adivinado.
@@ -66,14 +66,22 @@ export const CARGA_POR_VENDEDORA: Record<string, number> = {
  */
 export const YA_ASIGNADOS_DE_BASE = Object.values(CARGA_POR_VENDEDORA).reduce((s, n) => s + n, 0);
 
-/** Mismos nombres y cifras que `entroPorLinea` en `galeria.tsx` — medido en
- * producción el 24-ago-2026 (#605): «Ventas Meta» es la línea con más gente
- * sin repartir y la que mejor convierte de todo el padrón. */
+/** Mismos nombres que `entroPorLinea` en `galeria.tsx`. «Ventas Meta» es la
+ * cifra de la captura del dueño del 10-sep-2026 (era 3.272 el 24-ago, #605); las
+ * otras dos siguen siendo las del 24-ago — no salen en esa captura. */
 export const LINEAS_DE_ENTRADA: { valor: string; etiqueta: string; contactos: number }[] = [
-  { valor: '51984429504', etiqueta: 'Ventas Meta', contactos: 3272 },
+  { valor: '51984429504', etiqueta: 'Ventas Meta', contactos: SIN_ASIGNAR.ventasMeta },
   { valor: '51986394450', etiqueta: 'Ventas Perú', contactos: 1840 },
   { valor: '51987654321', etiqueta: 'Betto', contactos: 612 },
 ];
+
+/**
+ * EL PADRÓN ENTERO DE HOY, ilustrativo: los 73.200 sin asignar de la captura del
+ * 10-sep más los asignados de base de este fixture. No es una medición — no hubo
+ * forma de medirlo —, es la única cifra que deja a «Todos» por encima de «Sin
+ * asignar», que es lo mínimo que tiene que cumplir.
+ */
+export const PADRON_HOY = SIN_ASIGNAR.total + YA_ASIGNADOS_DE_BASE;
 
 /**
  * EL TOTAL ILUSTRATIVO — una aproximación de una sola dimensión a la vez.
@@ -84,62 +92,49 @@ export const LINEAS_DE_ENTRADA: { valor: string; etiqueta: string; contactos: nu
  * una tabla de contingencia que nadie midió. Alcanza para lo que la franja de
  * atajos necesita — cada atajo pone COMO MUCHO una dimensión a la vez.
  *
- * ⚠️ **Tampoco cruza con `sinHabilitar` cuando hay una dimensión puesta**:
- * `FACETAS.etapa/curso/...` son conteos del PADRÓN ENTERO (lo prueba
- * `galeriaDatos.test.ts`, que sus sumas dan `TOTAL_PADRON`), no del recorte
- * «sin repartir». En producción, `atajosFacetas` pide con `sinHabilitar=true`
- * de base y el server SÍ cruza (la faceta excluye su propia dimensión pero
- * incluye las demás activas) — acá no hay datos medidos para ese cruce, así
- * que el número que se ve es el de la dimensión sola. Documentado, no
- * escondido: es la misma clase de honestidad que ya usa `contar-con-dueno`
+ * ⚠️ **Con `sinHabilitar` cruza SÓLO la etapa**, que es lo que las vistas de
+ * la pantalla prometen con número (`SIN_ASIGNAR`, captura del 10-sep). Curso,
+ * país, nivel y fuente siguen siendo conteos del PADRÓN ENTERO del 24-ago (lo
+ * prueba `galeriaDatos.test.ts`, que sus sumas dan `TOTAL_PADRON`): en
+ * producción el server SÍ los cruza, pero acá no hay datos medidos para ese
+ * cruce, así que el número que se ve es el de la dimensión sola. Documentado,
+ * no escondido: es la misma clase de honestidad que ya usa `contar-con-dueno`
  * («nadie midió esta intersección todavía»).
  */
 export function totalIlustrativo(params: URLSearchParams, repartidosIds: ReadonlySet<number>): number {
+  const lista = (clave: string) => params.get(clave)?.split(',').filter(Boolean) ?? [];
+  const sinHabilitar = params.get('sinHabilitar') === 'true';
+
+  // Las vistas «sin asignar» de la pantalla cruzan una dimensión con
+  // `sinHabilitar`, y ESAS cifras sí salen de la captura del 10-sep: sin este
+  // cruce, la vista prometería «En negociación · 5.792» y la tabla contaría los
+  // 5.796 del padrón entero — la galería mintiendo sobre su propia promesa.
+  if (sinHabilitar && lista('etapa').length) {
+    const etapa = lista('etapa');
+    return SIN_ASIGNAR.etapa.filter(([v]) => etapa.includes(v)).reduce((s, [, n]) => s + n, 0);
+  }
+
   for (const dim of DIMENSIONES) {
-    const seleccion = params.get(dim.id)?.split(',').filter(Boolean) ?? [];
+    const seleccion = lista(dim.id);
     if (seleccion.length) {
       return FACETAS[dim.id].filter(([v]) => seleccion.includes(v)).reduce((s, [, n]) => s + n, 0);
     }
   }
 
-  const asignadoASel = params.get('asignadoA')?.split(',').filter(Boolean) ?? [];
+  const asignadoASel = lista('asignadoA');
   if (asignadoASel.length) {
     return asignadoASel.reduce((s, v) => s + (CARGA_POR_VENDEDORA[v] ?? 0), 0);
   }
 
   // `entroPorLinea` no es una de las cinco `DIMENSIONES` ni `asignadoA` — es
   // el caso número cuatro que se anticipó (#605): si el mock no lo soporta,
-  // «Ventas Meta · 3.272» clickeado deja el total clavado. Este test lo
-  // habría atrapado solo, vía `COBERTURA_DE_FILTROS`.
-  const lineaSel = params.get('entroPorLinea')?.split(',').filter(Boolean) ?? [];
+  // «Ventas Meta» clickeado deja el total clavado. Este test lo habría
+  // atrapado solo, vía `COBERTURA_DE_FILTROS`.
+  const lineaSel = lista('entroPorLinea');
   if (lineaSel.length) {
     return LINEAS_DE_ENTRADA.filter((l) => lineaSel.includes(l.valor)).reduce((s, l) => s + l.contactos, 0);
   }
 
-  if (params.get('sinHabilitar') === 'true') return TOTAL_PADRON - YA_ASIGNADOS_DE_BASE - repartidosIds.size;
-  return TOTAL_PADRON;
-}
-
-/** Las filas visibles del recorte de 12 contactos ilustrativos, para la MISMA
- * combinación de filtros que `totalIlustrativo` — misma lógica, alcance más
- * chico (doce filas, no 73.145). */
-export function filtrarContactosIlustrativos<
-  T extends { id: number; etapa: string; curso: string | null; pais: string; nivel: string; fuente: string },
->(todos: T[], params: URLSearchParams, repartidosIds: ReadonlySet<number>): T[] {
-  const sinHabilitar = params.get('sinHabilitar') === 'true';
-  const seleccionPorDimension: Partial<Record<Dimension, string[]>> = {};
-  for (const dim of DIMENSIONES) {
-    const seleccion = params.get(dim.id)?.split(',').filter(Boolean) ?? [];
-    if (seleccion.length) seleccionPorDimension[dim.id] = seleccion;
-  }
-
-  return todos.filter((c) => {
-    if (sinHabilitar && repartidosIds.has(c.id)) return false;
-    if (seleccionPorDimension.etapa && !seleccionPorDimension.etapa.includes(c.etapa)) return false;
-    if (seleccionPorDimension.curso && !(c.curso && seleccionPorDimension.curso.includes(c.curso))) return false;
-    if (seleccionPorDimension.pais && !seleccionPorDimension.pais.includes(c.pais)) return false;
-    if (seleccionPorDimension.nivel && !seleccionPorDimension.nivel.includes(c.nivel)) return false;
-    if (seleccionPorDimension.fuente && !seleccionPorDimension.fuente.includes(c.fuente)) return false;
-    return true;
-  });
+  if (sinHabilitar) return SIN_ASIGNAR.total - repartidosIds.size;
+  return PADRON_HOY;
 }

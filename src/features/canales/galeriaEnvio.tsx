@@ -20,8 +20,8 @@ import { sectionLabel } from '../../lib/styles';
  * ══ 🔴 LO QUE NINGUNA MAQUETA MUESTRA, Y DECIDE LA ELECCIÓN ═════════════════
  *
  * `POST /api/responder/:id` recibe los DOS textos y manda el privado PRIMERO.
- * Si el privado falla, publica `mensajePublicoSinPrivado` — un texto distinto
- * que no promete nada. Es una transacción, no dos envíos.
+ * Si el privado falla, no publica nada: la vendedora decide con otro clic si
+ * publica sola la respuesta pública (ADR 0112). Es una transacción, no dos envíos.
  *
  * Dos botones independientes no pueden sostener eso: habilitan publicar el
  * público prometiendo un privado que nunca salió, que es el defecto que este

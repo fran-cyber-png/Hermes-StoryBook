@@ -21,9 +21,9 @@ let montado: Montado | null = null;
 let pedidos: { url: string; metodo: string; cuerpo: unknown }[] = [];
 
 /** Qué contesta `GET /api/bot/estado` en este caso. */
-type Respuesta = { estado: RespuestaBotApi } | { status: number };
+type Respuesta = { estado: RespuestaBotApi } | { status: number; cuerpo?: unknown };
 
-function servidor(get: Respuesta, escritura: { status: number } = { status: 200 }) {
+function servidor(get: Respuesta, escritura: { status: number; cuerpo?: unknown } = { status: 200 }) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (entrada: RequestInfo | URL, init?: RequestInit) => {
@@ -35,11 +35,13 @@ function servidor(get: Respuesta, escritura: { status: number } = { status: 200 
       });
       const cabeceras = { 'content-type': 'application/json' };
       if (url.includes('/api/bot/estado')) {
-        if ('status' in get) return new Response('{}', { status: get.status, headers: cabeceras });
+        if ('status' in get) {
+          return new Response(JSON.stringify(get.cuerpo ?? {}), { status: get.status, headers: cabeceras });
+        }
         return new Response(JSON.stringify(get.estado), { headers: cabeceras });
       }
       if (url.includes('/api/bot/')) {
-        return new Response(JSON.stringify({ error: 'sin_tabla' }), {
+        return new Response(JSON.stringify(escritura.cuerpo ?? { error: 'sin_tabla' }), {
           status: escritura.status,
           headers: cabeceras,
         });
@@ -211,6 +213,58 @@ describe('🔴 lo ILEGIBLE no se dibuja como apagado', () => {
   });
 });
 
+/**
+ * 🔴 EL CABLEADO DEL «NO APLICA» — y por qué el test puro de al lado no alcanza.
+ *
+ * `verBot` ya sabía leer `deOtroModulo` antes de que existiera este archivo, y
+ * eso no servía de nada: **nadie se lo pasaba**. Es el defecto de ADR 0024 otra
+ * vez —la regla escrita, el cableado no— y es exactamente la clase de cosa que
+ * un test puro no puede ver, porque desde adentro de `estado.ts` no hay forma de
+ * preguntar si `useBot` mira el `codigo` del error.
+ *
+ * Lo que se mide acá es lo único que importa: que una identidad de CAMPAÑA, que
+ * recibe el 403 del candado `deVentas`, lea «no aplica» y no la alarma.
+ */
+describe('🔴 en campaña el chip dice «no aplica», no «sin señal»', () => {
+  const CANDADO_DE_MODULO = {
+    status: 403,
+    cuerpo: {
+      ok: false,
+      codigo: 'otro_modulo_del_crm',
+      modulo: 'ventas',
+      message: 'esta parte de Hermes es del módulo de ventas',
+    },
+  };
+
+  it('lee el `codigo` del cuerpo y lo dice «no aplica»', async () => {
+    servidor(CANDADO_DE_MODULO);
+    const m = await abrir();
+    expect(m.contenedor.textContent).toMatch(/no aplica/i);
+  });
+
+  it('🔴 y NUNCA «sin señal»: en campaña no se rompió nada que alguien pueda arreglar', async () => {
+    servidor(CANDADO_DE_MODULO);
+    const m = await abrir();
+    expect(m.contenedor.textContent).not.toMatch(/sin señal/i);
+  });
+
+  it('no ofrece segmentos: no hay interruptor que tocar desde este lado', async () => {
+    servidor(CANDADO_DE_MODULO);
+    const m = await abrir();
+    expect(segmentos(m)).toHaveLength(0);
+  });
+
+  it('un 403 SIN el código sigue siendo «sin señal»: una sesión caída no es otro módulo', async () => {
+    // La distinción es el `codigo`, no el status. Si esto se colgara del 403
+    // pelado, a una vendedora de VENTAS con la sesión vencida el chip le diría
+    // que el bot no le toca — y dejaría de buscar el problema real.
+    servidor({ status: 403 });
+    const m = await abrir();
+    expect(m.contenedor.textContent).toMatch(/sin señal/i);
+    expect(m.contenedor.textContent).not.toMatch(/no aplica/i);
+  });
+});
+
 describe('el freno', () => {
   it('se ve, dice el motivo y se suelta desde acá', async () => {
     servidor({ estado: { ...VIVO, frenado: true, frenadoMotivo: 'temporary_ban' } });
@@ -242,5 +296,45 @@ describe('🔴 un cambio que FALLÓ no puede parecer aplicado', () => {
 
     expect(m.contenedor.textContent).toMatch(/NO se guardó/);
     expect(m.contenedor.textContent).toMatch(/bot_estado/);
+  });
+
+  it('🔴 el 503 de «no pudimos leer tus líneas» NO se dice como la tabla que falta (ADR 0108)', async () => {
+    // `/api/bot` va detrás del guard `deVentas`: con la lectura de líneas caída, el cambio también
+    // vuelve con 503, y leído por el status mandaba a buscar una migración que no falta.
+    servidor({ estado: VIVO }, { status: 503, cuerpo: { ok: false, codigo: 'lineas_no_leidas', message: 'mensaje del server' } });
+    const m = await abrir();
+
+    tocar(segmentos(m)[0]!);
+    await reposar();
+
+    expect(m.contenedor.textContent).toMatch(/NO se guardó: no pudimos leer tus líneas/);
+    expect(m.contenedor.textContent).not.toMatch(/bot_estado/);
+  });
+});
+
+/**
+ * 🔴 «NO APLICA» NO LLEVA TRIÁNGULO — la mitad visual de la misma decisión.
+ *
+ * Decir «no aplica» con la cara de una advertencia no arregla nada: campaña
+ * seguiría viendo una alarma amarilla que nadie puede apagar, y un aviso
+ * permanente enseña a no mirar el chip. El día que el bot falle de verdad, ya
+ * nadie mira. Es la misma economía del «rótulo ruidoso» de `verBot`: gritar
+ * siempre es no gritar nunca.
+ */
+describe('«no aplica» se ve como un estado sano, no como una alarma', () => {
+  it('no dibuja el triángulo de advertencia que sí llevan «sin señal» y «sin línea»', async () => {
+    servidor({
+      status: 403,
+      cuerpo: { ok: false, codigo: 'otro_modulo_del_crm', modulo: 'ventas', message: 'es de ventas' },
+    });
+    const m = await abrir();
+    const advertencias = m.contenedor.querySelectorAll('.text-warning, .text-destructive');
+    expect(advertencias).toHaveLength(0);
+  });
+
+  it('y «sin señal» SÍ lo lleva: lo que se fija es la diferencia, no la ausencia', async () => {
+    servidor({ status: 500 });
+    const m = await abrir();
+    expect(m.contenedor.querySelectorAll('.text-warning').length).toBeGreaterThan(0);
   });
 });

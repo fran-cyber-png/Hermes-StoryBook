@@ -389,6 +389,10 @@ export function VentaDesdeElPanel({
         personaNombre={conversacion.persona_nombre}
         numeroPropio={conversacion.numero_propio}
         paisNombre={data.pais}
+        // La MISMA ficha de arriba (`data`): ya sabemos que es cliente porque
+        // entramos a esta rama; `ventasCount` dice si tiene alguna venta previa.
+        // `null` (F.5, el detalle de Cerberus no cargó) no es "no compró".
+        yaCompro={data.ventasCount != null && data.ventasCount > 0}
         onCerrar={onCerrar}
         lineasIniciales={carritoInicial}
         monedaInicial={monedaInicial}

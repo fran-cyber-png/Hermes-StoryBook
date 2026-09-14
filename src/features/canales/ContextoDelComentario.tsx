@@ -1,7 +1,64 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ExternalLink, Newspaper } from 'lucide-react';
 import { api } from '../../lib/datos/cliente';
+import { descargarAutenticado } from '../../lib/datos/descargarArchivo';
+import { perezoso } from '../../lib/perezoso';
+import { API_URL } from '../../config';
+
+/** Perezoso: se abre con un clic, y el arranque tiene el techo justo (`npm run presupuesto`). */
+const VisorDeAdjunto = perezoso(() => import('../../components/VisorDeAdjunto').then((m) => m.VisorDeAdjunto));
+
+/**
+ * LA IMAGEN EN GRANDE, con Descargar si se sabe de qué comentario es.
+ *
+ * El visor MUESTRA la URL del CDN de Meta tal cual (recién pedida, no vencida).
+ * Descargar, en cambio, pasa por Hermes (`/api/comentario/:id/imagen`): el
+ * navegador ignora `<a download>` sobre un archivo de otro dominio, y la imagen
+ * se abriría en vez de guardarse. Sin `interactionId` (las galerías) se ve, pero
+ * no se ofrece guardarla.
+ */
+function ImagenAmpliable({
+  src,
+  alt,
+  className,
+  nombre,
+  descarga,
+}: {
+  src: string;
+  alt: string;
+  className: string;
+  nombre: string;
+  descarga: { interactionId: number; de: 'comentario' | 'post' } | null;
+}) {
+  const [abierta, setAbierta] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setAbierta(true)} title="Ver en grande" className="block cursor-zoom-in">
+        <img src={src} alt={alt} className={className} loading="lazy" />
+      </button>
+      {abierta && (
+        <Suspense fallback={null}>
+          <VisorDeAdjunto
+            clase="imagen"
+            src={src}
+            nombre={nombre}
+            onDescargar={
+              descarga
+                ? () =>
+                    descargarAutenticado(
+                      `${API_URL}/api/comentario/${descarga.interactionId}/imagen${descarga.de === 'post' ? '?de=post' : ''}`,
+                      nombre,
+                    )
+                : undefined
+            }
+            onCerrar={() => setAbierta(false)}
+          />
+        </Suspense>
+      )}
+    </>
+  );
+}
 
 /**
  * DE QUÉ SE TRATA ESTE COMENTARIO, Y QUÉ SE PUEDE HACER CON ÉL.
@@ -63,29 +120,30 @@ export function useContextoDelComentario(interactionId: number, activo: boolean)
  * **el adjunto ES el comentario**. Ponerlo abajo dejaría la cita vacía arriba y
  * la respuesta a «¿qué dijo?» tres bloques más abajo.
  */
-export function AdjuntoDelComentario({ adjunto }: { adjunto: Adjunto }) {
-  const contenido = (
-    <img
-      src={adjunto.imagen}
-      alt={adjunto.titulo ?? 'Imagen del comentario'}
-      // Chico de verdad: los stickers vienen en 59×59 y estirarlos los deja
-      // borrosos. `max-w` con `h-auto` respeta lo que Meta mandó.
-      className="max-h-48 max-w-full rounded-lg object-contain"
-      loading="lazy"
-    />
-  );
-
+export function AdjuntoDelComentario({ adjunto, interactionId }: { adjunto: Adjunto; interactionId?: number }) {
   return (
     <figure className="mt-2">
-      {adjunto.enlace ? (
-        <a href={adjunto.enlace} target="_blank" rel="noreferrer" className="inline-block">
-          {contenido}
-        </a>
-      ) : (
-        contenido
-      )}
-      {adjunto.titulo && (
-        <figcaption className="mt-1 text-xs text-muted-foreground">{adjunto.titulo}</figcaption>
+      {/* Tocar la imagen la AMPLÍA. Antes llevaba al enlace del adjunto (el GIF
+          original), que sacaba a la vendedora de Hermes para ver algo que ya
+          tenía enfrente: el enlace sigue, pero abajo y dicho. */}
+      <ImagenAmpliable
+        src={adjunto.imagen}
+        alt={adjunto.titulo ?? 'Imagen del comentario'}
+        // Chico de verdad: los stickers vienen en 59×59 y estirarlos los deja
+        // borrosos. `max-w` con `h-auto` respeta lo que Meta mandó.
+        className="max-h-48 max-w-full rounded-lg object-contain"
+        nombre="imagen-del-comentario"
+        descarga={interactionId ? { interactionId, de: 'comentario' } : null}
+      />
+      {(adjunto.titulo || adjunto.enlace) && (
+        <figcaption className="mt-1 text-xs text-muted-foreground">
+          {adjunto.titulo}
+          {adjunto.enlace && (
+            <a href={adjunto.enlace} target="_blank" rel="noreferrer" className="ml-1 inline-flex items-center gap-0.5 font-bold text-primary hover:underline">
+              Ver el original <ExternalLink size={10} />
+            </a>
+          )}
+        </figcaption>
       )}
     </figure>
   );
@@ -121,7 +179,7 @@ function fechaDePublicacion(iso: string): string | null {
   return d.toLocaleDateString('es-PE', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 }
 
-export function PublicacionOriginal({ post }: { post: Post }) {
+export function PublicacionOriginal({ post, interactionId }: { post: Post; interactionId?: number }) {
   const [expandido, setExpandido] = useState(false);
   const fecha = post.publicadoEn ? fechaDePublicacion(post.publicadoEn) : null;
   /**
@@ -157,17 +215,17 @@ export function PublicacionOriginal({ post }: { post: Post }) {
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
         {post.imagen && (
-          <img
-            src={post.imagen}
-            alt=""
-            loading="lazy"
-            /* Sin texto al lado, la imagen toma el ancho entero: con `sm:w-2/5`
-               fijo, un post que es sólo la pieza dejaba media tarjeta vacía. */
-            className={
-              'max-h-44 w-full shrink-0 rounded-xl bg-muted object-contain ' +
-              (post.texto ? 'sm:w-2/5' : '')
-            }
-          />
+          /* Sin texto al lado, la imagen toma el ancho entero: con `sm:w-2/5`
+             fijo, un post que es sólo la pieza dejaba media tarjeta vacía. */
+          <div className={'w-full shrink-0 ' + (post.texto ? 'sm:w-2/5' : '')}>
+            <ImagenAmpliable
+              src={post.imagen}
+              alt=""
+              className="max-h-44 w-full rounded-xl bg-muted object-contain"
+              nombre="imagen-de-la-publicacion"
+              descarga={interactionId ? { interactionId, de: 'post' } : null}
+            />
+          </div>
         )}
         <div className="min-w-0 flex-1">
           {texto && <p className="whitespace-pre-line text-xs leading-relaxed text-foreground">{texto}</p>}

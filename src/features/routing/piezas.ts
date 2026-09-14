@@ -1,5 +1,6 @@
 import type { CableLienzo, ColumnaLienzo, NodoLienzo } from './reglasDelLienzo';
 import type { FotoDeRouting, OrigenFamilia } from './routing';
+import { resumenDelReparto, type ParteDeReparto } from './repartoDeAnuncio';
 
 /**
  * DE LOS DATOS DEL SERVER AL LIENZO — puro, y por eso testeable sin montar nada.
@@ -36,6 +37,8 @@ export const ID = {
   campana: (id: string) => `campana:${id}`,
   curso: (curso: string) => `curso:${curso}`,
   vendedora: (v: string) => `v:${v}`,
+  /** Un anuncio adentro de una campaña abierta (#1002). No es un nodo: es un renglón. */
+  anuncio: (adId: string) => `anuncio:${adId}`,
 };
 
 /** Vuelve del id del lienzo al par (tipo, clave). El `slice` y no `split`: los cursos tienen `:` adentro. */
@@ -58,6 +61,18 @@ export interface Pieza {
   aliasFamilia?: string;
   volumen: number;
   vendedoras: string[];
+  /** Cuántos de sus anuncios reparten aparte (#1002). Sólo las campañas; ausente = 0. */
+  anunciosConReparto?: number;
+}
+
+/**
+ * «2 anuncios con reparto propio», o `''`. Lo leen el nodo y el renglón de la
+ * lista, y por eso vive una vez: con la campaña cerrada es lo único que avisa
+ * que sus cables no deciden los leads de esos anuncios (#1002).
+ */
+export function avisoDeReparto(p: Pick<Pieza, 'anunciosConReparto'>): string {
+  const n = p.anunciosConReparto ?? 0;
+  return n > 0 ? cuantas(n, 'anuncio con reparto propio', 'anuncios con reparto propio') : '';
 }
 
 /**
@@ -73,7 +88,13 @@ export interface Pieza {
  */
 export interface Apertura {
   id: string | null;
-  anuncios: readonly { adId: string; titular: string | null; personas: number }[];
+  anuncios: readonly {
+    adId: string;
+    titular: string | null;
+    personas: number;
+    /** Su reparto propio en porcentajes (#1002). Ausente o `[]` = decide la campaña. */
+    reparto?: readonly ParteDeReparto[];
+  }[];
   cargando: boolean;
   fallo?: boolean;
 }
@@ -96,6 +117,7 @@ export function piezasDe(data: FotoDeRouting): Pieza[] {
       aliasFamilia: c.aliasFamilia,
       volumen: c.personas,
       vendedoras: c.vendedoras,
+      anunciosConReparto: c.anunciosConReparto ?? 0,
     })),
     ...(data.cursos ?? []).map((c) => ({
       id: ID.curso(c.curso),
@@ -248,8 +270,12 @@ function cuantas(n: number, uno: string, varios: string): string {
   return `${n} ${n === 1 ? uno : varios}`;
 }
 
-/** El `nombreCorto` de la libreta vive en un módulo con react-query; acá alcanza esto. */
-function nombreCortoLocal(vendedoraId: string): string {
+/**
+ * El `nombreCorto` de la libreta vive en un módulo con react-query; acá alcanza esto.
+ * Se exporta para la hoja del anuncio: el nombre que se lee en el nodo y en la
+ * hoja tiene que ser el mismo, y una segunda receta es la que diverge (#37).
+ */
+export function nombreCortoLocal(vendedoraId: string): string {
   const sinDominio = vendedoraId.includes('@') ? vendedoraId.slice(0, vendedoraId.indexOf('@')) : vendedoraId;
   return sinDominio.trim() || vendedoraId;
 }
@@ -356,11 +382,12 @@ export function columnasDePieza(
 /**
  * UNA PIEZA COMO NODO, con lo que tenga adentro si está abierta.
  *
- * 🔴 **Solo las campañas se abren, y los anuncios NO son un puerto.** No existe
- * una regla por anuncio: el reparto resuelve `ad_id → campaña → vendedoras`, así
- * que el anuncio es de dónde VIENE la persona, no algo que se cablee. Dibujarlo
- * con puerto prometería un control que el server no tiene — por eso `adentro` es
- * una lista de solo lectura dentro del nodo y no una columna con puertos.
+ * 🔴 **Solo las campañas se abren, y los anuncios NO son un puerto.** Hasta
+ * #1002 no existía una regla por anuncio y el renglón era de solo lectura. Ahora
+ * un anuncio puede repartirse en porcentajes, pero sigue sin puerto: la lista
+ * vive adentro del nodo con scroll propio, y un cable no se ancla en un renglón
+ * que se desplaza. El renglón lleva su reparto como segundo renglón y un botón
+ * (`accion`) que abre la hoja donde se edita.
  *
  * ⚠️ El pie dice **las vendedoras si las hay**, y el dato de volumen si no: el
  * lienzo existe para contestar «¿a quién le cae esto?», y con el volumen siempre
@@ -373,7 +400,9 @@ function aNodo(p: Pieza, apertura: Apertura = CERRADO): NodoLienzo {
     id: p.id,
     titulo: p.titulo,
     icono: p.icono,
-    pie: p.vendedoras.length ? p.vendedoras.map(nombreCortoLocal).join(', ') : p.pie,
+    pie: [p.vendedoras.length ? p.vendedoras.map(nombreCortoLocal).join(', ') : p.pie, avisoDeReparto(p)]
+      .filter(Boolean)
+      .join(' · '),
     estado: p.estado,
     // Sale hacia las vendedoras. NO recibe: el cable del producto es de
     // pertenencia y lo decide el catálogo, no un arrastre.
@@ -383,11 +412,17 @@ function aNodo(p: Pieza, apertura: Apertura = CERRADO): NodoLienzo {
     cargando: abierto && apertura.cargando,
     fallo: abierto && Boolean(apertura.fallo),
     adentro: abierto
-      ? apertura.anuncios.map((a) => ({
-          id: `anuncio:${a.adId}`,
-          titulo: a.titular ?? '(sin titular)',
-          pie: `${a.personas} ${a.personas === 1 ? 'persona' : 'personas'}`,
-        }))
+      ? apertura.anuncios.map((a) => {
+          const titulo = a.titular ?? '(sin titular)';
+          const detalle = resumenDelReparto(a.reparto ?? [], nombreCortoLocal);
+          return {
+            id: ID.anuncio(a.adId),
+            titulo,
+            pie: `${a.personas} ${a.personas === 1 ? 'persona' : 'personas'}`,
+            ...(detalle ? { detalle } : {}),
+            accion: `Repartir el anuncio «${titulo}»`,
+          };
+        })
       : undefined,
   };
 }

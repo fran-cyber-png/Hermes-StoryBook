@@ -3,7 +3,77 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <!--
+      HERMES INSTALABLE EN EL CELULAR (ADR 0111).
+
+      El manifest y el color de la barra son para Chrome. iOS no lee el ícono ni el modo «sin barra» del
+      manifest: tiene sus propias etiquetas, y por eso están las dos cosas.
+
+      `viewport-fit=cover` deja que la app llegue a los bordes del celular. Lo que no puede quedar debajo
+      del notch o de la barra de gestos se separa con `env(safe-area-inset-*)`, que sin esto vale 0 en
+      iPhone. `interactive-widget=resizes-content` hace que Chrome Android achique el viewport al abrir el
+      teclado, en vez de taparlo: el composer queda a la vista.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0E2A52" />
+    <link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Hermes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!--
+      EL TEMA, ANTES DEL PRIMER PÍXEL — y por eso está acá y no en un módulo.
+
+      🔴 `arrancarTema()` corre en `main.tsx`, que es `type="module"`: o sea
+      DIFERIDO. Y sus imports se evalúan antes que su cuerpo, así que para
+      cuando esa línea se ejecuta ya se descargaron y corrieron React, TanStack
+      y el árbol entero de `App.tsx` — 822 KB en el chunk de entrada. La hoja de
+      estilos, en cambio, está lista enseguida: el navegador tiene todo para
+      pintar el fondo, y nada que lo frene.
+
+      La ventana dura lo que tarde ese chunk: nada si está todo en caché, un
+      rato largo la primera vez o con la red mala. Medida el 3-sep-2026 contra
+      el build, demorando el chunk 700 ms a propósito para poder mirarla, con la
+      elección «oscuro» guardada y el sistema en claro: la página se pintó
+      `rgb(245, 247, 251)` —el fondo CLARO— los 700 ms, y recién después saltó a
+      `rgb(13, 17, 23)`. Ése es el fogonazo al recargar, y ningún CSS lo puede
+      evitar: la elección vive en localStorage y sólo un script la puede leer.
+
+      Éste es clásico y síncrono, así que bloquea el parseo y corre ANTES de
+      cualquier pintura. Es lo único de Hermes que tiene permiso para hacer eso.
+
+      ⚠️ REPITE LA REGLA DE `src/lib/tema.ts` (la clave, los dos valores y el
+      mapa a `dark`/`light`), que es exactamente la clase de duplicación que en
+      este repo se cobra sola. El candado que las cruza es
+      `src/lib/tema.test.tsx` → «el arranque del HTML dice lo mismo que
+      tema.ts»: lee este archivo y falla si se separan.
+    -->
+    <script>
+      (function () {
+        var tema = null;
+        // 🔴 EL `try` ENVUELVE LA LECTURA, NO EL ESTAMPADO. Envolviendo todo,
+        // un valor ilegible en la clave —`JSON.parse` tira— se llevaba puesto
+        // también al `data-theme`, y la página quedaba sin atributo: el único
+        // caso en que Hermes volvía a depender de la media query. Lo encontró
+        // el test de paridad, no una sesión de uso.
+        try {
+          var crudo = localStorage.getItem('hermes-tema');
+          if (crudo !== null) tema = JSON.parse(crudo);
+        } catch (e) {
+          // Modo privado, cuota, contexto bloqueado, o basura de una versión
+          // vieja (la clave anterior guardaba `"true"`). Manda el sistema.
+        }
+        if (tema !== 'claro' && tema !== 'oscuro') {
+          try {
+            tema = matchMedia('(prefers-color-scheme: dark)').matches ? 'oscuro' : 'claro';
+          } catch (e) {
+            tema = 'claro';
+          }
+        }
+        document.documentElement.dataset.theme = tema === 'oscuro' ? 'dark' : 'light';
+      })();
+    </script>
     <title>Hermes - Central Digital</title>
   </head>
   <body>

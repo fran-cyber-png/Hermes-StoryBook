@@ -23,6 +23,34 @@ import type { LineaWhatsapp } from '../../dominio/lineas';
  * puede estar incompleto en cualquier momento: un mapa incompleto tiene que
  * degradar en «ves de más», nunca en «no ves nada» (`cola/lineas.ts`).
  *
+ * ══ 🔴 «LO TUYO» ES DEL ROL, NO DEL MAPA — LA CICATRIZ DEL 7-SEP-2026 ════
+ *
+ * Arriba dice «si `numero_vendedora` te asigna líneas, esas y nada más», y ese
+ * «nada más» se escribió pensando en las cinco vendedoras nuevas. **Aplicado a
+ * quien SUPERVISA es al revés de lo que el server hace.**
+ *
+ * `alex` es supervisor en la tabla `equipo` y tiene UNA línea en el mapa
+ * (`51984429504`, Ventas Meta). Con la regla vieja: una opción → el selector no
+ * se dibuja (`seDibujaElSelector`) → `lineaEfectiva` le clava esa línea → su
+ * cola pedía siempre `?linea=51984429504` **y no había control con el que
+ * salirse**. Su pantalla decía «2.346 en cola», que es exactamente el conteo de
+ * Ventas Meta en la ventana: le faltaban luz (2.432), lo que no entró por
+ * ninguna línea —formularios y comentarios— (2.155), Darian (830), Darwin (497)
+ * y Libros Mx (198). Mientras tanto el server le servía las **7.178** de la
+ * mesa entera, porque `fronteraDeAsignacionSql` no recorta a quien supervisa
+ * (`npm run frontera:preflight`: `alex supervisor/tabla ve 7178`).
+ *
+ * O sea: **el recorte lo hacía el front y era ciego al rol**. Por eso la regla
+ * ahora recibe `veTodo` y no lo deduce de nada — el rol lo resuelve el server
+ * una vez (`equipo/cascada.ts`) y baja con las líneas (#37: una regla que vive
+ * en dos lados diverge, y en una frontera divergir falla hacia el lado que no
+ * se ve).
+ *
+ * ⚠️ **Le pega SÓLO a quien supervisa con exactamente una línea en el mapa.**
+ * `alan` (admin) y `ventas10@grupogoberna.com` (supervisor) no tienen ninguna,
+ * así que caían en la rama `hayMias === false` y veían «Todas» — por eso el
+ * defecto vivió semanas con una sola persona sufriéndolo.
+ *
  * ══ NO ES UN PERMISO, Y ESTO NO LO CAMBIA ════════════════════════════════
  *
  * ⚠️ Achicar lo que el selector OFRECE no achica lo que la API SIRVE. El hilo, la
@@ -51,8 +79,13 @@ export interface OpcionDeLinea {
 /**
  * Las opciones del selector, en el orden en que se leen.
  *
- * Tres formas según a quién le toque:
+ * Cuatro formas según a quién le toque:
  *
+ *   · **Ve todo** (supervisor o admin) → `Todas` + `Las mías` si el mapa le
+ *     asigna alguna + cada línea viva. Se decide PRIMERO, antes de mirar el
+ *     mapa: para quien supervisa, tener una línea asignada no es estar
+ *     confinada a ella — es una más de las que puede mirar, y por eso «Las
+ *     mías» sigue ahí como atajo a su propio trabajo.
  *   · **Sin líneas propias** → `Todas` + cada línea viva. El comportamiento de
  *     siempre, y el fail-open del mapa incompleto.
  *   · **Una línea propia** → **una sola opción**, que por la regla de abajo hace
@@ -60,10 +93,24 @@ export interface OpcionDeLinea {
  *     mismo que ya dice la cola. Es el caso de las cinco vendedoras nuevas.
  *   · **Varias propias** → `Las mías` + cada una. Sin `Todas`: agregarla volvería
  *     a poner adelante las colas de los demás, que es justo lo que se saca.
+ *
+ * ⚠️ **El ORDEN de la primera opción es contrato**, no estética: `lineaEfectiva`
+ * cae a `opciones[0]` cuando lo guardado ya no está, y esa primera tiene que ser
+ * siempre la más amplia de las que le corresponden. Para quien ve todo, eso es
+ * `Todas` — arrancar en «Las mías» reproduciría el defecto con otro nombre.
  */
 export function opcionesDeLinea(
   lineas: readonly LineaWhatsapp[],
   hayMias: boolean,
+  /**
+   * ¿Manda sobre el trabajo de las demás? Llega RESUELTO del server, con las
+   * líneas (`useLineas().veTodo` ← `GET /api/whatsapp/lineas`). Acá no se
+   * deduce de nada: el rol vive en la tabla `equipo` y ya lo leyó `cargarRol`.
+   *
+   * ⚠️ **Default `false` a propósito**: quien no lo pasa se comporta como antes
+   * de este arreglo. Las cuatro galerías y el server viejo entran por ahí.
+   */
+  veTodo = false,
 ): OpcionDeLinea[] {
   const deLinea = (l: LineaWhatsapp): OpcionDeLinea => ({
     numero: l.numero,
@@ -72,12 +119,24 @@ export function opcionesDeLinea(
     transporte: l.transporte,
   });
 
-  if (!hayMias) {
+  const todas: OpcionDeLinea = {
+    numero: '',
+    etiqueta: 'Todas',
+    titulo: 'Ver todas las líneas juntas',
+  };
+
+  // QUIEN SUPERVISA NO ESTÁ CONFINADO, y por eso esto va antes que el mapa: la
+  // cola ya le sirve la mesa entera, así que un selector que no le ofrezca
+  // «Todas» le esconde filas que el server sí le manda — sin un solo síntoma.
+  if (veTodo) {
     return [
-      { numero: '', etiqueta: 'Todas', titulo: 'Ver todas las líneas juntas' },
+      todas,
+      ...(hayMias ? [{ numero: LINEA_MIAS, etiqueta: 'Las mías', titulo: 'Ver todas tus líneas juntas' }] : []),
       ...lineas.map(deLinea),
     ];
   }
+
+  if (!hayMias) return [todas, ...lineas.map(deLinea)];
 
   const propias = lineas.filter((l) => l.mias === true);
   if (propias.length <= 1) return propias.map(deLinea);

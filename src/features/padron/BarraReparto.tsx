@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, ChevronDown, Loader2, UserMinus, UserPlus, Users, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertTriangle, Check, ChevronDown, Loader2, UserMinus, UserPlus, X } from 'lucide-react';
+import { cifra } from '../../lib/formato';
+import { usePopover } from '../../lib/teclado/usePopover';
 import {
   nombreCorto,
   useContarConDueno,
@@ -13,7 +15,7 @@ import { cuantos, necesitaConfirmar, type Seleccion } from './seleccion';
 import { DeshacerEnAcuse, TiraDeshacer, type Deshacer } from './Deshacer';
 
 /**
- * REPARTIR EL LOTE — un control FIJO arriba (`TiraDeReparto`) y una franja
+ * REPARTIR EL LOTE — un control FIJO arriba (`BotonDeReparto`) y una franja
  * abajo que solo habla de lo que NO es repartir (`BarraReparto`).
  *
  * ── Por qué se partió en dos (24-ago-2026, pedido del dueño) ──
@@ -67,7 +69,7 @@ export function useReparto({
    *
    * ⚠️ **Pero SÍ se resetea si cambia el FILTRO** (no la página, no un reparto
    * exitoso): el reverso del pedido es no repartir a la persona equivocada por
-   * inercia. Cambiar de «Nadie todavía» a «Asignado a Tracy» para MIRAR su
+   * inercia. Cambiar de «Sin asignar» a «Asignado a Tracy» para MIRAR su
    * lote no debería dejar el botón listo para repartírselo a alguien más sin
    * que el supervisor lo haya vuelto a elegir a propósito.
    */
@@ -159,7 +161,7 @@ export function useReparto({
     quitarPendiente: quitar.isPending,
     puedeQuitar: seleccion.modo === 'lista',
     /**
-     * ⚠️ **Con el filtro «Sin repartir» puesto, NINGUNA fila visible tiene
+     * ⚠️ **Con el filtro «Sin asignar» puesto, NINGUNA fila visible tiene
      * dueño** — no es un límite del modo (como el de `recorte`, que se saca
      * cambiando a `lista`), es que la lista misma garantiza que no hay nada
      * que devolver al pozo común. Por eso «Quitar» ni se OFRECE acá: un botón
@@ -174,15 +176,24 @@ export function useReparto({
 export type Reparto = ReturnType<typeof useReparto>;
 
 /**
- * LA TIRA DE ARRIBA — reemplaza a «Más nuevos» en el header. Vive siempre,
- * elegido o no: la regla del dueño es que NO puede desaparecer, porque
- * desaparecer es exactamente el vaivén que esto vino a sacar.
+ * EL BOTÓN DE REPARTIR, PARTIDO — `[Repartir 4 a Luz | ▾]` (ADR 0102).
  *
- * Con 0 elegidos se ve apagada a propósito (gris, botón deshabilitado) — la
- * diferencia visual entre «apagada» y «armada» es la que avisa que ya hay
- * algo por repartir, sin necesitar texto de más.
+ * ── La regla que sigue en pie (24-ago-2026) ──
+ * NO puede desaparecer: desaparecer es exactamente el vaivén que esto vino a
+ * sacar. El destino se recuerda, el botón está siempre en el mismo lugar, y el
+ * rótulo nombra a quién y cuántos cuando lo sabe.
+ *
+ * ── Lo que cambió con la fila quieta ──
+ * Antes era una tira de ~300 px —el contador en «0», «Elegir a quién ▾» y
+ * «Repartir»— que con nada elegido ocupaba la fila apagada. Ahora es UN control:
+ * la mitad izquierda reparte, la flecha elige a quién. Con 0 elegidos se lee
+ * «Repartir» apagado (o «Repartir a Luz», si ya eligió); la flecha sigue viva,
+ * así que se puede elegir el destino antes de tildar.
+ *
+ * El freno contra apretar por inercia es el mismo de siempre: el botón armado
+ * dice la cifra y el nombre, y desde `CONFIRMAR_DESDE` hay confirmación.
  */
-export function TiraDeReparto({
+export function BotonDeReparto({
   reparto,
   destinos,
   carga,
@@ -191,42 +202,47 @@ export function TiraDeReparto({
   destinos: string[];
   carga: CargaVendedora[];
 }) {
-  const { n, seleccionEsRecorte, destino, setDestino, trabajando, confirmando, intentarRepartir } = reparto;
+  const { n, destino, setDestino, trabajando, confirmando, intentarRepartir } = reparto;
   const activo = n > 0;
+  const armado = activo && Boolean(destino) && !trabajando;
+  const porQueNo = !activo && !destino
+    ? 'Elige contactos en la tabla y, con la flecha, a quién dárselos'
+    : !activo
+      ? 'Elige contactos en la tabla'
+      : !destino
+        ? 'Elige a quién con la flecha'
+        : undefined;
 
   return (
-    <div
-      className={`flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-1.5 transition-colors duration-200 ${
-        activo ? 'border-navy/25 bg-navy/5' : 'border-border bg-muted/40'
-      }`}
-    >
-      <span
-        className={`flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[11px] font-bold tabular-nums transition-colors duration-200 ${
-          activo ? 'bg-navy text-white' : 'bg-border text-muted-foreground'
-        }`}
-      >
-        {n.toLocaleString('es')}
-      </span>
-      {seleccionEsRecorte && (
-        <span className="rounded-full bg-navy/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-navy-ink">
-          todo
-        </span>
-      )}
-
-      <ElegirDestino destinos={destinos} carga={carga} elegido={destino} onElegir={setDestino} />
-
+    <div className="flex h-8 shrink-0 items-stretch">
       <button
         type="button"
-        disabled={!destino || !activo || trabajando}
+        disabled={!armado}
         onClick={intentarRepartir}
-        title={!activo ? 'Elige contactos en la tabla para repartir' : undefined}
-        className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-navy px-3 py-1.5 text-xs font-bold text-white shadow-[0_4px_16px_-6px_rgba(14,42,82,0.6)] transition-[background-color,opacity] duration-200 ease-house hover:bg-navy/90 disabled:bg-border disabled:text-muted-foreground disabled:shadow-none"
+        title={porQueNo}
+        className={`flex items-center gap-1.5 whitespace-nowrap rounded-l-lg border px-3 text-xs font-semibold transition-colors duration-200 ${
+          armado
+            ? 'border-primary bg-primary text-primary-foreground hover:bg-primary-hover'
+            : 'cursor-not-allowed border-border bg-muted text-muted-foreground'
+        }`}
       >
         {trabajando && !confirmando ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
-        {destino && activo ? `Repartir ${n.toLocaleString('es')} a ${nombreCorto(destino)}` : 'Repartir'}
+        {rotuloDeReparto(n, destino)}
       </button>
+      <ElegirDestino destinos={destinos} carga={carga} elegido={destino} onElegir={setDestino} armado={armado} />
     </div>
   );
+}
+
+/**
+ * QUÉ DICE EL BOTÓN — a quién y cuántos, lo que se sepa. Nunca promete una cifra
+ * que no hay: con 0 elegidos no dice «Repartir 0».
+ */
+export function rotuloDeReparto(n: number, destino: string): string {
+  if (n > 0 && destino) return `Repartir ${cifra(n)} a ${nombreCorto(destino)}`;
+  if (n > 0) return `Repartir ${cifra(n)}`;
+  if (destino) return `Repartir a ${nombreCorto(destino)}`;
+  return 'Repartir';
 }
 
 /**
@@ -243,13 +259,13 @@ export function AvisoDeDueno({ reparto }: { reparto: Reparto }) {
       {seleccionEsRecorte && !destino && !!conDueno.data?.conDueno && (
         <p className="flex items-start gap-1.5 border-b border-border bg-warning/10 px-4 py-2 text-xs text-warning-foreground">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          {conDueno.data.conDueno.toLocaleString('es')} de estos ya tienen a alguien asignado.
+          {cifra(conDueno.data.conDueno)} de estos ya tienen a alguien asignado.
         </p>
       )}
       {seleccionEsRecorte && destino && !!conDueno.data?.deOtra && (
         <p className="flex items-start gap-1.5 border-b border-border bg-warning/10 px-4 py-2 text-xs text-warning-foreground">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          {conDueno.data.deOtra.toLocaleString('es')} de estos ya son de otra persona.
+          {cifra(conDueno.data.deOtra)} de estos ya son de otra persona.
         </p>
       )}
       {error && (
@@ -292,14 +308,14 @@ export function BarraReparto({
         <Check size={15} className="shrink-0" />
         <span className="font-semibold">
           {hecho.a
-            ? `Listos ${hecho.cuantos.toLocaleString('es')} para ${nombreCorto(hecho.a)}.`
-            : `${hecho.cuantos.toLocaleString('es')} volvieron al pozo común.`}
+            ? `Listos ${cifra(hecho.cuantos)} para ${nombreCorto(hecho.a)}.`
+            : `${cifra(hecho.cuantos)} volvieron al pozo común.`}
         </span>
         {hecho.a && <span className="text-success/80">Ya los ve en su lista de Contactos.</span>}
         {/* «Quedan N» lee `total` EN VIVO, no un número congelado en `hecho`: la
             invalidación de la consulta ya lo trae actualizado (regla dura del
             dueño, 24-ago-2026 — la señal de que el trabajo se acorta). */}
-        <span className="text-success/80">Quedan {total.toLocaleString('es')} en esta lista.</span>
+        <span className="text-success/80">Quedan {cifra(total)} en esta lista.</span>
         {/* Solo si ESTE acuse es de un reparto (`hecho.a`) — uno de quitar
             (`hecho.a === ''`) no genera tanda, no hay nada que deshacer. */}
         {hecho.a && <DeshacerEnAcuse deshacer={deshacer} />}
@@ -318,7 +334,7 @@ export function BarraReparto({
   return (
     <div className="sticky bottom-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border bg-card/95 px-4 py-2.5 shadow-[0_-8px_24px_-12px_rgba(14,42,82,0.25)] backdrop-blur">
       <span className="text-xs font-semibold text-muted-foreground">
-        {n.toLocaleString('es')} {n === 1 ? 'elegido' : 'elegidos'}
+        {cifra(n)} {n === 1 ? 'elegido' : 'elegidos'}
       </span>
       <button
         type="button"
@@ -328,7 +344,7 @@ export function BarraReparto({
         Limpiar
       </button>
 
-      {/* Con «Sin repartir» puesto, NINGUNA fila visible tiene dueño — no se
+      {/* Con «Sin asignar» puesto, NINGUNA fila visible tiene dueño — no se
           OFRECE Quitar, ni deshabilitado: no es un límite del modo (ese es el
           de abajo, que se saca cambiando a `lista`), es que no hay nada que
           esta lista pueda devolver al pozo común. */}
@@ -345,7 +361,7 @@ export function BarraReparto({
           className="ml-auto flex items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-2 text-xs font-bold text-foreground transition-colors hover:bg-muted disabled:opacity-40"
         >
           {quitarPendiente ? <Loader2 size={13} className="animate-spin" /> : <UserMinus size={13} />}
-          Quitar {n.toLocaleString('es')} del reparto
+          Quitar {cifra(n)} del reparto
         </button>
       )}
     </div>
@@ -382,7 +398,7 @@ export function Confirmacion({ reparto }: { reparto: Reparto }) {
           <div className="p-5">
             <p className="font-heading text-lg font-bold text-foreground">
               Vas a repartir{' '}
-              <span className="tabular-nums text-navy-ink">{n.toLocaleString('es')}</span> contactos a{' '}
+              <span className="tabular-nums text-navy-ink">{cifra(n)}</span> contactos a{' '}
               {nombreCorto(destino)}.
             </p>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
@@ -409,7 +425,7 @@ export function Confirmacion({ reparto }: { reparto: Reparto }) {
               className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-navy py-2.5 text-sm font-bold text-white transition-[background-color,transform] duration-200 ease-house hover:bg-navy/90 active:scale-[0.98] disabled:opacity-50"
             >
               {trabajando ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}
-              Sí, repartir {n.toLocaleString('es')}
+              Sí, repartir {cifra(n)}
             </button>
           </footer>
         </div>
@@ -424,52 +440,47 @@ function ElegirDestino({
   carga,
   elegido,
   onElegir,
+  armado,
 }: {
   destinos: string[];
   carga: CargaVendedora[];
   elegido: string;
   onElegir: (v: string) => void;
+  /** Si la mitad de al lado está lista para repartir: la flecha se pinta igual, como un solo botón. */
+  armado: boolean;
 }) {
   const [abierto, setAbierto] = useState(false);
-  const caja = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!abierto) return;
-    const afuera = (e: MouseEvent) => {
-      if (caja.current && !caja.current.contains(e.target as Node)) setAbierto(false);
-    };
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        setAbierto(false);
-      }
-    };
-    document.addEventListener('mousedown', afuera);
-    document.addEventListener('keydown', escape, true);
-    return () => {
-      document.removeEventListener('mousedown', afuera);
-      document.removeEventListener('keydown', escape, true);
-    };
-  }, [abierto]);
+  // Escape y clic afuera: el hook de la casa (#12), no una copia a mano que se
+  // come el Escape aunque el foco esté en un campo.
+  const { propsOverlay } = usePopover(abierto, () => setAbierto(false));
 
   const cuanto = new Map(carga.map((c) => [c.vendedoraId.toLowerCase(), c.contactos]));
   const masCargado = Math.max(1, ...carga.map((c) => c.contactos));
 
   return (
-    <div ref={caja} className="relative">
+    <div className="relative flex">
+      {/* La flecha del botón partido (ADR 0102). Viva aunque no haya nada
+          elegido: elegir a quién ANTES de tildar es parte de repartir en
+          tandas. El nombre elegido lo dice el botón de al lado. */}
       <button
         type="button"
         onClick={() => setAbierto((v) => !v)}
         aria-expanded={abierto}
-        className="flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        aria-label="Elegir a quién repartir"
+        title={elegido ? `Se reparte a ${nombreCorto(elegido)} — cambiar` : 'Elegir a quién repartir'}
+        className={`flex w-7 items-center justify-center rounded-r-lg border border-l-0 transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+          armado
+            ? 'border-primary bg-primary text-primary-foreground shadow-[inset_1px_0_0_rgba(255,255,255,0.25)] hover:bg-primary-hover'
+            : 'border-border bg-card text-foreground hover:bg-muted'
+        }`}
       >
-        <Users size={13} className="text-muted-foreground" />
-        {elegido ? nombreCorto(elegido) : 'Elegir a quién'}
-        <ChevronDown size={12} className={abierto ? 'rotate-180 transition-transform' : 'transition-transform'} />
+        <ChevronDown size={13} className={abierto ? 'rotate-180 transition-transform' : 'transition-transform'} />
       </button>
 
+      {abierto && <div {...propsOverlay} />}
+      {/* Flota: sombra y no borde (`lib/styles.ts`). */}
       {abierto && (
-        <div className="absolute right-0 top-full z-30 mt-1.5 w-64 overflow-hidden rounded-xl border border-border bg-card shadow-panel">
+        <div className="absolute right-0 top-full z-30 mt-1.5 w-64 overflow-hidden rounded-xl bg-card shadow-panel">
           <p className="border-b border-border px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
             A quién se lo doy
           </p>
@@ -510,7 +521,7 @@ function ElegirDestino({
                           />
                         </span>
                         <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                          {tiene.toLocaleString('es')}
+                          {cifra(tiene)}
                         </span>
                       </span>
                     </span>

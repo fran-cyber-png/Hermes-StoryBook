@@ -47,6 +47,16 @@ export interface ContactoPadron {
   comprado: string | null;
   fuente: string | null;
   creadoEn: string | null;
+  /**
+   * A QUIÉN ESTÁ ASIGNADO (ADR 0102): la grafía guardada en `contacto_habilitado`,
+   * o `null` si no tiene dueña.
+   *
+   * ⚠️ **Ausente NO es `null`.** El server lo manda sólo a quien manda en el
+   * equipo, y sólo si pudo leer el reparto. Ausente es «no se sabe» —una
+   * vendedora, un server viejo, la tabla sin migrar— y la columna no se dibuja;
+   * `null` es «se preguntó y no tiene dueña», y la celda dice «—».
+   */
+  asignadoA?: string | null;
 }
 
 export interface PaginaPadron {
@@ -242,7 +252,8 @@ export function useFacetas(filtros: FiltrosPadron, habilitado: boolean) {
  * sin necesidad sería el mismo riesgo que se está evitando acá.
  */
 export const TOGGLES = [
-  { id: 'sinHabilitar', rotulo: 'Sin repartir' },
+  // «Sin asignar», el mismo nombre que la vista y que el panel (ADR 0102).
+  { id: 'sinHabilitar', rotulo: 'Sin asignar' },
   { id: 'conVenta', rotulo: 'Con venta real' },
   { id: 'conTelefono', rotulo: 'Con teléfono' },
 ] as const satisfies { id: keyof FiltrosPadron; rotulo: string }[];

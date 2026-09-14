@@ -78,10 +78,16 @@ export function AvisoCerberus({
         type="button"
         onClick={() => setAbierto((v) => !v)}
         aria-expanded={abierto}
-        className="flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] font-medium text-warning-foreground transition-colors hover:bg-warning/20"
+        aria-label="Reconecta con Cerberus para registrar ventas"
+        className="flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] font-medium text-warning-foreground transition-colors hover:bg-warning/20 max-md:py-2 max-md:text-xs"
       >
         <KeyRound size={12} />
-        Reconecta con Cerberus para registrar ventas
+        {/* EN EL CELULAR EL RÓTULO LARGO NO ENTRA: medido a 390 px, empujaba el
+            botón de la cuenta fuera de la pantalla — o sea que con Cerberus caído
+            no había cómo cerrar sesión. Ahí queda la llave ámbar y la palabra; el
+            porqué completo está en el panel que abre, y en el `aria-label`. */}
+        <span className="max-md:hidden">Reconecta con Cerberus para registrar ventas</span>
+        <span className="md:hidden">Cerberus</span>
       </button>
 
       {abierto && (
@@ -112,7 +118,7 @@ export function AvisoCerberus({
                   setAbierto(false);
                 }
               }}
-              className="mt-1 w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25"
+              className="mt-1 w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25 max-md:text-base"
             />
 
             {error && <p className="mt-2 text-[11px] text-destructive">{error}</p>}

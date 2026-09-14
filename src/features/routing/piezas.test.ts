@@ -231,3 +231,28 @@ describe('el rótulo de la columna de una pieza sola', () => {
     expect(columnasDePieza(CON_PRODUCTO, [])[0]!.titulo).toBe('DIPCPOL');
   });
 });
+
+/**
+ * 🔴 CON LA CAMPAÑA CERRADA, EL NODO DICE QUE UN ANUNCIO SUYO REPARTE APARTE
+ * (#1002). El cable de la campaña afirma «le cae a Luz»; si un anuncio tiene su
+ * propio reparto, eso es falso para los leads de ese anuncio, y con el nodo
+ * cerrado no había forma de saberlo sin abrirlo y leer renglón por renglón.
+ */
+describe('el aviso de los anuncios que reparten aparte', () => {
+  const conReparto = (vendedoras: string[], n: number | undefined) =>
+    columnasDePieza(pieza({ pie: 'Activa · 61 personas', vendedoras, anunciosConReparto: n }), ['Luz', 'Sindy'])[0]!
+      .nodos[0]!;
+
+  it('lo dice aunque la campaña tenga cables (el pie muestra las vendedoras)', () => {
+    expect(conReparto(['Luz'], 1).pie).toBe('Luz · 1 anuncio con reparto propio');
+  });
+
+  it('lo dice sin cables, junto al volumen', () => {
+    expect(conReparto([], 2).pie).toBe('Activa · 61 personas · 2 anuncios con reparto propio');
+  });
+
+  it('sin anuncios que repartan aparte —o con un server que no lo manda— no agrega nada', () => {
+    expect(conReparto(['Luz'], 0).pie).toBe('Luz');
+    expect(conReparto([], undefined).pie).toBe('Activa · 61 personas');
+  });
+});

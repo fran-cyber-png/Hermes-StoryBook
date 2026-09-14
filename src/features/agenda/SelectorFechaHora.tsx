@@ -128,7 +128,11 @@ export function SelectorFechaHora({
   hoy?: Date;
 }) {
   const [abierto, setAbierto] = useState(false);
-  const [mesVista, setMesVista] = useState(() => valor ?? new Date());
+  // `hoy` entra ACÁ y no sólo en `arranqueDeHoy`: si el mes inicial mirara el
+  // reloj real, un test con `hoy` congelado abriría en el mes de HOY DE
+  // VERDAD y ninguna celda del mes congelado existiría en el DOM — pasaba por
+  // coincidencia mientras el reloj real seguía en el mismo mes que `hoy`.
+  const [mesVista, setMesVista] = useState(() => valor ?? hoy ?? new Date());
   /** El header alterna entre la grilla de días y una grilla de meses para saltar de año rápido. */
   const [vistaMeses, setVistaMeses] = useState(false);
   const [dia, setDia] = useState<Date | null>(valor);

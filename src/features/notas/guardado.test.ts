@@ -20,40 +20,47 @@ import { motivoDelFallo, renglonDeEstado, type EstadoGuardado } from './guardado
 
 const FALLO: EstadoGuardado = { tipo: 'fallo', motivo: 'No se guardó: pasa de los 2000 caracteres' };
 
+/** Un `editadoAt` de hace `min` minutos, como ISO string — lo que trae `Nota.editadoAt`. */
+const editadoHaceMin = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+
 describe('qué dice el renglón de estado', () => {
   it('🔴 un fallo le gana a «Guardado», aunque la página ya se haya editado', () => {
-    const r = renglonDeEstado(FALLO, true);
+    const r = renglonDeEstado(FALLO, editadoHaceMin(5));
     expect(r.hayFallo).toBe(true);
     expect(r.texto).toBe(FALLO.motivo);
-    expect(r.texto).not.toBe('Guardado');
+    expect(r.texto).not.toContain('Guardado');
   });
 
   it('🔴 y le gana también en una página nueva', () => {
-    expect(renglonDeEstado(FALLO, false).hayFallo).toBe(true);
+    expect(renglonDeEstado(FALLO, null).hayFallo).toBe(true);
   });
 
   it('mientras guarda lo dice', () => {
-    expect(renglonDeEstado({ tipo: 'guardando' }, true).texto).toBe('Guardando…');
-    expect(renglonDeEstado({ tipo: 'guardando' }, true).hayFallo).toBe(false);
+    expect(renglonDeEstado({ tipo: 'guardando' }, editadoHaceMin(5)).texto).toBe('Guardando…');
+    expect(renglonDeEstado({ tipo: 'guardando' }, editadoHaceMin(5)).hayFallo).toBe(false);
   });
 
-  it('guardado bien dice «Guardado»', () => {
-    expect(renglonDeEstado({ tipo: 'guardado' }, false).texto).toBe('Guardado');
+  it('guardado bien (el instante justo después del autoguardado) dice «recién»', () => {
+    // No `hace(editadoAt)` acá a propósito: `editadoAt` puede no haber llegado
+    // todavía al caché en ese mismo render (ver el docblock de `guardado.ts`).
+    expect(renglonDeEstado({ tipo: 'guardado' }, null).texto).toBe('Guardado · recién');
   });
 
-  it('una página ya editada que no se tocó sigue diciendo «Guardado»', () => {
-    // El comportamiento viejo, que era correcto: sirve para que abrir una nota
-    // vieja no muestre el renglón vacío como si nunca se hubiera guardado.
-    expect(renglonDeEstado({ tipo: 'quieto' }, true).texto).toBe('Guardado');
+  it('una página ya editada que no se tocó dice CUÁNTO hace', () => {
+    expect(renglonDeEstado({ tipo: 'quieto' }, editadoHaceMin(5)).texto).toBe('Guardado · hace 5 min');
+  });
+
+  it('una página editada hace menos de un minuto dice «recién»', () => {
+    expect(renglonDeEstado({ tipo: 'quieto' }, editadoHaceMin(0)).texto).toBe('Guardado · recién');
   });
 
   it('una página nueva sin tocar no dice nada', () => {
-    expect(renglonDeEstado({ tipo: 'quieto' }, false).texto).toBe('');
+    expect(renglonDeEstado({ tipo: 'quieto' }, null).texto).toBe('');
   });
 
   it('ningún estado de fallo puede salir sin marcar', () => {
     for (const motivo of ['x', 'No se guardó: se cerró tu sesión', '']) {
-      expect(renglonDeEstado({ tipo: 'fallo', motivo }, true).hayFallo).toBe(true);
+      expect(renglonDeEstado({ tipo: 'fallo', motivo }, editadoHaceMin(1)).hayFallo).toBe(true);
     }
   });
 });

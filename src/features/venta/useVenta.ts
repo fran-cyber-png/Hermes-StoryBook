@@ -205,6 +205,8 @@ export function useCrearCliente() {
     }) => api<{ ok: true; clienteId: number }>('/api/venta/cliente', { method: 'POST', body: JSON.stringify(v) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['ficha'] });
+      // #1033 — el panel lee la ficha del perfil, no de `['ficha']`.
+      void qc.invalidateQueries({ queryKey: ['perfil-contacto'] });
     },
   });
 }
@@ -240,6 +242,9 @@ export function useCrearVenta() {
       // La ficha (compras) quedó vieja, y la venta movió el embudo: cotización →
       // cotizado, venta → cierre. Todo lo que lo muestra se refresca.
       void qc.invalidateQueries({ queryKey: ['ficha'] });
+      // #1033 — el panel lee la ficha del perfil. La venta nueva llega a la copia local cuando
+      // Cerberus manda el webhook (o el reloj del puente la trae): puede tardar unos segundos.
+      void qc.invalidateQueries({ queryKey: ['perfil-contacto'] });
       void qc.invalidateQueries({ queryKey: ['gestiones'] });
       void qc.invalidateQueries({ queryKey: ['embudo'] });
       void qc.invalidateQueries({ queryKey: ['dashboard'] });

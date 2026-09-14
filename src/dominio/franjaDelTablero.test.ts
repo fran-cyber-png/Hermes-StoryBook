@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { claveDeColumnas, paramsDeFranja, type ColumnaDelTablero } from './conversaciones';
+import { claveDeColumnas, paramsDeFranja, paramsDeRango, type ColumnaDelTablero } from './conversaciones';
 
 /**
  * 🔴 LA FRANJA TIENE QUE ENTRAR A LA CLAVE, Y ESO NO SE VE EN NINGUNA CAPTURA.
@@ -57,5 +57,25 @@ describe('paramsDeFranja — lo que se le pide al server', () => {
     // instantes rompería su gramática (`etapa[:recorte]`, partida por `:`).
     expect(claveDeColumnas([HOY])).toBe('sin_respuesta');
     expect(claveDeColumnas([HOY])).toBe(claveDeColumnas([ULTIMA_HORA]));
+  });
+});
+
+/**
+ * EL RANGO GLOBAL DEL PIPELINE (Hoy · 7 d · 30 d) — `franjaEn=*`: la franja cae
+ * sobre TODAS las columnas pedidas. Es un valor explícito que manda un control
+ * visible arriba del tablero; sin `franjaEn` el server sigue dando 400 (ADR 0069).
+ */
+describe('paramsDeRango — el rango de todas las columnas', () => {
+  it('sin rango no agrega nada a la URL', () => {
+    expect(paramsDeRango(null)).toBe('');
+  });
+
+  it('🔴 nombra TODAS las columnas con `*` y manda el instante tal cual, con zona', () => {
+    const p = paramsDeRango({ desde: '2026-09-10T05:00:00.000Z', hasta: null });
+    const q = new URLSearchParams(p.replace(/^&/, ''));
+    expect(p.startsWith('&')).toBe(true);
+    expect(q.get('franjaEn')).toBe('*');
+    expect(q.get('desde')).toBe('2026-09-10T05:00:00.000Z');
+    expect(q.has('hasta')).toBe(false);
   });
 });

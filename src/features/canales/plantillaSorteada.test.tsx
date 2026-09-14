@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { montar, reposar, type Montado } from '../../pruebas/dom';
 import ResponderPanel from './ResponderPanel';
 import type { Interaccion } from './types';
-import { olvidarUltimaPlantilla, PLANTILLAS_PUBLICAS } from '../../dominio/plantillaPublica';
+import type { Conversacion } from '../../dominio/conversaciones';
+import { olvidarUltimaPlantilla, PLANTILLAS_PUBLICAS_POR_CLIENTE } from '../../dominio/plantillaPublica';
 
 /**
  * LA SUGERENCIA PÚBLICA SORTEADA — el CABLEADO, no la regla.
@@ -14,16 +15,23 @@ import { olvidarUltimaPlantilla, PLANTILLAS_PUBLICAS } from '../../dominio/plant
  * anterior.
  *
  * 🔴 **Es exactamente el hueco de ADR 0024 y ADR 0068.** Una versión del panel
- * que importara la regla y prefilleara igual `PLANTILLAS_PUBLICAS[0]` dejaría
- * los tests de la regla en verde y la pantalla repitiendo la misma frase — que
- * es el defecto que este cambio vino a arreglar. El defecto casi nunca es que la
- * regla esté mal: es que nadie la llama.
+ * que importara la regla y prefilleara igual la primera frase dejaría los tests
+ * de la regla en verde y la pantalla repitiendo la misma frase — que es el
+ * defecto que este cambio vino a arreglar. El defecto casi nunca es que la regla
+ * esté mal: es que nadie la llama.
  *
  * ⚠️ **El caso de dos comentarios seguidos no es azaroso y por eso se puede
  * afirmar**: la regla descarta la anterior, así que «distintas» es una promesa
  * dura, no una probabilidad. Si alguien saca el `anterior` del llamado, este
  * test se pone rojo una de cada TRES corridas — y ese parpadeo ES la señal.
+ *
+ * ⚠️ **Corre como la campaña de Betto** (11-sep-2026). Desde que cada cliente ve
+ * sólo sus textos, las frases sorteadas son las de Betto, y `/puede-privado`
+ * tiene que decir de quién es la Página. Que ningún otro cliente las vea lo fija
+ * `plantillaPorCliente.test.tsx`.
  */
+
+const DE_BETTO = PLANTILLAS_PUBLICAS_POR_CLIENTE.betto;
 
 const COMENTARIO: Interaccion = {
   id: 1,
@@ -39,13 +47,40 @@ const COMENTARIO: Interaccion = {
   dias: 1,
 };
 
+/**
+ * La `Conversacion` que ahora exige `CabeceraDeChat`/`BarraGestion` (08-sep-2026:
+ * la barra se mudó adentro de la cabecera de `ResponderPanel`, ver su docblock).
+ * Este test no la ejercita — sólo hace falta para que el panel monte.
+ */
+const CONVERSACION: Conversacion = {
+  clave: 'int:1',
+  canal: 'facebook',
+  tipo: 'comentario',
+  persona_id: null,
+  persona_nombre: null,
+  numero_propio: null,
+  texto: 'Excelente propuesta',
+  contexto_texto: null,
+  respondida: false,
+  ventana_abierta: true,
+  pregunto: false,
+  n: 1,
+  referencia: COMENTARIO.occurred_at,
+  ultimo_at: COMENTARIO.occurred_at,
+  dias: 1,
+  nivel: 2,
+};
+
 let vista: Montado;
 /** Lo que contesta `/puede-privado`. Lo cambia el test de la rama sin privado. */
 let puedePrivado = true;
+/** De quién es la Página, también desde `/puede-privado`. */
+let pagina: { modulo: 'ventas' | 'campana'; cliente: string | null } = { modulo: 'campana', cliente: 'betto' };
 
 const panel = (id: number) => (
   <ResponderPanel
     interaccion={{ ...COMENTARIO, id }}
+    conversacion={{ ...CONVERSACION, clave: `int:${id}` }}
     onCerrar={() => {}}
     onRespondido={() => {}}
   />
@@ -63,6 +98,7 @@ async function sugerenciaPara(id: number): Promise<string> {
 
 beforeEach(() => {
   puedePrivado = true;
+  pagina = { modulo: 'campana', cliente: 'betto' };
   // El «anterior» vive en el módulo, así que se comparte entre casos: sin este
   // olvido, cada test arrastraría lo que sorteó el anterior.
   olvidarUltimaPlantilla();
@@ -71,7 +107,7 @@ beforeEach(() => {
     vi.fn(async (url: string) => {
       const u = String(url);
       const cuerpo = u.includes('/puede-privado')
-        ? { puede: puedePrivado, motivo: puedePrivado ? null : 'ventana-cerrada', dias: 3 }
+        ? { puede: puedePrivado, motivo: puedePrivado ? null : 'ventana-cerrada', dias: 3, ...pagina }
         : u.includes('/contexto')
           ? { post: null, adjunto: null, estado: {} }
           : { permalink: null };
@@ -93,14 +129,14 @@ afterEach(() => {
 });
 
 test('la sugerencia pública sale de la lista sorteada', async () => {
-  expect(PLANTILLAS_PUBLICAS).toContain(await sugerenciaPara(1));
+  expect(DE_BETTO).toContain(await sugerenciaPara(1));
 });
 
 test('🔴 dos comentarios seguidos no reciben la misma frase', async () => {
   const primera = await sugerenciaPara(1);
   const segunda = await sugerenciaPara(2);
   expect(segunda).not.toBe(primera);
-  expect(PLANTILLAS_PUBLICAS).toContain(segunda);
+  expect(DE_BETTO).toContain(segunda);
 });
 
 /**
@@ -160,15 +196,16 @@ test('🔴 cerrar y reabrir tampoco repite: la memoria sobrevive al desmontaje',
 });
 
 /**
- * ⚠️ **La rama sin privado NO se sortea, y eso es deliberado**: ese texto invita
- * a escribir por privado y además es el de repuesto que el server publica si el
- * privado falla (ADR 0033). Si el sorteo se le colara, una de las tres frases de
- * agradecimiento podría terminar publicada como recuperación de un error, sin
- * decir nada de lo que hay que decir.
+ * ⚠️ **La Escuela conserva su texto de siempre**, el que invita a escribir por
+ * privado. Hasta el 11-sep-2026 era además el texto que el server publicaba
+ * cuando el privado fallaba, y por eso salió 13 veces en la Página de Américo sin
+ * que nadie lo viera. Esa sustitución ya no existe: ahora es sólo la sugerencia de
+ * la Escuela.
  */
-test('🔴 sin privado posible sigue saliendo el texto fijo que invita a escribir', async () => {
+test('🔴 la Escuela sin privado posible sigue viendo su texto, que invita a escribir', async () => {
+  pagina = { modulo: 'ventas', cliente: null };
   puedePrivado = false;
   const sugerida = await sugerenciaPara(1);
   expect(sugerida).toMatch(/Escríbenos por mensaje privado/);
-  expect(PLANTILLAS_PUBLICAS).not.toContain(sugerida);
+  expect(DE_BETTO).not.toContain(sugerida);
 });

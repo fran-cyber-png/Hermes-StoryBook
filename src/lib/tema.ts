@@ -57,6 +57,54 @@ export function temaGuardado(): Tema | null {
 }
 
 /**
+ * 🔴 EL CAMBIO DE TEMA NO SE TRANSICIONA — y ésta es la mitad del parpadeo que
+ * el `useLayoutEffect` de abajo no podía arreglar.
+ *
+ * Hay ~470 elementos en la app con `transition-colors` o
+ * `transition-[color,background-color,…] duration-200`. Ninguno es del tema:
+ * están para el hover. Pero una transición de color no distingue de dónde salió
+ * el color nuevo, así que también agarra el cambio de las variables CSS cuando
+ * `data-theme` se da vuelta — y entonces cada elemento se toma sus 200 ms para
+ * llegar.
+ *
+ * Medido el 3-sep-2026 en Chromium, sobre las clases del riel de `App.tsx`, 100
+ * ms después de dar vuelta el tema: el fondo iba en `rgb(166, 172, 181)`, un
+ * gris que NO EXISTE en ninguno de los dos temas —ni el `rgb(33, 40, 48)` del
+ * oscuro ni el `rgb(239, 244, 254)` del claro—, mientras el borde del MISMO
+ * elemento ya estaba en el color nuevo (no tiene transición). O sea: durante un
+ * quinto de segundo hay en pantalla una mezcla de los dos temas más un tercero
+ * inventado. Eso es lo que se ve y se reporta como «delay».
+ *
+ * Se apagan TODAS las transiciones, se estampa el atributo, el navegador pinta
+ * ese cuadro sin ninguna corriendo, y recién después se reactivan. No se agrega
+ * ninguna animación: se saca la que había. El hover de después transiciona
+ * igual que siempre.
+ *
+ * ⚠️ La hoja es nueva en cada llamada y se la lleva su propio `setTimeout`. Con
+ * una clase compartida y un temporizador único, dos clics seguidos —que es
+ * exactamente cómo se prueba un interruptor— dejaban al segundo sin protección,
+ * porque el temporizador del primero la apagaba en el medio.
+ */
+function sinTransicionDeColor(estampar: () => void): void {
+  const hoja = document.createElement('style');
+  hoja.dataset.sinTransicionDeTema = '';
+  hoja.textContent = '*,*::before,*::after{transition:none!important}';
+  document.head.appendChild(hoja);
+
+  estampar();
+
+  // Fuerza el recálculo con el atributo YA puesto y la hoja todavía encima: es
+  // lo que garantiza que el cuadro que se pinta sea el del tema nuevo y sin
+  // transiciones, en vez de dejar el orden librado a cuándo el navegador
+  // decida mirar los estilos.
+  void document.documentElement.offsetHeight;
+
+  // Un macrotask, no un microtask: los microtasks corren ANTES de pintar, así
+  // que sacar la hoja ahí la volvería inútil.
+  window.setTimeout(() => hoja.remove(), 0);
+}
+
+/**
  * Estampa el tema en `<html>`. Es lo ÚNICO que mira el CSS.
  *
  * Siempre pone el atributo, incluso cuando el tema coincide con el del sistema:
@@ -64,16 +112,29 @@ export function temaGuardado(): Tema | null {
  * «claro» signifique claro aunque el equipo esté en oscuro.
  */
 export function aplicarTema(tema: Tema): void {
-  document.documentElement.dataset.theme = tema === 'oscuro' ? 'dark' : 'light';
+  sinTransicionDeColor(() => {
+    document.documentElement.dataset.theme = tema === 'oscuro' ? 'dark' : 'light';
+  });
 }
 
 /**
  * ANTES DEL PRIMER RENDER, desde `main.tsx`.
  *
- * Si esto esperara al `useEffect` del botón, el primer cuadro se pintaría con el
- * tema del sistema y recién después saltaría al elegido: el parpadeo clásico.
- * Acá corre síncrono, con el `<div id="root">` todavía vacío, así que no hay
- * nada pintado que pueda parpadear.
+ * ⚠️ **ESTO NO ES LO QUE EVITA EL FOGONAZO, aunque durante meses el comentario
+ * de acá decía que sí.** Decía que corre «con el `<div id="root">` todavía
+ * vacío, así que no hay nada pintado que pueda parpadear», y la segunda mitad
+ * es falsa: el `<body>` vacío TAMBIÉN se pinta, con el fondo que diga el CSS.
+ * Y esta línea no corre temprano — vive en un módulo diferido, detrás de los
+ * 822 KB del chunk de entrada. La ventana dura lo que tarde ese chunk: nada en
+ * una recarga con todo en caché, un rato largo la primera vez o con la red
+ * mala. Medido demorando el chunk 700 ms a propósito —para poder mirarla—, el
+ * fondo claro se pintó los 700 con «oscuro» elegido.
+ *
+ * El que llega a tiempo es el script clásico de `index.html`. Éste queda como
+ * el arranque del lado de JS: deja el atributo puesto para cualquier entrada
+ * que no pase por ese HTML, y confirma —sin cambiar nada— lo que el HTML ya
+ * resolvió. Los dos usan `aplicarTema`, así que el mapa a `dark`/`light` sigue
+ * escrito una sola vez.
  */
 export function arrancarTema(): void {
   aplicarTema(temaGuardado() ?? temaDelSistema());

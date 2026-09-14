@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { MessageSquareQuote, Settings2 } from 'lucide-react';
+import { Image, MessageSquareQuote, Settings2 } from 'lucide-react';
 import type { HechoDelCatalogo } from '../hechos/catalogo';
 
 /**
@@ -117,6 +117,13 @@ export function SelectorRapido({ consulta, respuestas, indice, onIndice, onElegi
                 {/* La clave ES el atajo, y mostrarla es lo que lo enseña: la
                     próxima vez se escribe directo. */}
                 <span className="shrink-0 font-mono text-[10px] text-muted-foreground">/{h.clave}</span>
+                {h.imagen && (
+                  <Image
+                    size={10}
+                    className="ml-auto shrink-0 text-muted-foreground"
+                    aria-label="Trae una imagen"
+                  />
+                )}
               </div>
               <div className="truncate text-[11px] text-muted-foreground">{h.texto}</div>
             </button>

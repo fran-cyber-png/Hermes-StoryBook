@@ -3,9 +3,11 @@ import { AlertTriangle, ChevronDown } from 'lucide-react';
 import { BarraSegmentada } from '../../components/graficos/BarraSegmentada';
 import { LineasHora } from '../../components/graficos/LineasHora';
 import { sectionLabel } from '../../lib/styles';
+import { raizDePanel, selectDeBanda, tarjetasAngostas, terceraTarjetaAngosta } from './disposicion';
 import { ETAPA_ROTULO } from '../../lib/etapas';
 import {
   CLAVES_PERIODO,
+  DIMENSIONES,
   HORA_APERTURA,
   HORA_CIERRE,
   bucketsDeFila,
@@ -14,26 +16,33 @@ import {
   fueraDeHorario,
   pct,
   rotuloRango,
+  type CeldaDelDesglose,
   type ClavePeriodo,
   type DatosNegocio,
   type Dimension,
   type FilaNegocio,
 } from './negocio';
+import type { DatosSeries } from './series';
+import { TiraCatorceDias } from './TiraCatorceDias';
+import { PorQueSePierden } from './PorQueSePierden';
 
 /**
  * EL PANEL DEL NEGOCIO — la lectura del que pone la plata (#128, #126).
  *
- * El radar contesta «¿a quién atiendo ahora?». Esto contesta «¿qué curso se está
+ * El Pipeline contesta «¿a quién atiendo ahora?». Esto contesta «¿qué curso se está
  * vendiendo, cuál estoy dejando pasar, y en qué anuncio conviene invertir?».
  *
  * POR QUÉ SON DOS PANTALLAS Y NO UNA: son dos personas con dos preguntas y dos
  * ritmos. La vendedora mira el radar cada cinco minutos; el dueño mira esto una
  * vez al día y cambia de período. Apiladas en una sola vista, en una app de
  * escritorio que NO scrollea, las dos quedan apretadas y ninguna se lee. El
- * conmutador vive en la banda de arriba, en el mismo lugar siempre, y la banda
- * cambia de contenido pero no de altura: cero salto de layout.
+ * conmutador vive en la banda de arriba, en el mismo lugar siempre, y en escritorio
+ * la banda cambia de contenido pero no de altura: cero salto de layout. En pantalla
+ * angosta sí crece y la vista hace scroll, porque recortar era peor (#968).
  *
  * ORDEN VERTICAL = orden de importancia:
+ *   0 · LA TENDENCIA — los últimos 14 días, en una tira angosta. Vivía en el riel
+ *       de «Mi turno» y se mudó acá con ADR 0104: es medición del negocio.
  *   1 · LA ATENCIÓN — la cifra héroe (cuánta gente está esperando AHORA), las
  *       dos medianas de primera respuesta y la cobertura horaria. Es lo primero
  *       porque es lo único accionable hoy mismo.
@@ -46,18 +55,74 @@ import {
  * decorativo, ningún oro en franjas horarias ni en bordes.
  */
 
-const TITULO_DIMENSION: Record<Dimension, { titulo: string; sinAtribuir: string; ayuda: string }> = {
+/**
+ * LAS TRES LECTURAS, EN UN SOLO LUGAR — el segmentado, el encabezado de la
+ * primera columna, el vacío y el rótulo del detalle salen todos de acá. Agregar
+ * una cuarta dimensión es agregar una entrada, no tocar cinco `if`.
+ *
+ * `detalle` es cómo se llama la OTRA dimensión: la que aparece al abrir una
+ * fila. Por curso y por anuncio es la vendedora; por vendedora es el curso.
+ */
+const TITULO_DIMENSION: Record<
+  Dimension,
+  { titulo: string; columna: string; sinAtribuir: string; detalle: string; sinDetalle: string; ayuda: string }
+> = {
   curso: {
     titulo: 'Por curso',
+    columna: 'Curso',
     sinAtribuir: 'Sin curso identificado',
+    detalle: 'Vendedora',
+    sinDetalle: 'Nadie contestó desde Hermes',
     ayuda:
       'El curso sale del interés que la vendedora registró, del formulario que la persona llenó o ' +
       'del anuncio por el que escribió — en ese orden, el mismo del chip de la cola.',
   },
   anuncio: {
     titulo: 'Por anuncio',
+    columna: 'Anuncio',
     sinAtribuir: 'Sin anuncio registrado',
-    ayuda: 'El anuncio sale del click-to-WhatsApp del primer mensaje. El nombre de la CAMPAÑA todavía no se guarda.',
+    detalle: 'Vendedora',
+    sinDetalle: 'Nadie contestó desde Hermes',
+    ayuda: 'El anuncio sale del click-to-WhatsApp del primer mensaje. Para la campaña, ver "Por campaña".',
+  },
+  vendedora: {
+    titulo: 'Por vendedora',
+    columna: 'Vendedora',
+    sinAtribuir: 'Sin vendedora — nadie contestó desde Hermes',
+    detalle: 'Curso',
+    sinDetalle: 'Sin curso identificado',
+    ayuda:
+      'La vendedora es la que le escribió PRIMERO a esa conversación desde Hermes, así que es la ' +
+      'dueña de su tiempo de primera respuesta. La auto-respuesta no cuenta como persona. ' +
+      '⚠️ Un comentario de Facebook o Instagram se contesta por un camino que todavía no registra ' +
+      'quién fue, así que cae en la fila sin nombre: la cobertura es de WhatsApp.',
+  },
+  campana: {
+    titulo: 'Por campaña',
+    columna: 'Campaña',
+    sinAtribuir: 'Sin campaña identificada',
+    detalle: 'Vendedora',
+    sinDetalle: 'Nadie contestó desde Hermes',
+    ayuda:
+      'El nombre de la campaña sale del ruteo (la tabla que decide a quién le cae el lead) cuando existe; ' +
+      'si no, del caché que resuelve el nombre del anuncio; si tampoco, de lo que Meta mandó con el ' +
+      'formulario. La fuente exacta de cada fila se ve al pasar el mouse.',
+  },
+  linea: {
+    titulo: 'Por línea',
+    columna: 'Línea',
+    sinAtribuir: 'Sin línea identificada',
+    detalle: 'Vendedora',
+    sinDetalle: 'Nadie contestó desde Hermes',
+    ayuda: 'El número propio de WhatsApp que recibió la conversación.',
+  },
+  canal: {
+    titulo: 'Por canal',
+    columna: 'Canal',
+    sinAtribuir: 'Sin canal identificado',
+    detalle: 'Vendedora',
+    sinDetalle: 'Nadie contestó desde Hermes',
+    ayuda: 'WhatsApp, Messenger, comentario de Facebook o Instagram — por dónde entró la conversación.',
   },
 };
 
@@ -111,7 +176,8 @@ export function FiltrosNegocio({
 }) {
   const numeros = soloPeriodo ? [] : (datos?.numeros ?? []);
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-3">
+    // Angosto, los filtros toman su propia línea de la banda y se acomodan adentro (#968).
+    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 md:w-auto md:flex-1">
       <div className="flex shrink-0 flex-col">
         <div className="flex rounded-full border border-border p-0.5">
           {CLAVES_PERIODO.map((p) => (
@@ -134,19 +200,37 @@ export function FiltrosNegocio({
         </span>
       </div>
 
-      <div className={'shrink-0 rounded-full border border-border p-0.5 ' + (soloPeriodo ? 'hidden' : 'flex')}>
-        {(['curso', 'anuncio'] as const).map((d) => (
+      {/* Por debajo de 640 px las seis pastillas no entran (492 px contra unos 358): va el mismo
+          control como `<select>` nativo, que en el teléfono abre la lista del sistema (#968). */}
+      <label className={'relative shrink-0 items-center ' + (soloPeriodo ? 'hidden' : 'flex sm:hidden')}>
+        <span className="sr-only">Agrupar la tabla por</span>
+        <select
+          value={valor.dimension}
+          onChange={(e) => onCambio({ ...valor, dimension: DIMENSIONES.find((d) => d === e.target.value) ?? valor.dimension })}
+          className={`${selectDeBanda} font-semibold`}
+        >
+          {DIMENSIONES.map((d) => (
+            <option key={d} value={d}>
+              {TITULO_DIMENSION[d].titulo}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={12} className="pointer-events-none absolute right-2.5 text-muted-foreground" />
+      </label>
+      <div className={'shrink-0 rounded-full border border-border p-0.5 ' + (soloPeriodo ? 'hidden' : 'hidden sm:flex')}>
+        {DIMENSIONES.map((d) => (
           <button
             key={d}
             type="button"
             onClick={() => onCambio({ ...valor, dimension: d })}
             aria-pressed={valor.dimension === d}
+            title={TITULO_DIMENSION[d].ayuda}
             className={
               'rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition-colors ' +
               (valor.dimension === d ? 'bg-navy text-white' : 'text-muted-foreground hover:text-foreground')
             }
           >
-            {d === 'curso' ? 'Por curso' : 'Por anuncio'}
+            {TITULO_DIMENSION[d].titulo}
           </button>
         ))}
       </div>
@@ -159,7 +243,7 @@ export function FiltrosNegocio({
           <select
             value={valor.numero ?? ''}
             onChange={(e) => onCambio({ ...valor, numero: e.target.value || null })}
-            className="appearance-none rounded-full border border-border bg-card py-1 pl-3 pr-7 font-mono text-[11px] tabular-nums text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className={`${selectDeBanda} font-mono tabular-nums`}
           >
             <option value="">Todos los números</option>
             {numeros.map((n) => (
@@ -188,13 +272,24 @@ export function PanelNegocio({
   cargando,
   actualizando,
   dimension,
+  series,
+  cargandoSeries = false,
 }: {
   datos?: DatosNegocio;
   cargando: boolean;
   actualizando: boolean;
   dimension: Dimension;
+  /** La serie de los últimos 14 días (`/api/dashboard/series`). */
+  series?: DatosSeries;
+  cargandoSeries?: boolean;
 }) {
   const [orden, setOrden] = useState<Columna>('llegaron');
+  /**
+   * QUÉ FILA ESTÁ ABIERTA. Una sola a la vez: el detalle contesta «¿y acá dentro
+   * quién?», que es una pregunta que se hace de a una — dos abiertas obligan a
+   * comparar de memoria entre dos bloques separados por otras filas.
+   */
+  const [abierta, setAbierta] = useState<string | null>(null);
   const textos = TITULO_DIMENSION[dimension];
   const a = datos?.atencion;
 
@@ -211,14 +306,37 @@ export function PanelNegocio({
     return lista;
   }, [datos, orden]);
 
+  /**
+   * El desglose, indexado por fila y ya ordenado por volumen. Ausente = server
+   * viejo o una respuesta rehidratada del caché de IndexedDB (ADR 0007): ahí el
+   * mapa queda vacío y las filas simplemente no se abren, que es el
+   * comportamiento de antes y no un hueco.
+   */
+  const desglosePorFila = useMemo(() => {
+    const m = new Map<string, CeldaDelDesglose[]>();
+    for (const c of datos?.desglose ?? []) {
+      const k = c.fila ?? '';
+      const lista = m.get(k);
+      if (lista) lista.push(c);
+      else m.set(k, [c]);
+    }
+    for (const lista of m.values()) lista.sort((x, y) => y.llegaron - x.llegaron);
+    return m;
+  }, [datos]);
+
   const hueco = a ? fueraDeHorario(a.cobertura, HORA_APERTURA, HORA_CIERRE) : { entran: 0, salen: 0 };
   const veces = cuantoMasLento(a?.demora_mediana_en_horario_min ?? null, a?.demora_mediana_fuera_min ?? null);
   const subregistrado = datos ? datos.subregistro.precio_mencionado > datos.subregistro.cotizados : false;
 
   return (
-    <div className={'flex min-h-0 flex-1 flex-col gap-2.5 transition-opacity ' + (actualizando ? 'opacity-60' : '')}>
+    // Angosto, el panel toma su alto y la vista hace scroll (`disposicion.ts`, #968).
+    <div className={raizDePanel + (actualizando ? ' opacity-60' : '')}>
+      <TiraCatorceDias series={series} cargando={cargandoSeries} />
+
       {/* ═══ 1 · LA ATENCIÓN ═══ */}
-      <section aria-label="La atención" className="grid shrink-0 grid-cols-[minmax(190px,0.85fr)_minmax(190px,0.85fr)_2.4fr] gap-2.5">
+      {/* Una columna en el teléfono, dos en sm y las tres de siempre desde md (#968): con las tres
+          fijas, a 390 px las columnas quedaban en 190 · 190 · 28 px y la cobertura, fuera. */}
+      <section aria-label="La atención" className={`${tarjetasAngostas} md:grid-cols-[minmax(190px,0.85fr)_minmax(190px,0.85fr)_2.4fr]`}>
         {/* 1A · La cifra héroe: la única de la vista. */}
         <article className="rounded-2xl bg-card p-3.5 shadow-panel">
           <h3 className={sectionLabel}>Esperan respuesta</h3>
@@ -312,7 +430,7 @@ export function PanelNegocio({
         </article>
 
         {/* 1C · La cobertura horaria: el gráfico que explica las dos medianas. */}
-        <article className="flex min-w-0 flex-col rounded-2xl bg-card p-3.5 shadow-panel">
+        <article className={`flex min-w-0 flex-col rounded-2xl bg-card p-3.5 shadow-panel ${terceraTarjetaAngosta}`}>
           <div className="flex items-baseline justify-between gap-2">
             <h3 className={sectionLabel}>Cobertura horaria</h3>
             {!cargando && (
@@ -334,6 +452,10 @@ export function PanelNegocio({
           )}
         </article>
       </section>
+
+      {/* ═══ 1b · POR QUÉ SE PIERDEN (ADR 0107) ═══
+          Antes de la tabla porque cuenta la MISMA cohorte, y son a lo sumo seis chips. */}
+      <PorQueSePierden perdidas={datos?.perdidas} llegaron={a?.conversaciones ?? 0} />
 
       {/* ═══ 2 · LA TABLA DEL NEGOCIO ═══ */}
       <section aria-label={textos.titulo} className="flex min-h-0 flex-1 flex-col rounded-2xl bg-card shadow-panel">
@@ -383,8 +505,8 @@ export function PanelNegocio({
         <div className="min-h-0 flex-1 overflow-y-auto">
           {cargando ? (
             <div className="p-4">
-              {['w-1/3', 'w-2/5', 'w-1/4', 'w-1/2', 'w-1/3'].map((w) => (
-                <div key={w} className="mb-2.5 flex items-center gap-3">
+              {['w-1/3', 'w-2/5', 'w-1/4', 'w-1/2', 'w-1/3'].map((w, i) => (
+                <div key={i} className="mb-2.5 flex items-center gap-3">
                   <div className={'h-3 animate-pulse rounded bg-muted ' + w} />
                   <div className="ml-auto h-2 w-32 animate-pulse rounded-full bg-muted" />
                 </div>
@@ -399,7 +521,7 @@ export function PanelNegocio({
               <thead className="sticky top-0 z-10 bg-card">
                 <tr className="border-b border-border text-[11px] text-muted-foreground">
                   <th scope="col" className="px-4 py-1.5 text-left font-medium">
-                    {dimension === 'curso' ? 'Curso' : 'Anuncio'}
+                    {textos.columna}
                   </th>
                   <th scope="col" className="w-36 px-2 py-1.5 text-left font-medium">
                     Cómo quedaron
@@ -442,9 +564,22 @@ export function PanelNegocio({
                 </tr>
               </thead>
               <tbody>
-                {filas.map((f) => (
-                  <Fila key={`${f.clave ?? 'sin'}-${f.ad_id ?? ''}`} fila={f} sinAtribuir={textos.sinAtribuir} />
-                ))}
+                {filas.map((f) => {
+                  const id = `${f.clave ?? 'sin'}-${f.ad_id ?? ''}`;
+                  const celdas = desglosePorFila.get(f.clave ?? '') ?? [];
+                  return (
+                    <Fila
+                      key={id}
+                      fila={f}
+                      sinAtribuir={textos.sinAtribuir}
+                      celdas={celdas}
+                      rotuloDetalle={textos.detalle}
+                      sinDetalle={textos.sinDetalle}
+                      abierta={abierta === id}
+                      onAbrir={() => setAbierta((v) => (v === id ? null : id))}
+                    />
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -485,33 +620,139 @@ function Encabezado({
   );
 }
 
-function Fila({ fila, sinAtribuir }: { fila: FilaNegocio; sinAtribuir: string }) {
+/** De dónde salió el nombre de la campaña, en palabras — ver `FuenteCampana`. */
+const ROTULO_FUENTE_CAMPANA: Record<NonNullable<FilaNegocio['fuente_campana']>, string> = {
+  ruteo: 'del ruteo (la tabla que decide a quién le cae el lead)',
+  resuelto: 'del caché que resuelve el nombre del anuncio',
+  formulario: 'de lo que Meta mandó con el formulario',
+};
+
+function Fila({
+  fila,
+  sinAtribuir,
+  celdas,
+  rotuloDetalle,
+  sinDetalle,
+  abierta,
+  onAbrir,
+}: {
+  fila: FilaNegocio;
+  sinAtribuir: string;
+  /** El cruce de ESTA fila con la otra dimensión. Vacío = no hay nada que abrir. */
+  celdas: CeldaDelDesglose[];
+  rotuloDetalle: string;
+  sinDetalle: string;
+  abierta: boolean;
+  onAbrir: () => void;
+}) {
   const b = bucketsDeFila(fila);
   const anonima = fila.clave === null;
+  // Con una sola celda el detalle no dice nada nuevo: sería la misma fila
+  // repetida un renglón más abajo. Ahí no se ofrece abrir.
+  const sePuedeAbrir = celdas.length > 1;
+
   return (
-    <tr className="border-b border-border/70 last:border-b-0 hover:bg-accent">
-      <th scope="row" className="max-w-0 px-4 py-1.5 text-left font-medium">
-        <span className={'block truncate ' + (anonima ? 'italic text-muted-foreground' : 'text-foreground')} title={fila.clave ?? sinAtribuir}>
-          {fila.clave ?? sinAtribuir}
-        </span>
-        {fila.ad_id && <span className="block truncate font-mono text-[10px] text-muted-foreground">{fila.ad_id}</span>}
-      </th>
-      <td className="px-2 py-1.5">
-        <BarraSegmentada
-          segmentos={ESTADOS.map((e) => ({ id: e.id, n: b[e.id], color: e.color, label: e.label }))}
-        />
-      </td>
-      <td className="px-2 py-1.5 text-right font-mono font-semibold tabular-nums text-foreground">{fila.llegaron}</td>
-      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground">{fila.esperan}</td>
-      <td className={'px-2 py-1.5 text-right font-mono tabular-nums ' + (fila.nunca_respondidos > 0 ? 'text-destructive' : 'text-muted-foreground')}>
-        {fila.nunca_respondidos}
-      </td>
-      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground whitespace-nowrap">{formatearDemora(fila.demora_mediana_min)}</td>
-      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">{fila.precio_mencionado}</td>
-      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground">{fila.cotizados}</td>
-      <td className={'px-2 py-1.5 text-right font-mono tabular-nums ' + (fila.cerrados > 0 ? 'font-bold text-success' : 'text-muted-foreground')}>
-        {fila.cerrados}
-      </td>
-    </tr>
+    <>
+      <tr className="border-b border-border/70 last:border-b-0 hover:bg-accent">
+        <th scope="row" className="max-w-0 px-4 py-1.5 text-left font-medium">
+          <span className="flex items-center gap-1">
+            {/* El disparador es un botón de verdad y no la fila entera: la fila
+                tiene ocho celdas de números que se seleccionan para copiar, y
+                hacerla clickeable entera convierte cada intento de copiar en un
+                despliegue. */}
+            {sePuedeAbrir ? (
+              <button
+                type="button"
+                onClick={onAbrir}
+                aria-expanded={abierta}
+                title={`Ver por ${rotuloDetalle.toLowerCase()}`}
+                className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-navy-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+              >
+                <ChevronDown
+                  size={12}
+                  className={'transition-transform duration-200 ease-house ' + (abierta ? 'rotate-0' : '-rotate-90')}
+                />
+              </button>
+            ) : (
+              <span className="size-[13px] shrink-0" aria-hidden="true" />
+            )}
+            <span
+              className={'block truncate ' + (anonima ? 'italic text-muted-foreground' : 'text-foreground')}
+              title={
+                fila.fuente_campana
+                  ? `${fila.clave} — el nombre sale ${ROTULO_FUENTE_CAMPANA[fila.fuente_campana]}`
+                  : (fila.clave ?? sinAtribuir)
+              }
+            >
+              {fila.clave ?? sinAtribuir}
+            </span>
+          </span>
+          {fila.ad_id && <span className="block truncate pl-[18px] font-mono text-[10px] text-muted-foreground">{fila.ad_id}</span>}
+        </th>
+        <td className="px-2 py-1.5">
+          <BarraSegmentada
+            segmentos={ESTADOS.map((e) => ({ id: e.id, n: b[e.id], color: e.color, label: e.label }))}
+          />
+        </td>
+        <td className="px-2 py-1.5 text-right font-mono font-semibold tabular-nums text-foreground">{fila.llegaron}</td>
+        <td className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground">{fila.esperan}</td>
+        <td className={'px-2 py-1.5 text-right font-mono tabular-nums ' + (fila.nunca_respondidos > 0 ? 'text-destructive' : 'text-muted-foreground')}>
+          {fila.nunca_respondidos}
+        </td>
+        <td className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground whitespace-nowrap">{formatearDemora(fila.demora_mediana_min)}</td>
+        <td className="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">{fila.precio_mencionado}</td>
+        <td className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground">{fila.cotizados}</td>
+        <td className={'px-2 py-1.5 text-right font-mono tabular-nums ' + (fila.cerrados > 0 ? 'font-bold text-success' : 'text-muted-foreground')}>
+          {fila.cerrados}
+        </td>
+      </tr>
+
+      {abierta &&
+        celdas.map((c) => {
+          const bc = bucketsDeFila({
+            llegaron: c.llegaron,
+            esperan: c.esperan,
+            nunca_respondidos: c.nunca_respondidos,
+          });
+          return (
+            <tr key={`${c.fila ?? ''}-${c.parte ?? 'sin'}`} className="border-b border-border/70 bg-muted/40 text-[11px]">
+              {/* La sangría dice de quién es este renglón sin repetir el nombre
+                  de la fila: se lee como una lista adentro de su celda. */}
+              <th scope="row" className="max-w-0 py-1 pl-9 pr-4 text-left font-normal">
+                <span
+                  className={'block truncate ' + (c.parte === null ? 'italic text-muted-foreground' : 'text-foreground')}
+                  title={c.parte ?? sinDetalle}
+                >
+                  {c.parte ?? sinDetalle}
+                </span>
+              </th>
+              <td className="px-2 py-1">
+                <BarraSegmentada
+                  segmentos={ESTADOS.map((e) => ({ id: e.id, n: bc[e.id], color: e.color, label: e.label }))}
+                />
+              </td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-foreground">{c.llegaron}</td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-foreground">{c.esperan}</td>
+              <td className={'px-2 py-1 text-right font-mono tabular-nums ' + (c.nunca_respondidos > 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                {c.nunca_respondidos}
+              </td>
+              {/* 🔴 La mediana del detalle NO se hereda ni se prorratea: la
+                  recalcula el server por celda. Una mediana repartida entre
+                  subgrupos es un número inventado. */}
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-foreground whitespace-nowrap">
+                {formatearDemora(c.demora_mediana_min)}
+              </td>
+              {/* «Precio dicho» y «Cotizados» no viajan en el cruce: el detalle
+                  contesta quién atiende y cuánto tarda, no el subregistro. Van
+                  vacías en vez de en cero — un cero acá sería un dato falso. */}
+              <td className="px-2 py-1 text-right text-muted-foreground">·</td>
+              <td className="px-2 py-1 text-right text-muted-foreground">·</td>
+              <td className={'px-2 py-1 text-right font-mono tabular-nums ' + (c.cerrados > 0 ? 'font-bold text-success' : 'text-muted-foreground')}>
+                {c.cerrados}
+              </td>
+            </tr>
+          );
+        })}
+    </>
   );
 }

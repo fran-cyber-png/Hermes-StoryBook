@@ -20,7 +20,6 @@ import { quienDiceSer } from '../auth/sesion';
 import { mismoUsuario } from '../notas/espacios';
 import { AdminRemitentes } from './AdminRemitentes';
 import {
-  conMiles,
   lecturaDeError,
   motivoAdjuntoInvalido,
   motivoParaNoEnviar,
@@ -30,6 +29,7 @@ import {
   TOPE_ADJUNTOS_BYTES,
   TOPE_CUERPO,
 } from './correos';
+import { cifra } from '../../lib/formato';
 import type { EstadoDeCorreos } from './tipos';
 
 /**
@@ -418,6 +418,17 @@ export function Composer({
   const hayQueGuardar = para.trim() !== '' || asunto.trim() !== '' || cuerpo.trim() !== '';
 
   /**
+   * ¿EXISTE UN CANAL AL QUE GUARDAR? — sin esto, «guardar antes de cerrar»
+   * (abajo) reintentaba un POST que no podía tener éxito nunca, y la X y el
+   * clic afuera se quedaban mudos para siempre: `onListoParaCerrar` nunca
+   * llega porque `guardarBorrador` nunca gana. Pasa siempre que el módulo de
+   * quien mira no es `ventas` —Correos le contesta 403 hasta en `/estado`,
+   * `estado.isError` — y también con el canal sin configurar en el server
+   * (`conectado === false`, sin `SMTP_HOST`/`SMTP_USER`/`SMTP_PASS`).
+   */
+  const canalUsable = !estado.isError && estado.data?.conectado !== false;
+
+  /**
    * LA SEÑAL DE CIERRE — guardar primero, avisar después.
    *
    * 🔴 **`onListoParaCerrar` NO se llama si el guardado falla.** Cerrar igual
@@ -426,16 +437,17 @@ export function Composer({
    * guardado. Con el fallo a la vista y el panel abierto, lo escrito sigue en
    * pantalla y se puede copiar o reintentar.
    *
-   * ⚠️ **Sin nada escrito se cierra sin tocar el server.** Abrir el composer y
-   * cerrarlo es lo más común que se hace con él; un POST por cada vez sería ruido
-   * puro, y una fila vacía en Borradores por cada arrepentimiento.
+   * ⚠️ **Sin nada escrito se cierra sin tocar el server** — y lo mismo si no
+   * hay canal (`canalUsable`): ahí no hay dónde guardarlo y REINTENTAR no lo
+   * va a arreglar, así que insistir en el POST sólo deja la X sin efecto. En
+   * los dos casos cerrar no pierde nada que se pudiera haber conservado.
    */
   const [cierreVisto, setCierreVisto] = useState(senalCerrar);
   useEffect(() => {
     if (senalCerrar === cierreVisto) return;
     setCierreVisto(senalCerrar);
 
-    if (!hayQueGuardar) {
+    if (!hayQueGuardar || !canalUsable) {
       onListoParaCerrar?.();
       return;
     }
@@ -817,7 +829,7 @@ export function Composer({
                     (cuerpo.length > TOPE_CUERPO ? 'text-destructive' : 'text-muted-foreground')
                   }
                 >
-                  {conMiles(cuerpo.length)} de {conMiles(TOPE_CUERPO)} caracteres
+                  {cifra(cuerpo.length)} de {cifra(TOPE_CUERPO)} caracteres
                 </p>
               )}
 

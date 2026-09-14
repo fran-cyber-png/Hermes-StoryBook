@@ -21,10 +21,13 @@ import { VistaContactosCampana } from './VistaContactosCampana';
  *
  * ══ AMPLIACIÓN DEL 24-AGO-2026 ═══════════════════════════════════════════════
  * El mock deja de ser de solo lectura: favoritos, etiquetas (asignar Y crear),
- * ubicación y eventos (notas/actividad) ESCRIBEN sobre un estado en memoria, y
- * «Nuevo contacto» agrega de verdad una fila — si no, un clic no se distingue
- * de un bug (fue justo el reporte del 24-ago). `esCandidato` viaja fijo en
- * `true` para ver también ese botón.
+ * ubicación y eventos (notas/actividad) ESCRIBEN sobre un estado en memoria —
+ * si no, un clic no se distingue de un bug (fue justo el reporte del 24-ago).
+ *
+ * ⚠️ «Nuevo contacto» se sacó de la pantalla el 01-sep-2026 (pedido del dueño):
+ * el mock de `POST /api/contactos/registro` de abajo sigue existiendo porque
+ * también lo usa «Editar»/«Registrar ficha» desde el panel de un contacto ya
+ * existente — no es código muerto, solo perdió su otro punto de entrada.
  */
 
 const params = new URLSearchParams(location.search);
@@ -429,7 +432,7 @@ createRoot(document.getElementById('galeria')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <div className="h-screen bg-background">
-        <VistaContactosCampana esCandidato onEscribir={(tel) => alert(`Iría a Mensajes con ${tel}`)} />
+        <VistaContactosCampana onEscribir={(tel) => alert(`Iría a Mensajes con ${tel}`)} />
       </div>
     </QueryClientProvider>
   </StrictMode>,

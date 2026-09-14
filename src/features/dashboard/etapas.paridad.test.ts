@@ -22,7 +22,6 @@ const ARCHIVOS: Record<string, string> = import.meta.glob(
   [
     '../../../server/src/gestiones/registrarGestion.ts',
     '../../../server/src/cola/etapaEfectivaSql.ts',
-    '../../features/dashboard/VistaDashboard.tsx',
   ],
   { eager: true, query: '?raw', import: 'default' },
 );
@@ -68,38 +67,15 @@ function confirmarSinRespuestaEnElServer(): void {
 }
 
 /**
- * ══ EL CONSUMIDOR, NO SOLO LA FUNCIÓN ═══════════════════════════════════════
+ * ══ EL CONSUMIDOR SE FUE, LA PARIDAD SE QUEDA (ADR 0104) ═════════════════════
  *
- * `totalDelEmbudo`/`ordenDelEmbudo` son correctas por construcción — no hay
- * forma de que pierdan una clave. Lo que SÍ puede volver a romperse es que
- * `VistaDashboard.tsx` deje de llamarlas y vuelva a iterar `ETAPAS` a mano
- * (exactamente el bug original). Mismo patrón que `PINTAN_ETAPA` en
- * `lib/etapas.test.ts`: se lee el componente como texto, como
- * `limitesMedia.paridad.test.ts`.
+ * Acá había un describe que leía `VistaDashboard.tsx` como texto y fijaba que el
+ * total y los segmentos del embudo salieran de `totalDelEmbudo`/`ordenDelEmbudo` y
+ * no de iterar `ETAPAS`. Desde el 10-sep-2026 el Dashboard ya NO dibuja el embudo
+ * —es trabajo y vive en el Pipeline—, así que ese consumidor no existe. Lo que
+ * sigue valiendo es lo de abajo: que el front sepa dibujar toda etapa que el server
+ * puede devolver, para el día que otra pantalla vuelva a dibujarlas.
  */
-function fuenteDelDashboard(): string {
-  return fuente('features/dashboard/VistaDashboard.tsx');
-}
-
-describe('VistaDashboard.tsx llama a las funciones que no pierden claves, no a ETAPAS a mano', () => {
-  it('🔴 el total NO se calcula iterando ETAPAS — eso es el bug original', () => {
-    const src = fuenteDelDashboard();
-    expect(src.includes('totalDelEmbudo'), 'VistaDashboard.tsx ya no usa totalDelEmbudo').toBe(true);
-    expect(
-      /ETAPAS\.reduce/.test(src),
-      'VistaDashboard.tsx volvió a sumar el embudo con `ETAPAS.reduce` — eso es exactamente el bug de #329',
-    ).toBe(false);
-  });
-
-  it('los segmentos y la leyenda salen de ordenDelEmbudo, no de un ETAPAS.map', () => {
-    const src = fuenteDelDashboard();
-    expect(src.includes('ordenDelEmbudo'), 'VistaDashboard.tsx ya no usa ordenDelEmbudo').toBe(true);
-    expect(
-      /ETAPAS\.map/.test(src),
-      'VistaDashboard.tsx volvió a dibujar el embudo con `ETAPAS.map` — sin_respuesta quedaría afuera del dibujo',
-    ).toBe(false);
-  });
-});
 
 describe('toda etapa que el seam del Dashboard puede devolver, el front la puede dibujar', () => {
   it('sin_respuesta + las de ventas siguen siendo exactamente lo que el server puede derivar', () => {

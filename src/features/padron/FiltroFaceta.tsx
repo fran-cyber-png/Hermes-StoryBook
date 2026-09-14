@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ListFilter, Search, X } from 'lucide-react';
 import type { OpcionFaceta } from '../../dominio/segmentosPadron';
+import { cifra } from '../../lib/formato';
 
 /**
  * El mismo `TOPE_OPCIONES` que `consultarFacetas` (server) — no se importa
@@ -164,7 +165,7 @@ export function FiltroFaceta({
                     <span className="min-w-0 flex-1 truncate text-foreground">{o.valor}</span>
                     {/* El número que decide. Es el mismo que el filtro devuelve. */}
                     <span className="shrink-0 tabular-nums text-muted-foreground">
-                      {o.contactos.toLocaleString('es')}
+                      {cifra(o.contactos)}
                     </span>
                   </button>
                 );

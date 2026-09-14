@@ -28,13 +28,12 @@ export function BotonFavorito({
       aria-pressed={favorito}
       title={favorito ? 'Quitar de favoritos' : 'Marcar como favorito'}
       className={
-        'shrink-0 rounded-md transition-colors hover:bg-muted ' + (compacto ? 'p-0.5' : 'p-1')
+        // 🔴 El compacto pasó de p-0.5 a p-1.5 (pedido del 01-sep-2026: el
+        // blanco de clic de la tabla era demasiado chico para apuntarle bien).
+        'shrink-0 rounded-md transition-colors hover:bg-muted ' + (compacto ? 'p-1.5' : 'p-1')
       }
     >
-      <Star
-        size={compacto ? 13 : 15}
-        className={favorito ? 'fill-warning text-warning' : 'text-muted-foreground'}
-      />
+      <Star size={15} className={favorito ? 'fill-warning text-warning' : 'text-muted-foreground'} />
     </button>
   );
 }

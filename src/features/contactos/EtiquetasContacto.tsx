@@ -30,28 +30,61 @@ import {
 
 /**
  * LAS ETIQUETAS DE MUCHOS CONTACTOS A LA VEZ — para la columna de la tabla y
- * el filtro. `/api/gestiones/etiquetas?claves=` ya acepta varias separadas
- * por coma (lo usa `dashboard.ts` del lado del server); acá se pide UNA vez
- * por toda la lista visible, no una por fila.
+ * el filtro. Se pide UNA vez por toda la lista FILTRADA (no solo la página
+ * visible: el filtro "Etiquetas" necesita saber la de cada contacto que
+ * matchea los demás filtros antes de paginar), en vez de una por fila.
+ *
+ * 🔴 **Va por `POST /api/gestiones/etiquetas/lote`, NUNCA por el `GET
+ * ?claves=` de arriba** (3-sep-2026). El padrón real de una campaña tiene
+ * miles de contactos: la URL de un GET con esas claves separadas por coma
+ * superaba el límite de campo de cabecera de HTTP/2 (nginx), que corta el
+ * STREAM a nivel de protocolo en vez de contestar un 414 legible — y como el
+ * navegador multiplexa varios pedidos en la misma conexión HTTP/2, se
+ * llevaba puestos otros pedidos en vuelo (`/api/contactos/registrados`,
+ * `/api/stream`). Eso era, en producción, "No se pudieron traer los
+ * contactos". El cuerpo de un POST no tiene ese techo.
+ *
+ * ⚠️ **Ordenadas alfabéticamente acá, no en el server.** `etiquetasPorClave`
+ * (`server/src/gestiones/bitacoraComercial.ts`) no lleva `ORDER BY`: sin este
+ * `.sort()` el orden dependía del orden físico de la tabla, así que la misma
+ * fila podía mostrar las etiquetas en un orden distinto entre una carga y la
+ * siguiente — la columna se veía "desordenada".
  */
 export function useEtiquetasDeVarios(claves: readonly string[]) {
   const clave = [...claves].sort().join(',');
   return useQuery({
     queryKey: ['etiquetas', 'lote', clave],
     queryFn: () =>
-      api<{ etiquetas: Record<string, string[]> }>(`/api/gestiones/etiquetas?claves=${encodeURIComponent(clave)}`),
-    select: (d) => d.etiquetas,
+      api<{ etiquetas: Record<string, string[]> }>('/api/gestiones/etiquetas/lote', {
+        method: 'POST',
+        body: JSON.stringify({ claves: [...claves] }),
+      }),
+    select: (d) =>
+      Object.fromEntries(
+        Object.entries(d.etiquetas).map(([k, v]) => [k, [...v].sort((a, b) => a.localeCompare(b, 'es'))]),
+      ),
     enabled: claves.length > 0,
   });
 }
 
-/** Asignar/quitar, con la MISMA invalidación siempre — la fila, la tarjeta y el panel leen del mismo caché. */
+/**
+ * Asignar/quitar, con la MISMA invalidación siempre — la fila, la tarjeta y el panel leen del mismo caché.
+ *
+ * 🔴 **NO invalida `contactos-registrados`** (3-sep-2026): ese endpoint no
+ * devuelve ni un campo de etiquetas (`ContactoRegistrado` no las tiene), así
+ * que invalidarlo acá no traía ningún dato nuevo — solo forzaba un refetch de
+ * `/api/contactos/registrados`, que no lleva `LIMIT` y trae toda la historia
+ * de conversaciones de las líneas de la vendedora. Ese refetch + el
+ * recálculo en cascada de los 7 `useMemo` de `VistaContactosCampana` sobre el
+ * padrón entero es lo que congelaba la pantalla al tocar CUALQUIER píldora
+ * de etiqueta, que es el gesto más común de la vista. Candado:
+ * `EtiquetasContacto.test.tsx`.
+ */
 export function useEtiquetasMutaciones(clave: string) {
   const qc = useQueryClient();
   const invalidar = () => {
     void qc.invalidateQueries({ queryKey: ['etiquetas', clave] });
     void qc.invalidateQueries({ queryKey: ['etiquetas', 'lote'] });
-    void qc.invalidateQueries({ queryKey: ['contactos-registrados'] });
   };
   const asignar = useMutation({
     mutationFn: (etiqueta: string) =>
@@ -75,11 +108,20 @@ export function BotonAsignarEtiqueta({
   clave,
   asignadas,
   compacto = false,
+  abrirALaIzquierda = false,
 }: {
   clave: string;
   /** Lo ya asignado, para no ofrecerlo de nuevo — la trae quien llama (evita repetir el fetch). */
   asignadas: readonly string[];
   compacto?: boolean;
+  /**
+   * La fila de la tabla y la tarjeta tienen aire a la derecha: el popover abre
+   * hacia allá (pedido del 1-sep-2026). La ficha NO — es un panel fijo pegado
+   * al borde derecho de la pantalla (`PanelContacto`, `w-[25rem]`), así que el
+   * mismo popover ahí se salía del viewport. Quien vive pegado a ese borde
+   * pasa esto en `true` para abrir hacia la izquierda, donde sí hay espacio.
+   */
+  abrirALaIzquierda?: boolean;
 }) {
   const { data: categorias = [] } = useCategorias();
   const { data: puedeAdministrar = false } = usePuedeAdministrarCategorias();
@@ -120,20 +162,22 @@ export function BotonAsignarEtiqueta({
         aria-label="Agregar etiqueta"
         title="Agregar etiqueta"
         className={
+          // 🔴 El compacto pasó de p-0.5 a p-1.5 (pedido del 01-sep-2026: el
+          // blanco de clic de la tabla era demasiado chico para apuntarle bien).
           'flex items-center gap-1 rounded-full border border-dashed transition-colors ' +
-          (compacto ? 'p-0.5' : 'px-2 py-0.5 text-[11px] font-semibold') +
+          (compacto ? 'p-1.5' : 'px-2 py-0.5 text-[11px] font-semibold') +
           ' ' +
           (abierto
             ? 'border-primary text-foreground'
             : 'border-border text-muted-foreground hover:border-primary hover:text-foreground')
         }
       >
-        <Plus size={compacto ? 10 : 11} /> {!compacto && 'Agregar'}
+        <Plus size={compacto ? 13 : 11} /> {!compacto && 'Agregar'}
       </button>
       {abierto && (
         <>
           <span {...propsOverlay} />
-          <div className="absolute right-0 top-6 z-30 w-56 rounded-xl bg-card p-2 shadow-panel">
+          <div className={'absolute top-6 z-30 w-56 rounded-xl bg-card p-2 shadow-panel ' + (abrirALaIzquierda ? 'right-0' : 'left-0')}>
             {disponibles.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1">
                 {disponibles.map((c) => {
@@ -221,52 +265,77 @@ export function BotonAsignarEtiqueta({
   );
 }
 
+/**
+ * LA PÍLDORA DE UNA ETIQUETA YA ASIGNADA, con su quitar — MISMO look en el
+ * panel de la ficha, la fila de la tabla y la tarjeta (pedido del 1-sep-2026:
+ * quitar una etiqueta pedía abrir la ficha, pasar el mouse por encima de la
+ * píldora para que apareciera la «X» — oculta a `opacity-40` — y recién ahí
+ * hacer clic. Acá la «X» queda SIEMPRE visible, y además se puede quitar sin
+ * abrir la ficha, desde donde ya se puede asignar.
+ */
+export function PildoraEtiqueta({
+  clave,
+  etiqueta,
+  color,
+  compacto = false,
+}: {
+  clave: string;
+  etiqueta: string;
+  color: ColorCategoria | null;
+  compacto?: boolean;
+}) {
+  const { quitar } = useEtiquetasMutaciones(clave);
+  return (
+    <span
+      className={
+        'inline-flex items-center gap-1 rounded-full border bg-card font-semibold ' +
+        (compacto ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-[11px]') +
+        ' ' +
+        claseBorde(color) +
+        (color ? ' ' + CLASE_TEXTO[color] : ' text-muted-foreground')
+      }
+    >
+      {color && <span className={'h-1.5 w-1.5 rounded-full ' + CLASE_FONDO[color]} />}
+      {etiqueta}
+      <button
+        type="button"
+        aria-label={`Quitar ${etiqueta}`}
+        onClick={(e) => {
+          e.stopPropagation(); // la fila/tarjeta abre la ficha al clic — esto no.
+          quitar.mutate(etiqueta);
+        }}
+        className="text-current/60 transition-colors hover:text-destructive focus-visible:text-destructive"
+      >
+        <X size={compacto ? 8 : 9} />
+      </button>
+    </span>
+  );
+}
+
 /** La tarjeta de etiquetas del panel: el mismo botón de arriba + la lista, con quitar. */
 export function EtiquetasContacto({ clave }: { clave: string }) {
   const { data: lista = [] } = useQuery({
     queryKey: ['etiquetas', clave],
     queryFn: () =>
       api<{ etiquetas: Record<string, string[]> }>(`/api/gestiones/etiquetas?claves=${encodeURIComponent(clave)}`),
-    select: (d) => d.etiquetas[clave] ?? [],
+    select: (d) => [...(d.etiquetas[clave] ?? [])].sort((a, b) => a.localeCompare(b, 'es')),
   });
   const { data: categorias = [] } = useCategorias();
-  const { quitar } = useEtiquetasMutaciones(clave);
 
   return (
     <section className="rounded-xl bg-card p-3 shadow-panel">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Etiquetas</h3>
-        <BotonAsignarEtiqueta clave={clave} asignadas={lista} />
+        <BotonAsignarEtiqueta clave={clave} asignadas={lista} abrirALaIzquierda />
       </div>
 
       {lista.length === 0 ? (
         <p className="text-xs text-muted-foreground">Sin etiquetas todavía.</p>
       ) : (
         <div className="flex flex-wrap gap-1">
-          {lista.map((etq) => {
-            const color = resolverColor(etq, categorias);
-            return (
-              <span
-                key={etq}
-                className={
-                  'group/tag inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[11px] font-semibold ' +
-                  claseBorde(color) +
-                  (color ? ' ' + CLASE_TEXTO[color] : ' text-muted-foreground')
-                }
-              >
-                {color && <span className={'h-1.5 w-1.5 rounded-full ' + CLASE_FONDO[color]} />}
-                {etq}
-                <button
-                  type="button"
-                  aria-label={`Quitar ${etq}`}
-                  onClick={() => quitar.mutate(etq)}
-                  className="opacity-40 transition-opacity focus-visible:opacity-100 group-hover/tag:opacity-100"
-                >
-                  <X size={9} />
-                </button>
-              </span>
-            );
-          })}
+          {lista.map((etq) => (
+            <PildoraEtiqueta key={etq} clave={clave} etiqueta={etq} color={resolverColor(etq, categorias)} />
+          ))}
         </div>
       )}
     </section>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Check,
@@ -355,10 +355,18 @@ export function RegistrarEvento({
   clave,
   senalAbrir = 0,
   esDeCampana = false,
+  rotuloBoton = 'Registrar algo del contacto',
 }: {
   clave: string;
   /** Señal externa (contador): al cambiar, abre el popover. La usa el atajo `N`. */
   senalAbrir?: number;
+  /**
+   * #887 — EL MISMO CONTROL, DOS LUGARES, UN SOLO RÓTULO. Con «Registrar
+   * actividad» en Resumen y «Registrar algo del contacto» acá abajo, la
+   * vendedora podía leer las dos cosas como controles distintos. El default
+   * es el texto de siempre — sólo cambia para quien pide otro.
+   */
+  rotuloBoton?: string;
   /**
    * De qué módulo es quien mira — decide QUÉ TIPOS SE OFRECEN, nunca cuáles se
    * pueden leer. Un evento ya registrado con el vocabulario del otro módulo se
@@ -389,13 +397,32 @@ export function RegistrarEvento({
   const { registrar } = useMutacionesEventos(clave);
   const { propsOverlay } = usePopover(abierto, () => setAbierto(false), { z: 'z-20' });
 
-  // La señal se consume en el render, sin `useEffect`: un efecto para esto
-  // agrega un frame de retraso justo en el gesto que se quiere instantáneo.
-  if (senalAbrir !== visto) {
-    setVisto(senalAbrir);
-    setListo(null);
-    setAbierto(true);
-  }
+  /**
+   * 🔴 `useLayoutEffect`, NO EL PATRÓN «SE CONSUME EN EL RENDER» QUE HABÍA
+   * ACÁ (hasta 09-sep-2026: `if (senalAbrir !== visto) { ...; setAbierto(true) }`
+   * suelto en el cuerpo de la función, sin efecto).
+   *
+   * Esa forma —llamar a `setState` derecho en el render, para que abrir sea
+   * instantáneo— es un patrón que React documenta y permite, pero en este
+   * componente resultaba en una carrera de verdad: reproducido en local
+   * (Vitest + jsdom, 1 de cada 5 a 7 corridas) haciendo clic en «Registrar
+   * actividad» desde Resumen —el gesto sube DOS señales del padre en un
+   * mismo evento (cambia de sección Y el contador `senalAbrir`)—, el estado
+   * llegaba a `abierto: true` en un render y a `abierto: false` en el
+   * siguiente, sin que ningún otro `setAbierto` de este archivo se hubiera
+   * llamado (instrumentado uno por uno). Cambiarlo a `useLayoutEffect` —que
+   * corre sincrónico después de la mutación del DOM y ANTES de que el
+   * navegador pinte, así que no hay el frame de parpadeo que sí tendría un
+   * `useEffect` normal— lo dejó estable: 25/25 corridas en verde, cero fallas.
+   */
+  useLayoutEffect(() => {
+    if (senalAbrir !== visto) {
+      setVisto(senalAbrir);
+      setListo(null);
+      setAbierto(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [senalAbrir]);
 
   // Cambió la conversación: el popover no puede sobrevivir abierto apuntando a
   // la de antes (mismo cuidado que `MenuHerramientas`, que no se re-keyea).
@@ -463,7 +490,7 @@ export function RegistrarEvento({
         }
       >
         {listo ? <Check size={13} className="text-success" /> : <Plus size={13} />}
-        {listo ? `Registrado · ${listo}` : 'Registrar algo del contacto'}
+        {listo ? `Registrado · ${listo}` : rotuloBoton}
       </button>
 
       {abierto && (

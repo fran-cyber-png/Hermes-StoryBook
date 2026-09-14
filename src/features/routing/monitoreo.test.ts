@@ -51,7 +51,8 @@ describe('el resumen', () => {
 });
 
 describe('el motivo en criollo', () => {
-  test('los cinco niveles de la cascada tienen su nombre', () => {
+  test('los seis niveles de la cascada tienen su nombre', () => {
+    expect(explicarMotivo('anuncio')).toBe('por el anuncio');
     expect(explicarMotivo('campana')).toBe('por la campaña');
     expect(explicarMotivo('producto')).toBe('por el producto');
     expect(explicarMotivo('division')).toBe('por la división');

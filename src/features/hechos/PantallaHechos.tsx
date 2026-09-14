@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, Eye, EyeOff, Lightbulb, Plus, RotateCcw, ServerCrash, X } from 'lucide-react';
+import {
+  ChevronLeft,
+  Eye,
+  EyeOff,
+  ImagePlus,
+  Lightbulb,
+  Loader2,
+  Plus,
+  RotateCcw,
+  ServerCrash,
+  X,
+} from 'lucide-react';
 import { ErrorApi } from '../../lib/datos/cliente';
 import { useEscape } from '../../lib/teclado/useEscape';
 import { sectionLabel } from '../../lib/styles';
@@ -7,10 +18,15 @@ import { MOMENTOS, PORQUE_DEL_MOMENTO, type MomentoDeVenta } from './hechos';
 import {
   claveSugerida,
   enCuantosMomentosSeVe,
+  subirImagenDeHecho,
   useCatalogoHechos,
   useMutacionesHechos,
   type HechoDelCatalogo,
+  type ImagenDeHecho,
 } from './catalogo';
+import { moduloDelToken } from '../auth/sesion';
+import { tokenGuardado } from '../../lib/datos/token';
+import { agruparEnProductos, useCatalogoProductos } from '../productos/productos';
 
 /**
  * EL CATÁLOGO DE DATOS RECOMENDADOS — la pantalla que nunca existió.
@@ -187,6 +203,75 @@ function QueVeLaVendedora({
   );
 }
 
+/**
+ * ¿DE QUÉ PRODUCTO HABLA ESTE DATO? — la llave con la que la vista Productos lo
+ * muestra (ADR 0106). Opcional: vacío = vale para todos los productos.
+ *
+ * Ofrece los productos del catálogo vivo de Cerberus por su NOMBRE, pero lo que se
+ * guarda es la FAMILIA del SKU (`DIPICOT`): un nombre escrito a mano no matchearía
+ * ningún producto, y no daría error. La familia va al lado del nombre porque hay
+ * homónimos de verdad (los tres «Bicameral» tienen SKU genérico).
+ *
+ * ⚠️ **Para la campaña no existe, y no pregunta**: `/api/productos` es superficie de
+ * `ventas`, y el módulo se lee del token para no pedir un 403 en cada apertura
+ * (ADR 0063: apagar la CONSULTA, no sólo el dibujo). Con Cerberus caído se ofrece
+ * sólo lo que ya estaba elegido, y se dice.
+ */
+function SelectorDeProducto({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (familia: string) => void;
+  disabled: boolean;
+}) {
+  const deCampana = moduloDelToken(tokenGuardado() ?? '').esDeCampana === true;
+  const { data: catalogo, isError } = useCatalogoProductos(!deCampana);
+  if (deCampana) return null;
+
+  const productos = catalogo
+    ? agruparEnProductos(catalogo).filter((p) => p.aLaVenta.length > 0 || p.familia === value)
+    : [];
+  const negocios = [...new Set(productos.map((p) => p.negocio))].sort((a, b) => a.localeCompare(b, 'es'));
+  const conocido = productos.some((p) => p.familia === value);
+
+  return (
+    <label className="mt-4 block">
+      <span className="text-xs font-medium text-foreground">De qué producto habla</span>
+      <span className="ml-1.5 text-[11px] text-muted-foreground">
+        opcional — un precio sin producto no aparece en Productos
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="mt-1 h-9 w-full rounded-lg border border-input bg-card px-3 text-sm outline-none focus:border-ring disabled:opacity-60"
+      >
+        <option value="">Ninguno en particular (vale para todos)</option>
+        {value && !conocido && <option value={value}>{value}</option>}
+        {negocios.map((negocio) => (
+          <optgroup key={negocio} label={negocio}>
+            {productos
+              .filter((p) => p.negocio === negocio)
+              .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+              .map((p) => (
+                <option key={p.familia} value={p.familia}>
+                  {p.nombre} · {p.familia}
+                </option>
+              ))}
+          </optgroup>
+        ))}
+      </select>
+      {isError && (
+        <span className="mt-1 block text-[11px] text-muted-foreground">
+          No se pudo leer el catálogo de Cerberus: se ofrece solo lo que ya estaba elegido.
+        </span>
+      )}
+    </label>
+  );
+}
+
 /** El formulario de un dato. `clave` se propone al crear y después se congela. */
 function Editor({
   hecho,
@@ -210,12 +295,33 @@ function Editor({
 
   const [rotulo, setRotulo] = useState(hecho?.rotulo ?? '');
   const [texto, setTexto] = useState(hecho?.texto ?? '');
+  const [imagen, setImagen] = useState<ImagenDeHecho | null>(hecho?.imagen ?? null);
+  const [subiendoImagen, setSubiendoImagen] = useState(false);
+  const [errorImagen, setErrorImagen] = useState<string | null>(null);
   const [orden, setOrden] = useState(String(hecho?.orden ?? 100));
   const [momentos, setMomentos] = useState<MomentoDeVenta[]>(hecho?.momentos ?? []);
+  const [familia, setFamilia] = useState(hecho?.familia ?? '');
   const [error, setError] = useState<string | null>(null);
 
   const clave = esNuevo ? claveSugerida(rotulo) : hecho.clave;
   const trabajando = crear.isPending || editar.isPending || apagar.isPending || prender.isPending;
+
+  async function adjuntarImagen(archivo: File | undefined) {
+    if (!archivo) return;
+    if (!archivo.type.startsWith('image/')) {
+      setErrorImagen('Eso no es una imagen: va jpg, png o webp.');
+      return;
+    }
+    setErrorImagen(null);
+    setSubiendoImagen(true);
+    try {
+      setImagen(await subirImagenDeHecho(archivo));
+    } catch {
+      setErrorImagen('No se pudo subir la imagen. Prueba de nuevo.');
+    } finally {
+      setSubiendoImagen(false);
+    }
+  }
 
   // El server valida lo mismo (`routes/hechos.ts`); acá se dice ANTES de que
   // vuelva un 400, que es la diferencia entre corregir y adivinar.
@@ -242,7 +348,14 @@ function Editor({
 
   async function guardar() {
     setError(null);
-    const campos = { rotulo: rotulo.trim(), texto: texto.trim(), momentos, orden: Number(orden) };
+    const campos = {
+      rotulo: rotulo.trim(),
+      texto: texto.trim(),
+      imagen,
+      momentos,
+      orden: Number(orden),
+      familia: familia || null,
+    };
     try {
       if (esNuevo || deFabrica) await crear.mutateAsync({ clave, ...campos });
       else await editar.mutateAsync({ clave, ...campos });
@@ -277,7 +390,7 @@ function Editor({
         />
       </label>
 
-      <label className="mt-3 block">
+      <label className="mt-4 block">
         <span className="text-xs font-medium text-foreground">La frase</span>
         <span className="ml-1.5 text-[11px] text-muted-foreground">
           sale tal cual a la caja, en tu voz
@@ -293,7 +406,53 @@ function Editor({
         />
       </label>
 
-      <fieldset className="mt-3">
+      <SelectorDeProducto value={familia} onChange={setFamilia} disabled={!editable} />
+
+      <div className="mt-4">
+        <span className="text-xs font-medium text-foreground">Imagen</span>
+        <span className="ml-1.5 text-[11px] text-muted-foreground">
+          opcional — para que la respuesta rápida también pueda mandar una imagen
+        </span>
+        <div className="mt-1.5 flex items-center gap-1.5">
+          {imagen ? (
+            <span className="inline-flex min-w-0 items-center gap-1.5 rounded-lg bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground">
+              <span className="truncate">{imagen.nombre ?? imagen.archivo}</span>
+              <button
+                type="button"
+                onClick={() => setImagen(null)}
+                disabled={!editable}
+                aria-label="Quitar la imagen"
+                className="shrink-0 disabled:opacity-60 hover:text-destructive"
+              >
+                <X size={12} />
+              </button>
+            </span>
+          ) : (
+            <label
+              className={
+                'inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors ' +
+                (editable ? 'cursor-pointer hover:bg-muted hover:text-foreground' : 'cursor-not-allowed opacity-60')
+              }
+            >
+              {subiendoImagen ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+              {subiendoImagen ? 'Subiendo…' : 'Adjuntar una imagen'}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={!editable || subiendoImagen}
+                onChange={(e) => {
+                  void adjuntarImagen(e.target.files?.[0]);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+          )}
+        </div>
+        {errorImagen && <p className="mt-1.5 text-[11px] text-destructive">{errorImagen}</p>}
+      </div>
+
+      <fieldset className="mt-4">
         <legend className="text-xs font-medium text-foreground">¿Cuándo corresponde?</legend>
         <p className="text-[11px] text-muted-foreground">
           Sin ninguno marcado vale para todos los momentos.
@@ -324,7 +483,7 @@ function Editor({
         </div>
       </fieldset>
 
-      <label className="mt-3 block max-w-[14rem]">
+      <label className="mt-4 block max-w-[14rem]">
         <span className="text-xs font-medium text-foreground">Orden</span>
         <span className="ml-1.5 text-[11px] text-muted-foreground">más bajo gana el lugar</span>
         <input
@@ -343,11 +502,11 @@ function Editor({
       )}
       {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
 
-      <div className="mt-5 flex items-center gap-2">
+      <div className="mt-4 flex items-center gap-2">
         <button
           type="button"
           onClick={guardar}
-          disabled={!editable || Boolean(motivoParaNoGuardar) || trabajando}
+          disabled={!editable || Boolean(motivoParaNoGuardar) || trabajando || subiendoImagen}
           className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary-hover disabled:opacity-50"
         >
           {trabajando ? 'Guardando…' : esNuevo ? 'Agregar el dato' : 'Guardar'}

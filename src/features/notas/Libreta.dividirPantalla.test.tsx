@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { escribir, esperarA, montar, reposar, type Montado } from '../../pruebas/dom';
+import { esperarA, montar, reposar, type Montado } from '../../pruebas/dom';
 import { Libreta } from './Libreta';
-import { ESPERA_AUTOGUARDADO_MS } from './useAutoguardado';
 
 /**
  * DIVIDIR PANTALLA (17-ago-2026) — el cableado que ningún test puro puede ver:
@@ -28,8 +27,7 @@ function pagina(id: number, texto: string, paginaDivididaId: number | null = nul
     origen: 'nota' as const,
     espacioId: null,
     paginaDivididaId,
-    tipo: 'texto' as 'texto' | 'diagrama',
-    diagrama: null as { nodes: unknown[]; edges: unknown[] } | null,
+    tipo: 'texto' as 'texto' | 'archivo',
   };
 }
 
@@ -77,12 +75,11 @@ beforeEach(() => {
           ...store[id],
           ...(cuerpo.doc !== undefined ? { doc: cuerpo.doc, texto: 'editada' } : {}),
           // `texto` SOLO (sin `doc`) es el camino de `TituloEditable` — nombrar
-          // un diagrama. Con `doc` presente, el texto lo deriva el server del
+          // un documento. Con `doc` presente, el texto lo deriva el server del
           // documento (rama de arriba) y el que mande el llamador se descarta,
           // como en el server de verdad (`prepararContenido`).
           ...(cuerpo.doc === undefined && cuerpo.texto !== undefined ? { texto: cuerpo.texto } : {}),
           ...(cuerpo.fijada !== undefined ? { fijada: cuerpo.fijada } : {}),
-          ...(cuerpo.diagrama !== undefined ? { diagrama: cuerpo.diagrama } : {}),
         };
         return enviar({ ok: true, nota: store[id] });
       }
@@ -100,10 +97,7 @@ beforeEach(() => {
 
       if (u.endsWith('/api/notas') && metodo === 'POST') {
         const id = siguienteId++;
-        const nueva =
-          cuerpo.tipo === 'diagrama'
-            ? { ...pagina(id, 'Diagrama de flujo'), tipo: 'diagrama' as const, diagrama: cuerpo.diagrama }
-            : pagina(id, cuerpo.texto ?? '');
+        const nueva = pagina(id, cuerpo.texto ?? '');
         store[id] = nueva;
         return enviar({ ok: true, nota: nueva });
       }
@@ -135,13 +129,11 @@ function botonEnPanelDividido(texto: string): HTMLElement | undefined {
   return [...panel.querySelectorAll('button')].find((b) => b.textContent?.includes(texto));
 }
 
-/** Los botones de la barra de React Flow son solo ícono: se buscan por `title`. */
-function botonPorTitulo(texto: string): HTMLElement | undefined {
-  return [...document.querySelectorAll('button')].find((b) => b.getAttribute('title')?.includes(texto));
-}
-
 test('«Dividir pantalla» abre el selector con las otras páginas, sin ella misma', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
 
   botonQueDice('Página A')?.click();
@@ -158,6 +150,9 @@ test('«Dividir pantalla» abre el selector con las otras páginas, sin ella mis
 
 test('elegir una página existente la divide, y el editor de la derecha se monta', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
   botonQueDice('Página A')?.click();
   await esperarA(() => Boolean(botonQueDice('Dividir pantalla')), 'se abrió la página');
@@ -180,6 +175,9 @@ test('un segundo toque sobre «Pantalla dividida», TODAVÍA ELIGIENDO, vuelve a
   // `nota.paginaDivididaId`, que sigue null mientras se elige) y solo la ✕ de
   // adentro del panel cerraba.
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
   botonQueDice('Página A')?.click();
   await esperarA(() => Boolean(botonQueDice('Dividir pantalla')), 'se abrió la página');
@@ -200,6 +198,9 @@ test('el botón corta la división — «Pantalla dividida» vuelve a «Dividir 
   // Arranca YA dividida, como si viniera de una sesión anterior.
   store[1] = { ...store[1], paginaDivididaId: 2 };
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
 
   botonQueDice('Página A')?.click();
@@ -222,6 +223,9 @@ test('🔴 la ✕ del panel corta una división YA persistida — antes se veía
   // test del botón, pero esta vez se cierra por la ✕ de ADENTRO del panel.
   store[1] = { ...store[1], paginaDivididaId: 2 };
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
 
   botonQueDice('Página A')?.click();
@@ -238,6 +242,9 @@ test('🔴 la ✕ del panel corta una división YA persistida — antes se veía
 
 test('«Página nueva» monta un editor en blanco al lado, sin pasar por el picker', async () => {
   montado = montar(<Libreta vendedoraId="luz" />);
+  // El panel de "Páginas" arranca cerrado (03-sep-2026): hay que abrirlo para
+  // que la lista aparezca en el DOM.
+  botonQueDice('Todas las páginas')?.click();
   await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
   botonQueDice('Página A')?.click();
   await esperarA(() => Boolean(botonQueDice('Dividir pantalla')), 'se abrió la página');
@@ -250,101 +257,4 @@ test('«Página nueva» monta un editor en blanco al lado, sin pasar por el pick
   // El picker se fue: ahora hay un editor en blanco al lado (segundo `data-libreta-editor`).
   await esperarA(() => document.querySelectorAll('[data-libreta-editor]').length === 2, 'se montó el editor en blanco');
   expect(document.body.textContent).not.toContain('Buscar una página');
-});
-
-/**
- * NUEVO DIAGRAMA (17-ago-2026) — el botón a la derecha de «Página nueva».
- */
-
-test('«Nuevo Diagrama» está a la derecha de «Página nueva», y monta el lienzo de React Flow', async () => {
-  montado = montar(<Libreta vendedoraId="luz" />);
-  await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
-  botonQueDice('Página A')?.click();
-  await esperarA(() => Boolean(botonQueDice('Dividir pantalla')), 'se abrió la página');
-  botonQueDice('Dividir pantalla')?.click();
-  await esperarA(() => Boolean(botonEnPanelDividido('Nuevo Diagrama')), 'apareció el selector');
-
-  // Las dos formas de arrancar en blanco, una al lado de la otra.
-  expect(botonEnPanelDividido('Página nueva')).toBeTruthy();
-  expect(botonEnPanelDividido('Nuevo Diagrama')).toBeTruthy();
-
-  botonEnPanelDividido('Nuevo Diagrama')?.click();
-  await esperarA(() => Boolean(botonPorTitulo('Nodo de inicio')), 'se montó el lienzo con su barra');
-
-  // El picker se fue: no queda ni el buscador ni «Página nueva».
-  expect(document.body.textContent).not.toContain('Buscar una página');
-});
-
-test('crear un diagrama nuevo lo divide con la izquierda — atado a la nota de origen', async () => {
-  montado = montar(<Libreta vendedoraId="luz" />);
-  await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
-  botonQueDice('Página A')?.click();
-  await esperarA(() => Boolean(botonQueDice('Dividir pantalla')), 'se abrió la página');
-  botonQueDice('Dividir pantalla')?.click();
-  await esperarA(() => Boolean(botonEnPanelDividido('Nuevo Diagrama')), 'apareció el selector');
-
-  botonEnPanelDividido('Nuevo Diagrama')?.click();
-  await esperarA(() => Boolean(botonPorTitulo('Nodo — un paso')), 'se montó el lienzo');
-
-  // Agregar un nodo es la primera edición: dispara crear+dividir, igual que
-  // la primera tecla en una página de texto en blanco — pero con el
-  // DEBOUNCE real de 800 ms de por medio (`reposar()` no lo adelanta, usa
-  // timers reales), así que acá sí hace falta esperarlo de verdad.
-  botonPorTitulo('Nodo — un paso')?.click();
-  await new Promise((listo) => setTimeout(listo, ESPERA_AUTOGUARDADO_MS + 200));
-  await esperarA(() => Boolean(botonQueDice('Pantalla dividida')), 'se creó y se ató a la izquierda');
-
-  const idNuevo = store[1].paginaDivididaId;
-  expect(idNuevo).not.toBeNull();
-  expect(idNuevo).not.toBe(2); // no es la página B: es una fila nueva
-  const diagrama = store[idNuevo!];
-  expect(diagrama.tipo).toBe('diagrama');
-  expect(diagrama.diagrama?.nodes).toHaveLength(1);
-});
-
-test('reabrir una página ya dividida con un diagrama lo muestra directo, sin pasar por el picker', async () => {
-  // Sembrado como si viniera de una sesión anterior: A dividida con un diagrama.
-  store[1] = { ...store[1], paginaDivididaId: 9 };
-  store[9] = {
-    ...pagina(9, 'Diagrama de flujo'),
-    tipo: 'diagrama',
-    diagrama: { nodes: [{ id: '1', type: 'inicio', position: { x: 0, y: 0 }, data: { label: 'Arranca' } }], edges: [] },
-  };
-
-  montado = montar(<Libreta vendedoraId="luz" />);
-  await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
-
-  botonQueDice('Página A')?.click();
-  await esperarA(() => Boolean(botonQueDice('Pantalla dividida')), 'arrancó dividida');
-
-  // El diagrama persistido se ve con su nodo, y la barra de herramientas está.
-  await esperarA(() => Boolean(botonPorTitulo('Nodo de inicio')), 'se montó el lienzo del diagrama');
-  expect(document.body.textContent).toContain('Arranca');
-});
-
-test('nombrar un diagrama, desde el panel de la derecha, le cambia el título', async () => {
-  // Un diagrama no tiene «primera línea de texto» de la que sacar un título
-  // solo (React Flow tiene nodos, no prosa) — por eso hace falta poder
-  // ponérselo a mano (19-ago-2026).
-  store[1] = { ...store[1], paginaDivididaId: 9 };
-  store[9] = { ...pagina(9, 'Diagrama de flujo'), tipo: 'diagrama', diagrama: { nodes: [], edges: [] } };
-
-  montado = montar(<Libreta vendedoraId="luz" />);
-  await esperarA(() => Boolean(botonQueDice('Página A')), 'llegó la lista');
-  botonQueDice('Página A')?.click();
-  await esperarA(() => Boolean(botonPorTitulo('Nodo de inicio')), 'se montó el lienzo del diagrama');
-
-  const campo = document.querySelector<HTMLInputElement>('[aria-label="Nombra el diagrama"]');
-  expect(campo).toBeTruthy();
-  expect(campo!.value).toBe('Diagrama de flujo');
-
-  // `blur()` sin foco previo no dispara nada — hace falta `focus()` primero
-  // para que jsdom lo cuente como el elemento activo de verdad.
-  campo!.focus();
-  escribir(campo!, 'Embudo de ventas');
-  campo!.blur();
-  await esperarA(() => store[9].texto === 'Embudo de ventas', 'se guardó el nombre nuevo');
-
-  // Y se ve en la propia barra, no solo en el store.
-  await esperarA(() => campo!.value === 'Embudo de ventas', 'el campo refleja lo guardado');
 });

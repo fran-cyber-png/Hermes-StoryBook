@@ -30,13 +30,6 @@ export type DestinoDeGuardado = { tipo: 'nueva' } | { tipo: 'nota'; id: number }
 export interface ContenidoDePagina {
   doc?: unknown;
   anotaciones?: unknown;
-  /**
-   * EL DIAGRAMA de una página `tipo = 'diagrama'`. Va en el MISMO sobre que
-   * `doc` y `anotaciones` por el mismo motivo que ellos: un guardado que sólo
-   * trae una de las tres no puede pisar las otras dos. Una página es un diagrama
-   * O un documento, nunca las dos, pero las anotaciones cruzan a las dos.
-   */
-  diagrama?: unknown;
 }
 
 /** Lo que el hook necesita del mundo. Inyectado para poder testearlo sin server. */

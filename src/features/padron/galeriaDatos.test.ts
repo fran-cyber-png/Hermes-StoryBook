@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { ETAPA_GRUPOS, NIVEL_GRUPOS } from '../../dominio/segmentosPadron';
-import { FACETAS, TOTAL_PADRON } from './galeriaDatos';
+import { contactosDelGrupo, ETAPA_GRUPOS, NIVEL_GRUPOS } from '../../dominio/segmentosPadron';
+import { FACETAS, SIN_ASIGNAR, TOTAL_PADRON } from './galeriaDatos';
 
 /**
  * EL CANDADO CONTRA LA GALERÍA VIEJA — regla dura #9 del CLAUDE.md, hecha test.
@@ -50,6 +50,20 @@ describe('completitud de FACETAS contra TOTAL_PADRON', () => {
    * motivo que `nivel`, pero por una razón distinta: acá no es NULL, es que
    * la galería nunca pretendió listarlas todas.
    */
+
+  /**
+   * LA CAPTURA DEL 10-SEP — las cuatro cifras que sí salieron de producción
+   * (vía la pantalla del dueño) tienen que seguir diciendo eso. El reparto por
+   * valor es proporcional, así que lo que se fija son las SUMAS de los grupos,
+   * que es lo que la pantalla muestra.
+   */
+  test('sin asignar: las etapas suman los 73.200 y los grupos dan lo de la captura', () => {
+    const porValor = SIN_ASIGNAR.etapa.map(([valor, contactos]) => ({ valor, contactos }));
+    const grupo = (id: string) => contactosDelGrupo(porValor, ETAPA_GRUPOS.find((g) => g.id === id)!);
+    expect(suma(SIN_ASIGNAR.etapa)).toBe(SIN_ASIGNAR.total);
+    expect(grupo('conversacion')).toBe(850);
+    expect(grupo('sin_cerrar')).toBe(5_792);
+  });
 
   for (const [nombre, grupos] of [
     ['ETAPA_GRUPOS', ETAPA_GRUPOS],
