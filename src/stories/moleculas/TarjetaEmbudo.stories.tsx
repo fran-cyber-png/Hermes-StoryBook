@@ -7,15 +7,6 @@ import { crearConversacionMock } from '../fixtures/conversacion';
  * izquierdo de 2px en `border-box` le come ancho al contenido — en Figma se
  * compensó sumando al padding.
  */
-const meta = {
-  title: 'Moléculas/TarjetaEmbudo',
-  component: TarjetaEmbudo,
-  parameters: { layout: 'padded' },
-} satisfies Meta<typeof TarjetaEmbudo>;
-
-export default meta;
-type Story = StoryObj<typeof meta>;
-
 const propsBase = {
   indice: 0,
   onAbrir: () => {},
@@ -26,6 +17,18 @@ const propsBase = {
   cotizando: false,
   columna: 'Te esperan',
 };
+
+const meta = {
+  title: 'Moléculas/TarjetaEmbudo',
+  component: TarjetaEmbudo,
+  parameters: { layout: 'padded' },
+  /** Las historias dibujan con `render` (cada una arma su propia conversación);
+   *  estos args cumplen los obligatorios del tipo y alimentan Controls. */
+  args: { ...propsBase, c: crearConversacionMock() },
+} satisfies Meta<typeof TarjetaEmbudo>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
 
 export const TeEsperan: Story = {
   render: () => <TarjetaEmbudo c={crearConversacionMock()} {...propsBase} />,

@@ -3,11 +3,14 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, userEvent, within } from 'storybook/test';
 import { TituloEditable } from '../../features/notas/TituloEditable';
 
-/** El título in-place de una página o un diagrama de la Libreta: guarda al perder el foco o con Enter, Escape descarta. */
+/** El título in-place de una página de la Libreta: guarda al perder el foco o con Enter, Escape descarta. */
 const meta = {
   title: 'Átomos/TituloEditable',
   component: TituloEditable,
   parameters: { layout: 'centered' },
+  /** Las historias usan `Envoltorio` (necesitan estado propio) y no miran estos
+   *  args; están para cumplir los obligatorios del tipo y alimentar Controls. */
+  args: { valor: 'Estrategia del diplomado', placeholder: 'Sin título', onGuardar: () => {} },
 } satisfies Meta<typeof TituloEditable>;
 
 export default meta;
@@ -27,13 +30,13 @@ export const Vacio: Story = {
 };
 
 export const EditarYGuardar: Story = {
-  render: () => <Envoltorio valorInicial="Diagrama de campaña" placeholder="Sin título" />,
+  render: () => <Envoltorio valorInicial="Notas de la campaña" placeholder="Sin título" />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const campo = canvas.getByRole('textbox');
-    await expect(campo).toHaveValue('Diagrama de campaña');
+    await expect(campo).toHaveValue('Notas de la campaña');
     await userEvent.clear(campo);
-    await userEvent.type(campo, 'Diagrama de reparto{Enter}');
-    await expect(campo).toHaveValue('Diagrama de reparto');
+    await userEvent.type(campo, 'Notas del reparto{Enter}');
+    await expect(campo).toHaveValue('Notas del reparto');
   },
 };

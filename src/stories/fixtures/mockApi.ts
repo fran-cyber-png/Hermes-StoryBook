@@ -24,7 +24,7 @@ export interface RutaMock {
  * efectos del componente disparen su propio `fetch`, así que siempre gana el mock).
  */
 export function mockFetch(rutas: RutaMock[]): void {
-  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  window.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const ruta = rutas.find((r) => url.includes(r.fragmento));
     if (!ruta) {

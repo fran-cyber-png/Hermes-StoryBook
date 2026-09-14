@@ -14,9 +14,10 @@ type Story = StoryObj<typeof meta>;
 export const DosLineas: Story = {
   args: {
     telefono: '51943348051',
+    /** `esMia` se llama `mias` desde que el mapa de asignación lo resuelve el server. */
     lineas: [
-      { numero: '51963139984', etiqueta: 'Ventas Perú', estado: 'conectada', esMia: true },
-      { numero: '51987654321', etiqueta: 'Ventas Meta', estado: 'conectada', esMia: false },
+      { numero: '51963139984', etiqueta: 'Ventas Perú', estado: 'conectada', mias: true },
+      { numero: '51987654321', etiqueta: 'Ventas Meta', estado: 'conectada', mias: false },
     ],
     onElegir: () => {},
     onCerrar: () => {},

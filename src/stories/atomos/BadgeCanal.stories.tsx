@@ -12,6 +12,10 @@ const meta = {
   title: 'Átomos/BadgeCanal',
   component: BadgeCanal,
   parameters: { layout: 'centered' },
+  /** Las historias de galería dibujan su propio `render` y no los miran; están
+   *  para que `StoryObj<typeof meta>` tenga los obligatorios y el panel de
+   *  Controls arranque con algo real. */
+  args: { canal: 'whatsapp', size: 20 },
 } satisfies Meta<typeof BadgeCanal>;
 
 export default meta;

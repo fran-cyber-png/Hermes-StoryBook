@@ -25,5 +25,14 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  /**
+   * Importa de `server/`, que este repo NO tiene: es un recorte solo del
+   * frontend. En el monorepo real ese test cruza la lista de países del front
+   * contra la del server y ahí es donde tiene sentido; acá solo rompe el
+   * typecheck. ⚠️ No es el único candidato: si una sincronización con
+   * hermes/main trae otro test que importe de `server/`, hay que sumarlo acá
+   * (los demás `*.paridad.test.ts` son puros del front y sí compilan).
+   */
+  "exclude": ["src/features/panel/pais.paridad.test.ts"]
 }

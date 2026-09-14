@@ -2,9 +2,10 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { BarraDePestanas } from '../../../features/notas/BarraDePestanas';
 import type { RefPestana } from '../../../features/notas/pestanas';
 
+/** Ya no existe `tipo: 'diagrama'`: el editor de diagramas se sacó del producto. */
 const ABIERTAS: RefPestana[] = [
   { id: 1, espacioId: null, tipo: 'texto' },
-  { id: 2, espacioId: null, tipo: 'diagrama' },
+  { id: 2, espacioId: null, tipo: 'texto' },
   { id: 3, espacioId: 4, tipo: 'archivo' },
 ];
 

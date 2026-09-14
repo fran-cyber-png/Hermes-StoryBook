@@ -12,6 +12,9 @@ const meta = {
   title: 'Moléculas/FilaConversacion',
   component: FilaConversacion,
   parameters: { layout: 'padded' },
+  /** Las historias arman su propio `Envoltorio` (la selección necesita estado);
+   *  estos args cumplen los obligatorios del tipo y alimentan Controls. */
+  args: { c: crearConversacionMock(), seleccionada: false, onAbrir: () => {} },
 } satisfies Meta<typeof FilaConversacion>;
 
 export default meta;
@@ -97,4 +100,47 @@ export const VentanaPorVencer: Story = {
       })}
     />
   ),
+};
+
+/**
+ * El semáforo (`luz`) lo calcula la máquina y viaja en la conversación
+ * (`origen_semaforo: 'maquina'`); `porque` es la razón, que la fila muestra
+ * para que no sea un color sin explicación.
+ */
+export const Semaforo: Story = {
+  name: 'Semáforo en rojo (con su porqué)',
+  render: () => (
+    <Envoltorio
+      c={crearConversacionMock({
+        luz: 'rojo',
+        porque: 'Preguntó precio y nadie contestó en 3 h',
+        origen_semaforo: 'maquina',
+      })}
+    />
+  ),
+};
+
+/**
+ * DE DÓNDE VINO — se captura desde siempre (el `externalAdReply` de WhatsApp) y
+ * hasta este rediseño no se dibujaba en ningún lado.
+ */
+export const DesdeUnAnuncio: Story = {
+  name: 'Vino de un anuncio (el titular que leyó antes del clic)',
+  render: () => (
+    <Envoltorio
+      c={crearConversacionMock({
+        origen_anuncio: {
+          fuente: 'anuncio',
+          titulo: 'Diplomado en Inteligencia — últimas vacantes',
+          adId: '120210000000000',
+        },
+      })}
+    />
+  ),
+};
+
+/** En campaña no existe la ficha de la Escuela: cambia lo que la fila puede decir. */
+export const EnCampana: Story = {
+  name: 'En el módulo de campaña',
+  render: () => <Envoltorio esDeCampana c={crearConversacionMock({ luz: 'verde' })} />,
 };

@@ -11,8 +11,22 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-const estadoNuevo = { tono: 'nuevo' as const, acento: 'neutro' as const, titulo: 'Contacto nuevo', compras: null };
-const estadoCliente = { tono: 'cliente' as const, acento: 'cliente' as const, titulo: 'Ya es cliente', compras: null };
+const estadoNuevo = {
+  tono: 'nuevo' as const,
+  acento: 'neutro' as const,
+  titulo: 'Contacto nuevo',
+  compras: null,
+  detalle: null,
+  enfriada: false,
+};
+const estadoCliente = {
+  tono: 'cliente' as const,
+  acento: 'cliente' as const,
+  titulo: 'Ya es cliente',
+  compras: null,
+  detalle: 'Compró el Diplomado en abril',
+  enfriada: false,
+};
 
 export const RegistrarVenta: Story = {
   args: { estado: estadoNuevo, onVender: () => {}, tieneFicha: false },
