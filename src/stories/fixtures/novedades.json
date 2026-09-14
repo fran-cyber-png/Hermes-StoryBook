@@ -1,0 +1,17 @@
+[
+  {
+    "fecha": "2026-09-14",
+    "resumen": "Primera sincronización con Goberna-Lab/hermes (main). El recorte había quedado atrás desde el 3-sep-2026: se trajo src/ al día completo.",
+    "detalle": "457 archivos tocados. Cambios grandes en canales (ColaUnificada, ResponderPanel casi se duplicaron; aparecieron RielDeCanales, PastillasDelComentario, CabeceraDeChat, YaRespondido), una feature nueva de móvil (features/movil/), dominio de países/orígenes nuevo, y soporte PWA. Se borraron componentes que el producto real ya no tiene (editor de diagramas de Notas, bot.ts, BloqueMeta/QuienEs de panel).",
+    "archivos": [
+      "src/features/canales/*",
+      "src/features/movil/* (nuevo)",
+      "src/features/panel/*",
+      "src/features/dashboard/*",
+      "src/dominio/*",
+      "src/lib/*"
+    ],
+    "commit": "774fb69",
+    "tipo": "sync-manual"
+  }
+]

@@ -19,6 +19,12 @@ function ClienteDeConsultaAislado({ children }: { children: React.ReactNode }) {
 
 const preview: Preview = {
   parameters: {
+    /** «Novedades» siempre primera en el sidebar: es donde se avisa qué trajo la última sincronización. */
+    options: {
+      storySort: {
+        order: ['Novedades', 'Átomos', 'Moléculas', 'Organismos', 'Templates', 'Páginas'],
+      },
+    },
     controls: {
       matchers: {
         color: /(background|color)$/i,
