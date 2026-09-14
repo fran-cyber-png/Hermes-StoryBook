@@ -1,11 +1,27 @@
 [
   {
     "fecha": "2026-09-14",
-    "resumen": "Sincronizado a mano desde el botón de Novedades. 12 archivo(s) tocados bajo src/.",
-    "detalle": "",
-    "archivos": [
-      "...eceraColumnaCampana.tsx => CabeceraColumna.tsx}",
-      "src/features/vistas"
+    "resumen": "Sincronizado a mano desde el botón de Novedades. 12 archivo(s) tocados bajo src/, todos en features/vistas.",
+    "detalle": "1 de estos componentes ya tiene story y conviene revisarla: Moléculas/TarjetaEmbudo. La lista de abajo se rellenó a mano con el diff real de este commit: es la primera sincronización anterior a que el botón empezara a guardar las rutas.",
+    "cambios": [
+      {
+        "archivo": "src/features/vistas/CabeceraColumna.tsx",
+        "estado": "R",
+        "desde": "src/features/vistas/CabeceraColumnaCampana.tsx",
+        "story": null
+      },
+      { "archivo": "src/features/vistas/CabeceraPipeline.tsx", "estado": "M", "story": null },
+      {
+        "archivo": "src/features/vistas/TarjetaEmbudo.tsx",
+        "estado": "M",
+        "story": "Moléculas/TarjetaEmbudo",
+        "storyId": "moléculas-tarjetaembudo"
+      },
+      { "archivo": "src/features/vistas/VistaEmbudo.tsx", "estado": "M", "story": null },
+      { "archivo": "src/features/vistas/canalDeMesa.ts", "estado": "M", "story": null },
+      { "archivo": "src/features/vistas/galeria.tsx", "estado": "M", "story": null },
+      { "archivo": "src/features/vistas/galeriaDatosProdPorCanal.ts", "estado": "A", "story": null },
+      { "archivo": "src/features/vistas/iconoDeEtapa.ts", "estado": "M", "story": null }
     ],
     "commit": "c0457c4c",
     "tipo": "sync-manual-boton"

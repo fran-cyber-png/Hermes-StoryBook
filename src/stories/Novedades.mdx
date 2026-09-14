@@ -16,6 +16,12 @@ en tu máquina, no toca nada del monorepo real (solo lee de ahí), y deja un com
 local listo para pushear cuando quieras. Solo funciona con `npm run storybook`
 corriendo local.
 
+Cada sincronización lista los archivos que tocó, con la ruta completa y qué le
+pasó a cada uno — <strong>A</strong> nuevo, <strong>M</strong> modificado,
+<strong>D</strong> borrado, <strong>R</strong> renombrado — y a la derecha, dónde
+vive ese componente en este Storybook. Los que dicen «sin story» son los que
+todavía nadie cubrió: esa columna es la lista de trabajo pendiente.
+
 <BotonSincronizar />
 
 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1.5rem' }}>
@@ -68,14 +74,69 @@ corriendo local.
       {n.detalle && (
         <p style={{ margin: '0.5rem 0 0', lineHeight: 1.5, opacity: 0.8, fontSize: '0.9rem' }}>{n.detalle}</p>
       )}
-      {n.archivos?.length > 0 && (
-        <ul style={{ margin: '0.6rem 0 0', paddingLeft: '1.1rem', fontSize: '0.85rem', opacity: 0.85 }}>
-          {n.archivos.map((a) => (
-            <li key={a}>
-              <code>{a}</code>
-            </li>
-          ))}
-        </ul>
+      {/* Las entradas nuevas traen `cambios` (ruta + estado + dónde vive en
+          Storybook). Las viejas solo tienen `archivos`, que era una lista de
+          carpetas — se siguen dibujando como estaban. */}
+      {n.cambios?.length > 0 ? (
+        <table style={{ margin: '0.7rem 0 0', width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+          <tbody>
+            {n.cambios.map((c) => (
+              <tr key={c.archivo} style={{ borderTop: '1px solid var(--sb-border, #E2E8F0)' }}>
+                <td style={{ padding: '0.35rem 0.5rem 0.35rem 0', width: '1%', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+                  <span
+                    title={
+                      { A: 'Nuevo', M: 'Modificado', D: 'Borrado', R: 'Renombrado' }[c.estado]
+                    }
+                    style={{
+                      display: 'inline-block',
+                      minWidth: '1.15rem',
+                      textAlign: 'center',
+                      fontWeight: 700,
+                      fontSize: '0.7rem',
+                      borderRadius: '4px',
+                      padding: '0.05rem 0.3rem',
+                      background: { A: '#DCFCE7', M: '#DBEAFE', D: '#FEE2E2', R: '#FEF3C7' }[c.estado],
+                      color: { A: '#166534', M: '#1D4ED8', D: '#991B1B', R: '#92400E' }[c.estado],
+                    }}
+                  >
+                    {c.estado}
+                  </span>
+                </td>
+                <td style={{ padding: '0.35rem 0.5rem 0.35rem 0', verticalAlign: 'top' }}>
+                  <code style={{ fontSize: '0.78rem', wordBreak: 'break-all' }}>{c.archivo}</code>
+                  {c.desde && (
+                    <div style={{ opacity: 0.6, fontSize: '0.72rem' }}>
+                      antes: <code style={{ fontSize: '0.72rem' }}>{c.desde}</code>
+                    </div>
+                  )}
+                </td>
+                <td style={{ padding: '0.35rem 0', textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                  {c.story ? (
+                    <a
+                      href={`/?path=/story/${c.storyId}`}
+                      target="_top"
+                      style={{ fontWeight: 600, fontSize: '0.78rem' }}
+                    >
+                      {c.story} →
+                    </a>
+                  ) : (
+                    <span style={{ opacity: 0.45, fontSize: '0.75rem' }}>sin story</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        n.archivos?.length > 0 && (
+          <ul style={{ margin: '0.6rem 0 0', paddingLeft: '1.1rem', fontSize: '0.85rem', opacity: 0.85 }}>
+            {n.archivos.map((a) => (
+              <li key={a}>
+                <code>{a}</code>
+              </li>
+            ))}
+          </ul>
+        )
       )}
     </div>
   ))}

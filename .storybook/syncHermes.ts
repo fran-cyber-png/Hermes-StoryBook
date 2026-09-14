@@ -41,15 +41,135 @@ function agruparPorFeature(rutas: string[]): Record<string, number> {
   return grupos;
 }
 
+/**
+ * EL id DE UNA HISTORIA A PARTIR DE SU `title` — la misma cuenta que hace
+ * Storybook (`sanitize`, en `@storybook/csf`). Es lo que arma el link: con el
+ * título solo, la entrada de Novedades diría dónde está el componente pero no
+ * llevaría hasta ahí.
+ *
+ * ⚠️ Los acentos SE QUEDAN: «Moléculas/FilaConversacion» es
+ * `moléculas-filaconversacion`, no `moleculas-...`. Sacarlos daría un link roto.
+ */
+function idDeStory(titulo: string): string {
+  return titulo
+    .toLowerCase()
+    .replace(/[ ’–—―′¿'`~!@#$%^&*()_|+\-=?;:'",.<>{}[\]\\/]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * QUÉ COMPONENTE CUBRE CADA HISTORIA — leyendo los `.stories.tsx` del repo.
+ *
+ * Se lee del disco y no del `index.json` del server a propósito: este código
+ * corre DENTRO de ese server, y pedirse a sí mismo por HTTP para saber algo que
+ * está en un archivo al lado es un rodeo que además puede colgarse.
+ *
+ * Es una heurística deliberadamente simple: el `title:` de cada archivo, más los
+ * imports que apunten a `src/` fuera de `stories/`. Alcanza para lo que esto
+ * tiene que contestar —«¿este componente que cambió tiene story, y dónde?»— y no
+ * pretende reemplazar el índice real de Storybook.
+ */
+function mapaDeStories(): Map<string, { titulo: string; id: string }> {
+  const mapa = new Map<string, { titulo: string; id: string }>();
+  const archivos = lineasNoVacias(
+    git(['ls-files', 'src/stories']),
+  ).filter((f) => f.endsWith('.stories.tsx'));
+
+  for (const archivo of archivos) {
+    let fuente: string;
+    try {
+      fuente = readFileSync(path.join(REPO_ROOT, archivo), 'utf-8');
+    } catch {
+      continue;
+    }
+    const titulo = fuente.match(/title:\s*'([^']+)'/)?.[1];
+    if (!titulo) continue;
+    const entrada = { titulo, id: idDeStory(titulo) };
+
+    for (const m of fuente.matchAll(/from '((?:\.\.\/)+[^']+)'/g)) {
+      const resuelto = path
+        .relative(REPO_ROOT, path.resolve(path.join(REPO_ROOT, path.dirname(archivo)), m[1]))
+        .replace(/\\/g, '/');
+      if (!resuelto.startsWith('src/') || resuelto.startsWith('src/stories/')) continue;
+      // El import viene sin extensión; se prueban las dos que usa el repo.
+      for (const ext of ['.tsx', '.ts']) {
+        mapa.set(resuelto + ext, entrada);
+      }
+    }
+  }
+  return mapa;
+}
+
+/** Un archivo tocado por la sincronización, con su lugar en el árbol de Storybook. */
+interface CambioDeArchivo {
+  archivo: string;
+  /** `A` nuevo · `M` modificado · `D` borrado · `R` renombrado. */
+  estado: 'A' | 'M' | 'D' | 'R';
+  /** De dónde venía, solo en los renombrados. */
+  desde?: string;
+  /** El `title` de su story, o `null` si ese componente todavía no tiene. */
+  story: string | null;
+  storyId?: string;
+}
+
 interface ResultadoSync {
   cambios: boolean;
   mensaje: string;
   resumen?: string;
   detalle?: string;
   archivos?: string[];
+  cambiosDeArchivos?: CambioDeArchivo[];
   commit?: string;
   huerfanosSinBorrar?: string[];
   dependenciasQuitadasDelMonorepo?: string[];
+}
+
+/**
+ * LO QUE CAMBIÓ, ARCHIVO POR ARCHIVO — con `--name-status` y no con `--stat`.
+ *
+ * 🔴 `--stat` venía dando basura en la lista: abrevia las rutas largas con «...»
+ * y escribe los renombrados como `{viejo.tsx => nuevo.tsx}`, así que en Novedades
+ * aparecían entradas como `...eceraColumnaCampana.tsx => CabeceraColumna.tsx}`,
+ * que no son una ruta ni sirven para ir a ningún lado. `--name-status` da la ruta
+ * entera y además dice QUÉ le pasó a cada una, que es la pregunta de fondo.
+ *
+ * Los tests quedan afuera: la pregunta que esto contesta es «¿qué componente
+ * cambió y dónde lo miro?», y un `.test.tsx` no se mira en Storybook.
+ */
+function archivosQueCambiaron(): CambioDeArchivo[] {
+  const crudo = git([
+    'diff',
+    '--name-status',
+    'HEAD',
+    'hermes/main',
+    '--',
+    'src',
+    'index.html',
+    'vite.config.ts',
+    ':!src/stories',
+  ]);
+  const stories = mapaDeStories();
+
+  return lineasNoVacias(crudo)
+    .map((linea): CambioDeArchivo | null => {
+      const partes = linea.split('\t');
+      const marca = partes[0];
+      const esRename = marca.startsWith('R');
+      const archivo = esRename ? partes[2] : partes[1];
+      if (!archivo || /\.test\.tsx?$/.test(archivo)) return null;
+
+      const estado = esRename ? 'R' : (marca[0] as 'A' | 'M' | 'D');
+      const enStorybook = stories.get(archivo);
+      return {
+        archivo,
+        estado,
+        ...(esRename ? { desde: partes[1] } : {}),
+        story: enStorybook?.titulo ?? null,
+        ...(enStorybook ? { storyId: enStorybook.id } : {}),
+      };
+    })
+    .filter((c): c is CambioDeArchivo => c !== null);
 }
 
 function sincronizar(): ResultadoSync {
@@ -85,6 +205,10 @@ function sincronizar(): ResultadoSync {
   if (!diff.trim()) {
     return { cambios: false, mensaje: 'hermes/main no tiene cambios nuevos bajo src/, index.html o vite.config.ts.' };
   }
+
+  // ⚠️ ANTES del checkout: después de traer los archivos el diff contra
+  // hermes/main queda vacío y no habría nada que listar.
+  const cambiosDeArchivos = archivosQueCambiaron();
 
   // Snapshot de src/ (fuera de stories/) ANTES de tocar nada, para detectar huérfanos.
   const antes = new Set(
@@ -141,10 +265,10 @@ function sincronizar(): ResultadoSync {
 
   // Cada línea de `git diff --stat` con "|" es un archivo tocado; la última línea
   // ("N files changed, ...") es el resumen y no tiene "|".
-  const lineasDeArchivo = lineasNoVacias(diff).filter((l) => l.includes('|'));
-  const archivosTocados = lineasDeArchivo.map((l) => l.split('|')[0].trim());
-  const nArchivos = lineasDeArchivo.length;
-  const grupos = agruparPorFeature(archivosTocados);
+  const nArchivos = lineasNoVacias(diff).filter((l) => l.includes('|')).length;
+  const grupos = agruparPorFeature(cambiosDeArchivos.map((c) => c.archivo));
+  /** Los que cambiaron Y ya tienen story: es lo que hay que ir a revisar. */
+  const conStory = cambiosDeArchivos.filter((c) => c.story && c.estado !== 'D');
   const featuresNuevas = [...despues]
     .map((f) => f.match(/^src\/features\/([^/]+)\//)?.[1])
     .filter((f): f is string => Boolean(f) && ![...antes].some((a) => a.startsWith(`src/features/${f}/`)));
@@ -154,6 +278,13 @@ function sincronizar(): ResultadoSync {
     `Sincronizado a mano desde el botón de Novedades. ${nArchivos} archivo(s) tocados bajo src/.` +
     (featuresNuevasUnicas.length > 0 ? ` Carpeta(s) de feature nueva(s): ${featuresNuevasUnicas.join(', ')}.` : '');
   const detallePartes: string[] = [];
+  if (conStory.length > 0) {
+    detallePartes.push(
+      `${conStory.length} de estos componentes ya tienen story y conviene revisarlas: ${conStory
+        .map((c) => c.story)
+        .join(', ')}.`,
+    );
+  }
   if (huerfanosSinBorrar.length > 0) {
     detallePartes.push(
       `${huerfanosSinBorrar.length} archivo(s) ya no están en hermes/main pero una story los referencia — revisar a mano: ${huerfanosSinBorrar.join(', ')}.`,
@@ -171,6 +302,8 @@ function sincronizar(): ResultadoSync {
     resumen,
     detalle: detallePartes.join(' '),
     archivos: Object.keys(grupos).slice(0, 12),
+    /** La ruta de cada archivo tocado y dónde vive en Storybook, para seguimiento. */
+    cambios: cambiosDeArchivos,
     commit: '',
     tipo: 'sync-manual-boton',
   });
@@ -201,6 +334,7 @@ function sincronizar(): ResultadoSync {
     resumen,
     detalle: detallePartes.join(' '),
     archivos: Object.keys(grupos),
+    cambiosDeArchivos,
     commit: hash,
     huerfanosSinBorrar,
     dependenciasQuitadasDelMonorepo,
