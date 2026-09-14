@@ -49,13 +49,19 @@ export const Sticker: Story = {
 /**
  * El video y el PDF llegan como `blob:` o como una URL que la etiqueta pueda
  * pedir sin sesión. Acá no hay archivo real: se ve el marco del visor, que es lo
- * que esta historia tiene para mostrar.
+ * que estas dos historias tienen para mostrar.
+ *
+ * ⚠️ El `src` es un `data:` mínimo y no una cadena vacía: `<video src="">` hace
+ * que el navegador vuelva a pedir la página entera, y lo avisa por consola. Lo
+ * marcó la suite de vitest en su primera corrida.
  */
+const SIN_ARCHIVO_REAL = 'data:application/octet-stream;base64,AAAA';
+
 export const Video: Story = {
-  args: { clase: 'video', src: '', nombre: 'grabación.mp4', onDescargar: () => {} },
+  args: { clase: 'video', src: SIN_ARCHIVO_REAL, nombre: 'grabación.mp4', onDescargar: () => {} },
 };
 
 export const Documento: Story = {
   name: 'Documento (PDF)',
-  args: { clase: 'documento', src: '', nombre: 'voucher-de-pago.pdf', onDescargar: () => {} },
+  args: { clase: 'documento', src: SIN_ARCHIVO_REAL, nombre: 'voucher-de-pago.pdf', onDescargar: () => {} },
 };

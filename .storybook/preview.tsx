@@ -18,6 +18,21 @@ function ClienteDeConsultaAislado({ children }: { children: React.ReactNode }) {
 }
 
 const preview: Preview = {
+  /**
+   * TODAS las historias entran a la suite de vitest.
+   *
+   * `@storybook/addon-vitest` sólo corre las que llevan el tag `test`
+   * (`tags?.include ?? [Tag.TEST]` en su plugin), y sin esta línea no corría
+   * NINGUNA: el addon estaba instalado, declarado en `main.ts` y encontraba los
+   * 43 archivos, pero los descartaba a todos por el filtro de tags. Se veía como
+   * «no tests», que es indistinguible de «todo bien».
+   *
+   * Ponerlo acá y no historia por historia es a propósito: una historia que hay
+   * que acordarse de marcar es una historia que va a quedar sin correr. Las que
+   * no tengan `play()` igual valen — se montan, y una que reviente al renderizar
+   * falla el test.
+   */
+  tags: ['test'],
   parameters: {
     /** «Novedades» siempre primera en el sidebar: es donde se avisa qué trajo la última sincronización. */
     options: {
