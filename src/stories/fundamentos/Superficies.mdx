@@ -1,0 +1,117 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+import { Muestra, Grupo, Regla } from './Muestras';
+
+<Meta title="Fundamentos/Superficies y forma" />
+
+# Superficies y forma
+
+Cómo se apilan los planos de la interfaz: qué es fondo, qué es tarjeta, cuánto se
+redondea y qué sombra lleva.
+
+## Los planos
+
+<Grupo titulo="De atrás hacia adelante">
+  <Muestra token="background" nombre="Fondo de la página" significado="El plano de más atrás. Todo lo demás se apoya acá." />
+  <Muestra token="card" nombre="Tarjeta" significado="La placa donde vive el contenido: la cola, el panel, cada tarjeta del Pipeline." />
+  <Muestra token="muted" nombre="Apagado" significado="Un hueco dentro de una tarjeta: el campo de búsqueda, la burbuja de un comentario." />
+  <Muestra token="secondary" nombre="Secundario" tinta="secondary-foreground" significado="El celeste sutil de los avatares y las chapas de canal." />
+  <Muestra token="border" nombre="Borde" significado="La línea que separa. Fina y de bajo contraste: separa sin dibujar una reja." />
+</Grupo>
+
+<Regla>
+  <strong>El acento es celeste, no dorado.</strong> shadcn usa <code>--accent</code> para el
+  hover y el estado activo de muchos componentes, así que es un color que aparece
+  por todos lados. El dorado es señal funcional escasa y nunca un hover genérico.
+</Regla>
+
+## La tinta
+
+<Grupo titulo="Tres niveles">
+  <Muestra token="foreground" nombre="Texto" significado="Lo que se lee." />
+  <Muestra token="muted-foreground" nombre="Texto tenue" significado="Metadatos, ayudas, lo secundario. Legible, no invisible." />
+  <Muestra token="primary" nombre="Enlace / acción" significado="Lo que se puede tocar." />
+</Grupo>
+
+## Radio
+
+El radio base es `--radius` (`0.75rem`) y de ahí salen los cuatro escalones.
+
+{/* Los escalones se calculan desde `--radius` y NO se leen de `--radius-sm/md/lg`:
+    esos viven en `@theme` y Tailwind sólo los emite si alguna utility los usa, así
+    que acá resolvían a vacío y tres de las cuatro cajas salían en cuadrado. La
+    cuenta es la misma que hace `index.css`, así que sigue siendo derivado del token. */}
+
+<div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem' }}>
+  {[
+    ['radius-sm', 'calc(base − 4px)', 'calc(var(--radius) - 4px)'],
+    ['radius-md', 'calc(base − 2px)', 'calc(var(--radius) - 2px)'],
+    ['radius-lg', 'base', 'var(--radius)'],
+    ['radius-xl', 'calc(base + 4px)', 'calc(var(--radius) + 4px)'],
+  ].map(([token, cuenta, valor]) => (
+    <div key={token} style={{ textAlign: 'center' }}>
+      <div
+        style={{
+          width: '5.5rem',
+          height: '4rem',
+          background: 'var(--secondary)',
+          border: '1px solid var(--border)',
+          borderRadius: valor,
+        }}
+      />
+      <code style={{ fontSize: '0.7rem', display: 'block', marginTop: '0.4rem' }}>{token}</code>
+      <span style={{ fontSize: '0.68rem', opacity: 0.55 }}>{cuenta}</span>
+    </div>
+  ))}
+</div>
+
+## Sombra de panel
+
+Difusa y ambiental, no la caja dura de `shadow-sm`. Da la sensación de **una placa
+apoyada, no pegada** — acabado, no decoración.
+
+<div style={{ display: 'flex', gap: '2rem', marginTop: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+  <div style={{ textAlign: 'center' }}>
+    <div
+      style={{
+        width: '11rem',
+        height: '5rem',
+        background: 'var(--card)',
+        borderRadius: 'calc(var(--radius) + 4px)',
+        boxShadow: '0 1px 2px rgba(14, 42, 82, 0.04), 0 14px 34px -18px rgba(14, 42, 82, 0.12)',
+      }}
+    />
+    <code style={{ fontSize: '0.7rem', display: 'block', marginTop: '0.6rem' }}>.shadow-panel</code>
+  </div>
+  <div style={{ textAlign: 'center' }}>
+    <div
+      style={{
+        width: '11rem',
+        height: '5rem',
+        background: 'var(--card)',
+        borderRadius: 'calc(var(--radius) + 4px)',
+        boxShadow: '0 1px 2px rgb(0 0 0 / 0.05)',
+      }}
+    />
+    <code style={{ fontSize: '0.7rem', display: 'block', marginTop: '0.6rem' }}>shadow-sm (comparación)</code>
+  </div>
+</div>
+
+## Movimiento
+
+Una sola física para toda la app: la curva de la casa.
+
+<div style={{ marginTop: '1rem', fontSize: '0.88rem', lineHeight: 1.7 }}>
+  <div>
+    <code>--ease-house</code> — <code>cubic-bezier(0.32, 0.72, 0, 1)</code>
+  </div>
+  <div>
+    <code>--animate-entrar</code> — 240 ms. Lo que aparece: un popover, una fila nueva.
+  </div>
+  <div>
+    <code>--animate-modal-entrar</code> — 240 ms con escala. Un modal pesa más que un
+    popover y por eso suma el <code>scale</code>; al popover no se le agrega porque no lo pide.
+  </div>
+  <div>
+    <code>--animate-velo-entrar</code> — 180 ms. El velo de atrás, que solo aparece.
+  </div>
+</div>

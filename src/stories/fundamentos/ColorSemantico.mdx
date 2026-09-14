@@ -1,0 +1,116 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+import { Muestra, Grupo, Regla } from './Muestras';
+
+<Meta title="Fundamentos/Color semántico" />
+
+# Color semántico
+
+En Hermes el color **no es decoración: dice algo**. Cada uno de estos tokens tiene
+un significado fijo, y usarlo para otra cosa no es un detalle de gusto — rompe
+la única pista que tiene quien atiende para saber qué mira.
+
+Estas reglas vivían solamente en comentarios del código, repetidas en media docena
+de archivos. Acá quedan en un solo lugar.
+
+<Regla>
+  <strong>El dorado significa una sola cosa: tiempo que se acaba.</strong> La
+  ventana de Meta que se cierra, lo vencido, la línea del ahora. No es un color
+  de hover, ni de énfasis, ni de «esto es importante». Una oportunidad no es un
+  reloj.
+</Regla>
+
+## La marca
+
+<Grupo titulo="Azul institucional y dorado">
+  <Muestra
+    token="navy"
+    nombre="Navy — superficie"
+    tinta="primary-foreground"
+    significado={
+      <>
+        El azul como <strong>fondo</strong>: <code>bg-navy text-white</code>, el velo de los
+        modales, el borde de una chapa.
+      </>
+    }
+  />
+  <Muestra
+    token="navy-ink"
+    nombre="Navy ink — tinta"
+    significado={
+      <>
+        El mismo azul como <strong>texto</strong>: el título de cada pantalla. En tema claro
+        valen lo mismo y por eso fueron un solo token durante meses; en oscuro se separan —
+        una superficie oscura sigue oscura, una tinta oscura desaparece.
+      </>
+    }
+  />
+  <Muestra
+    token="gold"
+    nombre="Dorado"
+    significado="Tiempo que se acaba. Señal escasa: una racha, una cifra héroe, una cuenta regresiva."
+  />
+  <Muestra token="gold-ink" nombre="Dorado tinta" significado="El dorado cuando tiene que leerse como texto." />
+</Grupo>
+
+## Temperatura del dato
+
+Codifica **cuánto hace que llegó** un lead. Un lead recién llegado está a tiempo;
+cada día que pasa se enfría.
+
+<Grupo titulo="La rampa del tiempo">
+  <Muestra token="temp-fresco" nombre="Fresco" significado="Menos de 1 día — todavía a tiempo." />
+  <Muestra token="temp-tibio" nombre="Tibio" significado="Menos de 3 días — se está yendo." />
+  <Muestra token="temp-frio" nombre="Frío" significado="Menos de 14 días — difícil." />
+  <Muestra token="temp-helado" nombre="Helado" significado="14 días o más — prácticamente perdido." />
+</Grupo>
+
+## El semáforo del lead
+
+Codifica **cuánto quiere comprar**, no cuánto tiempo pasó. Es lo que pinta la
+tarjeta del Pipeline y la banda de la cola.
+
+<Grupo titulo="La intención de compra">
+  <Muestra token="sem-verde" nombre="Verde" significado="Quiere comprar." />
+  <Muestra token="sem-ambar" nombre="Ámbar" significado="Interesado, sin definir." />
+  <Muestra token="sem-rojo" nombre="Rojo" significado="Se está perdiendo." />
+  <Muestra token="sem-gris" nombre="Gris" significado="Sin señal todavía." />
+</Grupo>
+
+<Regla>
+  <strong>El ámbar del semáforo es <code>#D97706</code>, nunca el dorado.</strong> Son
+  parecidos a la vista y significan cosas opuestas: el dorado dice «esto vence», el
+  ámbar dice «esta persona está indecisa». Una tarjeta con degradado dorado de fondo
+  afirmaría que toda la tarjeta se está venciendo.
+</Regla>
+
+## Estado
+
+<Grupo titulo="Lo que pasó, o está por pasar">
+  <Muestra token="success" nombre="Éxito" tinta="success-foreground" significado="Salió bien: respondido, enviado, guardado." />
+  <Muestra token="warning" nombre="Advertencia" tinta="warning-foreground" significado="Algo no está como debería, pero se puede seguir." />
+  <Muestra token="destructive" nombre="Destructivo" tinta="destructive-foreground" significado="Borra, elimina, no se puede deshacer." />
+  <Muestra token="primary" nombre="Primario" tinta="primary-foreground" significado="La acción principal, y la señal de atención de la casa." />
+</Grupo>
+
+## Categorías
+
+La paleta fija de las etiquetas con color elegible. **Sin oro a propósito** —
+se excluye toda la familia ámbar/amarillo, porque el oro es señal de tiempo, no
+decoración.
+
+<Grupo titulo="Las ocho">
+  <Muestra token="cat-pizarra" nombre="Pizarra" significado="El default cuando el color guardado no es válido." />
+  <Muestra token="cat-rojo" nombre="Rojo" significado="" />
+  <Muestra token="cat-naranja" nombre="Naranja" significado="" />
+  <Muestra token="cat-verde" nombre="Verde" significado="" />
+  <Muestra token="cat-azul" nombre="Azul" significado="" />
+  <Muestra token="cat-cian" nombre="Cian" significado="" />
+  <Muestra token="cat-morado" nombre="Morado" significado="" />
+  <Muestra token="cat-rosa" nombre="Rosa" significado="" />
+</Grupo>
+
+---
+
+_Las muestras se pintan con `var(--…)`, no con hexadecimales escritos a mano:
+cambiá el tema con el selector de fondo de la barra y se actualizan solas. Los
+valores y sus porqués viven en `src/index.css`._

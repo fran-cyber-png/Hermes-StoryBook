@@ -22,7 +22,7 @@ const preview: Preview = {
     /** «Novedades» siempre primera en el sidebar: es donde se avisa qué trajo la última sincronización. */
     options: {
       storySort: {
-        order: ['Novedades', 'Átomos', 'Moléculas', 'Organismos', 'Templates', 'Páginas'],
+        order: ['Novedades', 'Fundamentos', 'Átomos', 'Moléculas', 'Organismos', 'Templates', 'Páginas'],
       },
     },
     controls: {

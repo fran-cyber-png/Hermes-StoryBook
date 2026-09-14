@@ -1,0 +1,77 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+
+<Meta title="Fundamentos/Tipografía" />
+
+# Tipografía
+
+Tres voces, cada una con un trabajo. No son tres fuentes «para variar»: cada una
+dice de qué clase es el texto que estás leyendo.
+
+<div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1.5rem' }}>
+  {[
+    {
+      token: 'font-heading',
+      familia: "'Montserrat', system-ui, sans-serif",
+      nombre: 'Heading — Montserrat',
+      papel: 'Títulos, nombres de persona, cifras héroe. Es la voz de la marca.',
+      muestra: 'Estás al día',
+      estilo: { fontFamily: 'var(--font-heading)', fontSize: '1.75rem', fontWeight: 700 },
+    },
+    {
+      token: 'font-sans',
+      familia: "'Open Sans', system-ui, sans-serif",
+      nombre: 'Sans — Open Sans',
+      papel: 'El cuerpo: mensajes, descripciones, todo lo que se lee corrido.',
+      muestra: '¿Cuánto cuesta el diplomado y hasta cuándo hay cupo?',
+      estilo: { fontFamily: 'var(--font-sans)', fontSize: '1rem' },
+    },
+    {
+      token: 'font-mono',
+      familia: "ui-monospace, 'SF Mono', 'JetBrains Mono', 'Menlo', 'Consolas', monospace",
+      nombre: 'Mono — la voz «instrumento»',
+      papel:
+        'Metadatos, unidades, índices, marcas de tiempo. Le da a la matriz su identidad de puente de mando, sin depender de ninguna fuente externa (usa la mono del sistema).',
+      muestra: '+51 943 348 051 · hace 3 horas · 1.866',
+      estilo: { fontFamily: 'var(--font-mono)', fontSize: '0.95rem' },
+    },
+  ].map((v) => (
+    <div key={v.token} style={{ border: '1px solid var(--sb-border, #E2E8F0)', borderRadius: '12px', padding: '1rem 1.25rem' }}>
+      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{v.nombre}</div>
+      <code style={{ fontSize: '0.72rem', opacity: 0.65 }}>--{v.token}</code>
+      <p style={{ fontSize: '0.85rem', lineHeight: 1.5, margin: '0.35rem 0 0.9rem' }}>{v.papel}</p>
+      <div style={v.estilo}>{v.muestra}</div>
+      <code style={{ fontSize: '0.68rem', opacity: 0.5, display: 'block', marginTop: '0.7rem' }}>{v.familia}</code>
+    </div>
+  ))}
+</div>
+
+## Por qué la mono no es una fuente externa
+
+Las otras dos se cargan; la mono usa la del sistema a propósito. Un teléfono, una
+hora o un conteo tienen que salir alineados y legibles **aunque la fuente no haya
+cargado todavía** — y son justo los datos que se leen de un vistazo mientras se
+trabaja.
+
+## Tabular
+
+Las cifras que se comparan entre filas van con `tabular-nums`: sin eso, los números
+bailan de columna en columna y una lista de conteos deja de poder leerse en vertical.
+
+<div style={{ display: 'flex', gap: '2.5rem', marginTop: '1rem' }}>
+  <div>
+    <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '0.35rem' }}>Con tabular-nums</div>
+    <div style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.6 }}>
+      1.866<br />
+      142<br />
+      1.111
+    </div>
+  </div>
+  <div>
+    <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '0.35rem' }}>Sin</div>
+    <div style={{ fontFamily: 'var(--font-sans)', fontVariantNumeric: 'proportional-nums', lineHeight: 1.6 }}>
+      1.866<br />
+      142<br />
+      1.111
+    </div>
+  </div>
+</div>
