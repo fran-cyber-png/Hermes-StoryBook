@@ -19,7 +19,7 @@ import { idDeComentario, type Conversacion } from '../../dominio/conversaciones'
 import { transporteDeLinea, type LineaWhatsapp } from '../../dominio/lineas';
 import { Avatar } from '../../components/Avatar';
 import { BotonAbrirChat } from './BotonAbrirChat';
-import { BadgeCanal, insigniaDe, LogoDeCanal } from '../../components/BadgeCanal';
+import { insigniaDe, LogoDeCanal } from '../../components/BadgeCanal';
 import { detalleDeCurso } from '../../dominio/curso';
 import { esPrioritaria, quiereFoto, siguienteConFoto } from '../../dominio/fotoVisible';
 import { marcaDelBot, type TonoBot } from '../../dominio/bot';
@@ -28,7 +28,7 @@ import { hace } from '../../lib/datos/frescura';
 import { lecturaDeVentana, plazoDuro } from '../../dominio/ventana';
 import { lecturaDeAntiguedad } from '../../dominio/antiguedad';
 import { etiquetaDeMedia } from '../../lib/etiquetaMedia';
-import { bordePropuestaSemaforo, fondoSemaforo, horasDesde, tempClass } from '../../lib/formato';
+import { bordePropuestaSemaforo, horasDesde, tempClass } from '../../lib/formato';
 import { cotizarEnUnClic, cursoDeTarjeta, haceCorto, nombreDeTarjeta, turnoDeTarjeta } from './tarjeta';
 import { PildoraAsignacion } from './PildoraAsignacion';
 import { PastillaRespondido, PastillaTieneAbierto } from '../canales/PastillasDelComentario';
@@ -71,11 +71,14 @@ const TONO_BOT: Record<TonoBot, 'rojo' | 'amarillo'> = {
 };
 
 /**
- * EL FILETE DE LA LUZ, en campaña (13-sep-2026, la maqueta que eligió el dueño: «el
- * color aparece SÓLO como señal»). Ventas pinta la luz como un degradado de fondo con
- * el borde entero teñido (`fondoSemaforo`); campaña, como un filete izquierdo sobre
- * una tarjeta blanca. Los mismos cuatro tokens `--sem-*`, así que el ámbar sigue sin
- * ser oro. Literales enteros para que Tailwind los encuentre.
+ * EL FILETE DE LA LUZ (13-sep-2026, la maqueta que eligió el dueño: «el color aparece
+ * SÓLO como señal»). Hasta ese día la luz era un degradado de fondo con el borde
+ * entero teñido (`fondoSemaforo`, D1 del 8-sep); ahora es un filete izquierdo sobre una
+ * tarjeta blanca. Nació en campaña y el 14-sep-2026 el dueño lo pidió para la Escuela
+ * («el nuevo diseño a escuela ventas»): es la tarjeta de las DOS mesas. Los mismos
+ * cuatro tokens `--sem-*`, así que el ámbar sigue sin ser oro. Literales enteros para
+ * que Tailwind los encuentre. `fondoSemaforo` sigue viviendo en `lib/formato.ts` para
+ * el kanban del Dashboard, que es de otro frente.
  */
 const FILETE_DE_LUZ = {
   verde: 'border-l-sem-verde',
@@ -251,8 +254,12 @@ export function TarjetaEmbudo({
   const idComentario = idDeComentario(c);
   /** La luz del filete: sin `luz` es gris, nunca se asume otro color (`tablero.ts#luzDeTarjeta`). */
   const luz = c.luz ?? 'gris';
-  /** En campaña el canal va AL LADO del nombre, en su color: encima del avatar tapaba las iniciales. */
-  const canalJuntoAlNombre = esDeCampana ? insigniaDe(c.canal, c.tipo) : null;
+  /**
+   * El canal va AL LADO del nombre, en su color: encima del avatar tapaba las iniciales
+   * (13-sep-2026, campaña; 14-sep, las dos mesas). Un formulario no tiene insignia
+   * (`landing` no es una marca) y lo dice su propio chip en el segundo renglón.
+   */
+  const canalJuntoAlNombre = insigniaDe(c.canal, c.tipo);
   const horas = horasDesde(c.referencia);
 
   // El preview solo cuando la pelota es NUESTRA: si el último mensaje es el
@@ -308,8 +315,8 @@ export function TarjetaEmbudo({
     // ⚠️ Un comentario entra por lo mismo: sus pastillas (ADR 0121) viven en ese
     // renglón. La de quién lo tiene abierto llega después y puede no dibujar nada,
     // así que el renglón lleva `empty:hidden` y no ocupa lugar si queda vacío.
-    // En campaña el preview va en su propio renglón (abajo), así que no cuenta acá.
-    curso || bot || asignacion || precioEnviado || ventana || antiguedad || (!esDeCampana && preview) || onCotizar || c.canal === 'landing' || idComentario !== null,
+    // El preview va en su propio renglón (arriba de éste), así que no cuenta acá.
+    curso || bot || asignacion || precioEnviado || ventana || antiguedad || onCotizar || c.canal === 'landing' || idComentario !== null,
   );
 
   return (
@@ -353,19 +360,14 @@ export function TarjetaEmbudo({
       }}
       data-luz={luz}
       className={
-        // ⚠️ EL SEMÁFORO REEMPLAZA A `tempBorde` ACÁ (D1, 8-sep-2026): ya no
-        // es un filete izquierdo de temperatura, es un degradado de fondo en
-        // toda la tarjeta (`fondoSemaforo`) con el borde entero (no solo el
-        // izquierdo) tintado a juego (`.tarjeta-semaforo--*` en index.css).
-        // `tempBorde` sigue viviendo en `lib/formato.ts` para el kanban del
-        // Dashboard, que es de otro frente.
-        // 🔴 EN CAMPAÑA vuelve el filete (13-sep-2026), ahora de la LUZ: tarjeta
-        // blanca, el borde casi invisible y el color sólo a la izquierda.
-        (esDeCampana
-          ? 'group cursor-grab rounded-xl border border-l-[3px] border-border bg-card py-2 pl-2.5 pr-2 shadow-[0_1px_2px_rgba(14,42,82,0.05)] transition-[box-shadow,opacity,transform] duration-200 ease-house hover:shadow-panel active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
-            FILETE_DE_LUZ[luz]
-          : 'group cursor-grab rounded-xl border bg-card px-2.5 py-1.5 shadow-[0_1px_2px_rgba(14,42,82,0.06)] transition-[box-shadow,opacity,transform] duration-200 ease-house hover:shadow-panel active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
-            fondoSemaforo(c.luz)) +
+        // ⚠️ EL SEMÁFORO REEMPLAZÓ A `tempBorde` ACÁ (D1, 8-sep-2026): la luz dejó de
+        // ser un filete de TEMPERATURA. Del 8 al 13-sep fue un degradado de fondo en
+        // toda la tarjeta (`fondoSemaforo`) con el borde entero tintado; desde la
+        // maqueta que eligió el dueño es otra vez un filete izquierdo, ahora de la
+        // LUZ (`FILETE_DE_LUZ`): tarjeta blanca, el borde casi invisible y el color
+        // sólo a la izquierda. Primero en campaña, desde el 14-sep en las dos mesas.
+        'group cursor-grab rounded-xl border border-l-[3px] border-border bg-card py-2 pl-2.5 pr-2 shadow-[0_1px_2px_rgba(14,42,82,0.05)] transition-[box-shadow,opacity,transform] duration-200 ease-house hover:shadow-panel active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
+        FILETE_DE_LUZ[luz] +
         ' ' +
         bordePropuestaSemaforo(c.origen_semaforo) +
         (arrastrando ? ' scale-[0.98] opacity-40' : '') +
@@ -385,11 +387,6 @@ export function TarjetaEmbudo({
             conFoto={conFoto}
             className="size-7 rounded-full bg-secondary text-[10px] font-bold text-navy-ink"
           />
-          {!esDeCampana && (
-            <span className="absolute -bottom-1 -right-1 scale-90">
-              <BadgeCanal canal={c.canal} tipo={c.tipo} />
-            </span>
-          )}
         </span>
 
         <span className="flex min-w-0 flex-1 items-center gap-1">
@@ -436,10 +433,9 @@ export function TarjetaEmbudo({
               hace(horas)
             }
             className={
-              // En campaña, sin monoespaciada: «5 m» en mono le quitaba al nombre el
-              // ancho que lo dejaba en «Javier Per…» (lo mostró la captura).
+              // Sin monoespaciada: «5 m» en mono le quitaba al nombre el ancho que lo
+              // dejaba en «Javier Per…» (lo mostró la captura de campaña, 13-sep-2026).
               'inline-flex shrink-0 items-center gap-1 text-[11px] tabular-nums ' +
-              (esDeCampana ? '' : 'font-mono ') +
               (apremia ? 'font-bold text-temp-fresco' : tempClass(c.referencia))
             }
           >
@@ -479,10 +475,11 @@ export function TarjetaEmbudo({
         </p>
       )}
 
-      {/* EN CAMPAÑA EL PREVIEW TIENE SU RENGLÓN (la maqueta del dueño): una línea gris
+      {/* EL PREVIEW TIENE SU RENGLÓN (la maqueta del dueño, 13-sep-2026): una línea gris
           y truncada, debajo del nombre. Metido entre los chips quedaba en «Ya no
-          necesito qu…» al lado de la antigüedad. */}
-      {esDeCampana && preview && (
+          necesito qu…» al lado de la antigüedad, y en ventas ni se dibujaba cuando la
+          tarjeta traía curso o precio — o sea, justo en las que más había que leer. */}
+      {preview && (
         <p title={preview} className="mt-1 truncate pl-9 text-xs text-muted-foreground">
           {preview}
         </p>
@@ -626,36 +623,20 @@ export function TarjetaEmbudo({
             neutra, con el reloj de HISTORIAL — que la distingue del reloj de
             ARENA de la ventana, justo al lado, que sí es una cuenta regresiva.
           */}
-          {/* En campaña la dueña va a la izquierda y la antigüedad al extremo derecho,
-              en una píldora clara: el orden de la maqueta. */}
-          {esDeCampana && asignacion && <PildoraAsignacion marca={asignacion} />}
-          {antiguedad && (
-            <Chip
-              icono={<History size={10} className="shrink-0" />}
-              titulo={antiguedad.ayuda}
-              tono={esDeCampana ? 'suave' : 'neutro'}
-              alFinal={esDeCampana}
-            >
-              {antiguedad.texto}
-            </Chip>
-          )}
           {/*
             A QUIÉN ESTÁ ASIGNADA — sólo para quien supervisa. Neutro y sin oro:
             no apura nada, dice de quién es. «Sin asignar» va con el contorno
             PUNTEADO, la forma que la casa ya usa para «esto no lo tiene nadie
             todavía» (`dominio/origen.ts`), y mide lo mismo que la píldora llena
             (borde + `py-px` en las dos) para que la tarjeta no salte de alto.
-            ⚠️ Va ANTES del preview: el preview es `flex-1` y cede el ancho, así
-            que un chip detrás lo dejaba en una sola letra («1 sem M Sin
-            asignar»). Lo mostró la captura, no un test.
+            La dueña va a la izquierda y la antigüedad al extremo derecho, en una
+            píldora clara: el orden de la maqueta (13-sep-2026).
           */}
-          {!esDeCampana && asignacion && <PildoraAsignacion marca={asignacion} />}
-          {/* `min-w-[5rem]` y no `min-w-0`: con varios chips delante, `min-w-0`
-              dejaba el preview en UNA letra al borde de la tarjeta («Sin asignar
-              M»). Con piso, cuando no entra baja al renglón siguiente — que es lo
-              que esta fila ya hace con los chips (`flex-wrap`). */}
-          {!esDeCampana && !curso && !precioEnviado && preview && (
-            <p className="min-w-[5rem] flex-1 truncate text-xs text-foreground">{preview}</p>
+          {asignacion && <PildoraAsignacion marca={asignacion} />}
+          {antiguedad && (
+            <Chip icono={<History size={10} className="shrink-0" />} titulo={antiguedad.ayuda} tono="suave" alFinal>
+              {antiguedad.texto}
+            </Chip>
           )}
           {onCotizar && (
             <button

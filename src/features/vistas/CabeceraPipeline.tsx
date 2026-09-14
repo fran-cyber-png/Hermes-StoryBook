@@ -61,11 +61,15 @@ const RANGOS: readonly { id: RangoDeMesa; rotulo: string; ayuda: string; alcance
 ];
 
 /**
- * ══ LOS CANALES — la fila de íconos que recorta la mesa de CAMPAÑA (13-sep-2026) ══
+ * ══ LOS CANALES — la fila de íconos que recorta la mesa (13-sep-2026; ══
+ * ampliada a ventas el mismo día)
  *
  * Qué se ofrece y qué viaja lo decide `canalDeMesa.ts`; acá sólo se dibuja. Es un
  * segmentado, como el rango de al lado: siempre hay uno puesto, y «Todos» es la
- * suma, no la ausencia de filtro escondida.
+ * suma, no la ausencia de filtro escondida. Nació sólo para campaña; ventas la
+ * recibe con la MISMA lista de `opciones` que le pasa `VistaEmbudo`, más el par
+ * Formulario que campaña no ofrece — este componente no distingue módulos, sólo
+ * dibuja lo que le llega.
  *
  * 🔴 **DOS GRUPOS EN UNA FILA, separados por un filete**: MENSAJES (WhatsApp,
  * Instagram, Messenger) y COMENTARIOS (Facebook, Instagram). Y el comentario se
@@ -74,12 +78,17 @@ const RANGOS: readonly { id: RangoDeMesa; rotulo: string; ayuda: string; alcance
  * hueco = lo escribieron en público»). Sin eso, «Mensajes de Instagram» y
  * «Comentarios de Instagram» serían el mismo glifo dos veces.
  *
+ * ⚠️ **Y EN VENTAS, UN TERCER GRUPO** (`grupo: 'formulario'`, sólo si `opciones`
+ * lo trae): un formulario no es un DM ni algo público, así que no entra a
+ * ninguno de los otros dos — otro filete, y sin aro ni disco (no es una marca).
+ *
  * ⚠️ **El ícono apagado conserva su color de marca**, más tenue, y no se pasa a
  * gris: un glifo de WhatsApp en gris se lee como «WhatsApp roto», no como «no
  * elegido» — lo mostró la primera captura del riel de Mensajes
  * (`canales/RielDeCanales.tsx`). Encendido, el disco se llena con el color de la
  * marca y la tinta que ese color pide (`insigniaDe`): sobre el verde de WhatsApp
- * el blanco da 1,98:1. «Todos», que no es una marca, va en el navy de la casa.
+ * el blanco da 1,98:1. «Todos» y «Formulario», que no son una marca, van en el
+ * navy de la casa.
  *
  * ⚠️ **Con el canal del puente puesto no se enciende ninguno**: la mesa la acota
  * el chip «Canal: …» de al lado, y tocar un ícono lo reemplaza.
@@ -95,6 +104,11 @@ function FiltroDeCanal({
 }) {
   const boton = (c: CanalDeLaMesa) => {
     // Color, logo y tinta del PAR canal · tipo: la fuente única de `BadgeCanal`.
+    // `insignia` es `null` para Formulario (`landing` no es una marca): ahí
+    // `LogoDeCanal` recibe el canal crudo y dibuja su propio trazo de la casa
+    // en vez de quedarse sin ícono (antes de Formulario, `insignia` siempre
+    // existía para todo lo que esta fila ofrecía, así que este `??` no cambia
+    // ningún ícono de campaña).
     const insignia = insigniaDe(c.canal, c.tipo ?? undefined);
     return (
       <BotonDeCanal
@@ -107,12 +121,15 @@ function FiltroDeCanal({
         activo={elegido === c.id}
         onElegir={() => onElegir(c.id)}
       >
-        {insignia && <LogoDeCanal canal={insignia.logo} soloGlifo size={12} />}
+        <LogoDeCanal canal={insignia?.logo ?? c.canal} soloGlifo size={12} />
       </BotonDeCanal>
     );
   };
   const mensajes = opciones.filter((c) => c.grupo === 'mensajes');
   const comentarios = opciones.filter((c) => c.grupo === 'comentarios');
+  // Sólo en ventas (`canalDeMesa.ts#FORMULARIO`): un lead de landing no es un
+  // mensaje ni un comentario, así que no entra en ninguno de los dos grupos.
+  const formulario = opciones.filter((c) => c.grupo === 'formulario');
   return (
     <div role="group" aria-label="Canal" className="flex items-center gap-0.5 rounded-full border border-border p-0.5">
       <BotonDeCanal
@@ -139,6 +156,14 @@ function FiltroDeCanal({
           <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
           <div role="group" aria-label="Comentarios" className="flex items-center gap-0.5">
             {comentarios.map(boton)}
+          </div>
+        </>
+      )}
+      {formulario.length > 0 && (
+        <>
+          <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
+          <div role="group" aria-label="Formulario" className="flex items-center gap-0.5">
+            {formulario.map(boton)}
           </div>
         </>
       )}
@@ -229,7 +254,9 @@ export function CabeceraPipeline({
    */
   desgloseDelRango?: boolean;
   /**
-   * La fila de íconos de canal (`canalDeMesa.ts`), sólo de campaña. `elegido: null`
+   * La fila de íconos de canal (`canalDeMesa.ts`): campaña y, desde el
+   * 13-sep-2026, también ventas — con su propia lista de `opciones`
+   * (`canalesDeLaMesa('ventas')`, que además incluye Formulario). `elegido: null`
    * = manda el canal del puente, y no se enciende ninguno. Ausente = no se dibuja.
    */
   canales?: { opciones: readonly CanalDeLaMesa[]; elegido: string | null; onElegir: (id: string) => void } | null;

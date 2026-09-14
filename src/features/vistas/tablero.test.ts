@@ -483,7 +483,7 @@ describe('repartirColumnas — el orden por luz es de ventas', () => {
     expect(mapa.get('contactado')!.map((t) => t.clave)).toEqual(['reciente-gris', 'vieja-verde']);
   });
 
-  test('ventas sigue igual: el verde sube', () => {
+  test('sin la opción, la función sigue ordenando por luz (el default; desde el 14-sep-2026 ningún tablero lo usa)', () => {
     expect(repartirColumnas(delServer, {}).get('contactado')!.map((t) => t.clave)).toEqual(['vieja-verde', 'reciente-gris']);
   });
 

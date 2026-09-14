@@ -7,10 +7,16 @@ import { semaforoDe, type EntradaSemaforo } from '../../dominio/semaforo';
 import type { FilaDesglose } from '../../dominio/desglose';
 import { TituloDeSeccion } from '../../components/TituloDeSeccion';
 import { CONTEOS_PROD_2026_09_10, DESGLOSE_PROD_2026_09_10 } from './galeriaDatosProd';
+import {
+  CONTEOS_PROD_2026_09_14,
+  DESGLOSE_POR_CANAL_HOY_PROD_2026_09_14,
+  DESGLOSE_POR_CANAL_PROD_2026_09_14,
+} from './galeriaDatosProdPorCanal';
 import { LEYENDA_SEMAFORO } from './resumen';
 import type { PuentePipeline } from './puentePipeline';
 import { esRecorteDelDia, type RecorteDelDia } from '../../dominio/recortesDelDia';
 import { tableroDeCampana } from './galeriaCampana';
+import { canalesDeLaMesa } from './canalDeMesa';
 
 /**
  * LA GALERÍA DEL PIPELINE — la evidencia de la ficha al costado, sin server ni base.
@@ -26,9 +32,17 @@ import { tableroDeCampana } from './galeriaCampana';
  *     …?supervisor=1    → las líneas dicen `veTodo`: la dueña en cada tarjeta y el filtro de la Lista
  *     …?rango=hoy       → toca ese rango de la fila de arriba (`hoy` · `d7`): `franjaEn=*`
  *     …?puente=sinRespuesta24h → abre como lo abre el Dashboard (`escribioHoy` · `sinRespuesta24h`)
- *     …?servidorViejo=1 → el tablero no publica `recortesDisponibles`: rango apagado, el puente avisa
+ *     …?servidorViejo=1 → el tablero no publica `recortesDisponibles` ni sabe `mesaPorCanal`: rango
+ *                          apagado, el puente avisa, las cards sin composición por canal
  *     …?campana=1       → el tablero de campaña, con lo medido de Betto y Américo (`galeriaCampana.ts`)
  *                          y `mesaPorCanal`; con `&servidorViejo=1`, sin él
+ *     …?canalVentas=<id> → toca ese ícono de la fila de canales EN VENTAS (`id` de `canalDeMesa.ts`,
+ *                          p. ej. `todos`, `instagram-mensaje` o `formulario`); ignorado con `?campana=1`
+ *
+ * Sin `?campana=1` es la mesa de la ESCUELA: las columnas con la foto de producción del 10-sep-2026
+ * (`galeriaDatosProd.ts`) y, con `mesaPorCanal=1` (las dos mesas lo piden desde el 14-sep), el
+ * desglose por canal medido en producción el 14-sep-2026 (`galeriaDatosProdPorCanal.ts`): la foto de
+ * 30 d y la de «Hoy»; bajo «7 d» se sirve la de 30 d, que no se midió.
  *
  * Existe por la regla dura #2, y sobre todo para poder mirar UNA cosa a
  * 1280×720: el `GRID` del tablero declara mínimos que suman **1.000 px** y la
@@ -518,6 +532,23 @@ function franjaDe(
 }
 
 /**
+ * El ícono de canal, en la galería de VENTAS: la misma regla del server
+ * (`canal === … && (!tipo || tipo === …)`), pero sobre las tarjetas que esta
+ * galería ya siembra —no hace falta la exclusión de `recorteDeCanalSql`
+ * porque acá sólo hay DOS pares reales, nunca tres a la vez.
+ */
+function filtradaPorCanal(
+  pagina: ReturnType<typeof paginaDe>,
+  canal: string,
+  tipo: string | null,
+): ReturnType<typeof paginaDe> {
+  const conversaciones = pagina.conversaciones.filter(
+    (c) => (c as { canal?: string }).canal === canal && (!tipo || (c as { tipo?: string }).tipo === tipo),
+  );
+  return { conversaciones, total: conversaciones.length, hayMas: false };
+}
+
+/**
  * La página de una columna: qué tarjetas y cuántas hay en total.
  *
  * ⚠️ EL STUB TIENE QUE RESPETAR EL RECORTE. Si devolviera siempre el total de la
@@ -605,15 +636,42 @@ window.fetch = (async (entrada: RequestInfo | URL) => {
     if (PARAMS.has('campana')) {
       return respuesta(tableroDeCampana(q, Date.now(), { servidorViejo: PARAMS.has('servidorViejo') }));
     }
+    // La fila de canales, TAMBIÉN EN VENTAS (13-sep-2026): `?canal=&tipo=` recorta
+    // las tarjetas de cada columna, igual que hace `conTodo` en el server real —
+    // sin esto, tocar un ícono de la galería no cambiaba nada y la evidencia
+    // hubiera mostrado la fila sin probar que filtra. Las únicas dos formas que
+    // esta galería siembra son `whatsapp`/`mensaje` (todas las tarjetas «reales») y
+    // `landing`/`lead` (los leads de formulario de «Te esperan»); los demás pares
+    // quedan en cero, que es la respuesta HONESTA — no hay Instagram ni Facebook
+    // sembrados en esta foto.
+    const canalPedido = q.get('canal');
+    const tipoPedido = q.get('tipo');
     const columnas: Record<string, unknown> = {};
     for (const pedida of (q.get('columnas') ?? '').split(',').filter(Boolean)) {
       const [etapa, recorte] = pedida.split(':');
-      columnas[etapa] = paginaDe(etapa, recorte, franjaDe(q, etapa));
+      const pagina = paginaDe(etapa, recorte, franjaDe(q, etapa));
+      columnas[etapa] = canalPedido ? filtradaPorCanal(pagina, canalPedido, tipoPedido) : pagina;
     }
+    /**
+     * `mesaPorCanal=1` (14-sep-2026, las dos mesas): el desglose POR CANAL medido en
+     * producción ese día (`galeriaDatosProdPorCanal.ts`) — la foto de «Hoy» cuando el
+     * rango pedido empieza hoy, la de 30 d para lo demás—, con sus conteos y la marca
+     * `mesaPorCanal: true` que el front lee para saber que es del rango. Un server
+     * viejo (`?servidorViejo=1`) no la conoce: contesta el desglose de siempre y las
+     * cards salen sin composición.
+     */
+    const porCanal = q.get('mesaPorCanal') === '1' && !PARAMS.has('servidorViejo');
+    const franjaGlobal = franjaDe(q, '*');
+    const deHoy = franjaGlobal?.enTodas === true && franjaGlobal.desde >= new Date().setHours(0, 0, 0, 0);
     return respuesta({
       columnas,
-      conteos: POR_ETAPA,
-      desglose: DESGLOSE,
+      conteos: porCanal ? CONTEOS_PROD_2026_09_14 : POR_ETAPA,
+      desglose: porCanal
+        ? deHoy
+          ? DESGLOSE_POR_CANAL_HOY_PROD_2026_09_14
+          : DESGLOSE_POR_CANAL_PROD_2026_09_14
+        : DESGLOSE,
+      ...(porCanal ? { mesaPorCanal: true } : {}),
       // La lista del server de #946, tal cual (`cola/recortesDeColumna.ts`).
       ...(PARAMS.has('servidorViejo')
         ? {}
@@ -815,6 +873,23 @@ if (PARAMS.has('rango')) {
   setTimeout(() => {
     [...document.querySelectorAll<HTMLElement>('section[aria-label="Resumen del tablero"] [role="group"][aria-label="Rango"] button')]
       .find((b) => b.textContent?.trim() === rotulo)
+      ?.click();
+  }, 900);
+}
+
+/**
+ * `?canalVentas=<id>` (13-sep-2026, enmienda del filtro por canal en ventas):
+ * toca ese ícono de la fila de canales EN VENTAS — el mismo `id` que ofrece
+ * `canalDeMesa.ts#canalesDeLaMesa('ventas')`, p. ej. `instagram-mensaje` o
+ * `formulario`. Ignorado con `?campana=1`: ahí la fila ya arranca en WhatsApp
+ * y se toca con los ids de campaña (sin Formulario).
+ */
+if (PARAMS.has('canalVentas') && !PARAMS.has('campana')) {
+  const id = PARAMS.get('canalVentas');
+  const rotulo = id === 'todos' ? 'Todos' : canalesDeLaMesa('ventas').find((c) => c.id === id)?.label;
+  setTimeout(() => {
+    [...document.querySelectorAll<HTMLElement>('section[aria-label="Resumen del tablero"] [role="group"][aria-label="Canal"] button')]
+      .find((b) => b.getAttribute('aria-label') === rotulo)
       ?.click();
   }, 900);
 }

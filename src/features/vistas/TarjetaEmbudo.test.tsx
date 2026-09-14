@@ -215,26 +215,42 @@ describe('TarjetaEmbudo — lo que el bot dijo', () => {
 });
 
 /**
- * EL SEMÁFORO EN LA TARJETA (#826, S.2) — el cableado: que la tarjeta LLAME al
- * degradado y muestre el `porque`. La regla de qué luz corresponde a qué señal
- * ya está probada en `dominio/semaforo.test.ts`; acá solo se mide que
- * `TarjetaEmbudo` no la ignore (ADR 0024: el defecto suele estar en el
- * cableado, no en la regla).
+ * EL SEMÁFORO EN LA TARJETA (#826, S.2) — el cableado: que la tarjeta PINTE la luz
+ * y muestre el `porque`. La regla de qué luz corresponde a qué señal ya está
+ * probada en `dominio/semaforo.test.ts`; acá solo se mide que `TarjetaEmbudo` no
+ * la ignore (ADR 0024: el defecto suele estar en el cableado, no en la regla).
+ * Del 8 al 13-sep-2026 la luz fue un degradado de fondo (`tarjeta-semaforo--*`);
+ * desde la maqueta que eligió el dueño es un filete izquierdo (`data-luz`), en
+ * campaña primero y en ventas desde el 14-sep.
  */
 describe('TarjetaEmbudo — el semáforo del lead', () => {
-  it('una tarjeta verde lleva la clase del degradado', () => {
+  it('🔴 una tarjeta verde de ventas lleva el filete de su luz, sin degradado', () => {
     const { tarjeta } = pintar({ c: { ...BASE, luz: 'verde', porque: 'preguntó precio' } });
-    expect(tarjeta.className).toContain('tarjeta-semaforo--verde');
+    expect(tarjeta.getAttribute('data-luz')).toBe('verde');
+    expect(tarjeta.className).toContain('border-l-sem-verde');
+    expect(tarjeta.className).not.toMatch(/tarjeta-semaforo--(verde|ambar|rojo)/);
   });
 
-  it('una tarjeta gris NO lleva ninguna clase de degradado (D2: todos llegan grises)', () => {
+  it('una tarjeta gris lleva el filete gris (D2: todos llegan grises)', () => {
     const { tarjeta } = pintar({ c: { ...BASE, luz: 'gris', porque: 'llegó, todavía no contestó' } });
-    expect(tarjeta.className).not.toMatch(/tarjeta-semaforo--/);
+    expect(tarjeta.getAttribute('data-luz')).toBe('gris');
+    expect(tarjeta.className).toContain('border-l-sem-gris');
   });
 
-  it('sin `luz` (server sin S.1) tampoco lleva clase: no se inventa un color', () => {
+  it('sin `luz` (server sin S.1) el filete es gris: no se inventa un color', () => {
     const { tarjeta } = pintar();
-    expect(tarjeta.className).not.toMatch(/tarjeta-semaforo--/);
+    expect(tarjeta.getAttribute('data-luz')).toBe('gris');
+    expect(tarjeta.className).not.toMatch(/border-l-sem-(verde|ambar|rojo)/);
+  });
+
+  /** El nuevo diseño en ventas (14-sep-2026): el canal al lado del nombre, no encima del avatar. */
+  it('🔴 el canal se lee junto al nombre, en las dos mesas', () => {
+    const ventas = pintar();
+    expect(ventas.contenedor.querySelector('[role="img"][aria-label="WhatsApp"]')).not.toBeNull();
+    vista?.desmontar();
+    vista = null;
+    const campana = pintar({ esDeCampana: true });
+    expect(campana.contenedor.querySelector('[role="img"][aria-label="WhatsApp"]')).not.toBeNull();
   });
 
   it('el `porque` se lee bajo el nombre, en texto', () => {
@@ -311,8 +327,8 @@ describe('TarjetaEmbudo — a quién está asignada', () => {
 /**
  * EL DISEÑO DE CAMPAÑA (13-sep-2026, la maqueta que eligió el dueño): «el color
  * aparece SÓLO como señal». La luz deja de ser un degradado de fondo con el borde
- * entero teñido y pasa a ser un filete izquierdo sobre una tarjeta blanca. Ventas
- * conserva su degradado: lo fijan los tests de arriba.
+ * entero teñido y pasa a ser un filete izquierdo sobre una tarjeta blanca. Desde el
+ * 14-sep-2026 es la tarjeta de las DOS mesas (los tests de arriba lo fijan en ventas).
  */
 describe('TarjetaEmbudo — en campaña la luz es un filete, no un fondo', () => {
   it('🔴 una tarjeta verde de campaña es blanca con el filete de su luz, sin degradado', () => {

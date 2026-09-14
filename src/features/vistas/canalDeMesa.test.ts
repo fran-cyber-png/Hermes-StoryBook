@@ -128,6 +128,19 @@ describe('conteoPorCanal — «cuántos de wspp, cuántos de fb o ig hay en cada
     expect(conteoPorCanal(DESGLOSE_POR_CANAL, 'contactado')!.map((c) => c.n)).toEqual([40, 0, 0, 0, 0]);
   });
 
+  /** En ventas la composición de la card ofrece lo mismo que su fila: los cinco más Formulario (14-sep-2026). */
+  test('🔴 con `modulo: ventas` cuenta también Formulario, al final, con los `landing`', () => {
+    expect(conteoPorCanal(DESGLOSE_POR_CANAL, 'interesado', 'ventas')!.map((c) => [c.id, c.n])).toEqual([
+      ['whatsapp', 12],
+      ['instagram-mensaje', 7],
+      ['messenger', 4],
+      ['facebook', 900],
+      ['instagram-comentario', 300],
+      ['formulario', 2],
+    ]);
+    expect(conteoPorCanal(DESGLOSE_POR_CANAL, 'interesado', 'campana')!.map((c) => c.id)).not.toContain('formulario');
+  });
+
   /**
    * 🔴 LA REGLA DEL `tipo` ES LA DEL SERVER (#37): con ella el server recorta cada
    * columna, y si la suma por canal usara otra, la card diría una cifra y la columna
@@ -150,5 +163,77 @@ describe('conteoPorCanal — «cuántos de wspp, cuántos de fb o ig hay en cada
     const viejo: FilaDesglose[] = [{ etapa: 'interesado', yaLeHablamos: false, precio: false, viva: false, n: 12 }];
     expect(conteoPorCanal(viejo, 'interesado')).toBeNull();
     expect(conteoPorCanal(undefined, 'interesado')).toBeNull();
+  });
+});
+
+/**
+ * ══ Y EN VENTAS, EL MISMO FILTRO (enmienda del 13-sep-2026) ═══════════════════
+ *
+ * Pedido textual del dueño: «quiero asegurar goberna ventas escuela, también
+ * aplicarle el filtro ig fb». Decisiones del orquestador: «Todos» de arranque
+ * (para que el tablero de ventas se siga pidiendo IGUAL sin tocar nada; campaña
+ * sigue en WhatsApp), y Formulario SÍ entra (la Escuela recibe leads de
+ * landings; campaña sigue sin él). `canalesDeLaMesa()`/`alcanceDeCanal(id,
+ * puente)` de DOS argumentos siguen siendo la mesa de campaña —default
+ * `modulo: 'campana'`— así que todo lo de arriba sigue en pie sin tocarlo.
+ */
+describe('canalesDeLaMesa(\'ventas\') — los mismos cinco, más Formulario', () => {
+  test('🔴 los cinco de campaña, en el mismo orden, y Formulario al final', () => {
+    const deVentas = canalesDeLaMesa('ventas').map((c) => c.id);
+    const deCampana = canalesDeLaMesa('campana').map((c) => c.id);
+    expect(deVentas).toEqual([...deCampana, 'formulario']);
+  });
+
+  test('🔴 campaña (con o sin argumento) sigue sin Formulario: no es una segunda lista que pueda divergir', () => {
+    expect(canalesDeLaMesa().map((c) => c.id)).toEqual(canalesDeLaMesa('campana').map((c) => c.id));
+    expect(canalesDeLaMesa('campana').map((c) => c.id)).not.toContain('formulario');
+  });
+
+  test('Formulario va en su propio grupo, ni «mensajes» ni «comentarios»', () => {
+    const formulario = canalesDeLaMesa('ventas').find((c) => c.id === 'formulario');
+    expect(formulario?.grupo).toBe('formulario');
+    expect(formulario?.canal).toBe('landing');
+    expect(formulario?.tipo).toBeNull();
+  });
+
+  test('cada ícono de ventas también dice QUÉ trae, y ninguno se repite', () => {
+    const ayudas = canalesDeLaMesa('ventas').map(ayudaDeCanal);
+    expect(ayudas.every((a) => a.length > 10)).toBe(true);
+    expect(new Set(ayudas).size).toBe(ayudas.length);
+  });
+});
+
+describe('alcanceDeCanal(id, puente, \'ventas\') — qué le pide ventas al server', () => {
+  test('🔴 sin elegir nada, el alcance de ventas es el de «Todos»: no recorta', () => {
+    expect(alcanceDeCanal(TODOS_LOS_CANALES, null, 'ventas')).toBeNull();
+  });
+
+  test('🔴 Formulario resuelve a `canal: landing`, sólo con `modulo: ventas`', () => {
+    expect(alcanceDeCanal('formulario', null, 'ventas')).toEqual({ canal: 'landing', tipo: null });
+    // Sin el módulo (el default, campaña) sigue sin ofrecerlo — la regla vieja
+    // de «un id que la mesa no ofrece no recorta» no cambió, sólo ganó un caso.
+    expect(alcanceDeCanal('formulario', null)).toBeNull();
+  });
+
+  test('los cinco pares de campaña resuelven IGUAL en ventas: una sola tabla, no una copia', () => {
+    for (const id of ['whatsapp', 'instagram-mensaje', 'messenger', 'facebook', 'instagram-comentario']) {
+      expect(alcanceDeCanal(id, null, 'ventas')).toEqual(alcanceDeCanal(id, null, 'campana'));
+    }
+  });
+
+  test('el canal del puente le sigue ganando al ícono, en ventas también', () => {
+    expect(alcanceDeCanal('formulario', 'instagram', 'ventas')).toEqual({ canal: 'instagram', tipo: 'mensaje' });
+  });
+});
+
+describe('filasDelCanal — Formulario también filtra el desglose (cuando ventas lo use)', () => {
+  test('🔴 Formulario se queda con los `landing`, y ningún chat ni comentario se cuela', () => {
+    const conFormularios: FilaDesglose[] = [
+      ...DESGLOSE_POR_CANAL,
+      filaDe('interesado', 'landing', 'lead', 5),
+    ];
+    const soloFormulario = filasDelCanal(conFormularios, alcanceDeCanal('formulario', null, 'ventas'));
+    expect(soloFormulario!.map((f) => f.n)).toEqual([2, 5]);
+    expect(soloFormulario!.every((f) => f.canal === 'landing')).toBe(true);
   });
 });

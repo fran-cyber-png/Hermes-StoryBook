@@ -56,7 +56,9 @@ function tarjeta(etapa: string, luz: 'verde' | 'gris', i: number) {
 function desgloseDe(etapas: readonly string[]) {
   return etapas.flatMap((etapa) => [
     { etapa, yaLeHablamos: true, precio: false, viva: false, ventana: false, paraSeguir: false, luz: 'verde', nacioHoy: true, n: 1 },
-    { etapa, yaLeHablamos: true, precio: false, viva: false, ventana: false, paraSeguir: true, luz: 'gris', nacioHoy: etapa === 'interesado', n: 1 },
+    // La gris de «Te esperan» está SIN ABRIR (nadie le contestó nunca): es lo que la
+    // card de ventas cuenta como «1 sin abrir».
+    { etapa, yaLeHablamos: etapa !== 'interesado', precio: false, viva: false, ventana: false, paraSeguir: true, luz: 'gris', nacioHoy: etapa === 'interesado', n: 1 },
   ]);
 }
 
@@ -238,10 +240,11 @@ async function montarTablero(props: Partial<Parameters<typeof VistaEmbudo>[0]> =
 }
 
 /**
- * EL CANAL DE LA MESA DE CAMPAÑA (13-sep-2026) — una fila de íconos que recorta las
- * cinco columnas, y SÓLO en campaña («estamos haciendo exclusivamente para campaña»,
- * Betto y Américo). Lo puro (`canalDeMesa.ts`) dice qué viaja; acá se fija que TOCAR
- * lo mande, que la mesa de campaña arranque en WhatsApp, y que ventas no cambie.
+ * EL CANAL DE LA MESA (13-sep-2026) — una fila de íconos que recorta las cinco
+ * columnas. Nació SÓLO para campaña («estamos haciendo exclusivamente para campaña»,
+ * Betto y Américo); desde el 14-sep está en las dos mesas (el `describe` de ventas,
+ * abajo). Lo puro (`canalDeMesa.ts`) dice qué viaja; acá se fija que TOCAR lo mande y
+ * que la mesa de campaña arranque en WhatsApp, sin Formulario.
  */
 describe('VistaEmbudo — el canal (campaña)', () => {
   const iconos = () => resumen()?.querySelector<HTMLElement>('[role="group"][aria-label="Canal"]');
@@ -301,11 +304,20 @@ describe('VistaEmbudo — el canal (campaña)', () => {
     expect(icono('WhatsApp')?.textContent).toBe('');
   });
 
-  it('🔴 en ventas no hay fila de canales, y el tablero se pide sin canal', async () => {
+  /**
+   * 🔴 **ENMENDADO DOS VECES.** Hasta el 13-sep-2026 ventas no tenía fila de canales;
+   * ese día entró con «Todos» de arranque (#1073, que vivió un día en `desarrollo`),
+   * y el 14-sep el dueño pidió «los filtros y el nuevo diseño a escuela ventas»
+   * arrancando en WhatsApp, como campaña. Lo que se fija: la fila está, arranca en
+   * WhatsApp y el tablero se pide con el canal Y el desglose por canal — la mecánica
+   * es una sola en las dos mesas.
+   */
+  it('🔴 en ventas TAMBIÉN hay fila de canales, arranca en WhatsApp y pide el desglose por canal', async () => {
     await montarTablero();
-    expect(iconos()).toBeNull();
-    expect(delTablero().every((q) => q.get('canal') == null)).toBe(true);
-    expect(delTablero().every((q) => q.get('mesaPorCanal') == null), 'ventas no pide el desglose por canal').toBe(true);
+    expect(iconos()).not.toBeNull();
+    expect(icono('WhatsApp')?.getAttribute('aria-pressed')).toBe('true');
+    expect(delTablero().every((q) => q.get('canal') === 'whatsapp' && q.get('tipo') == null)).toBe(true);
+    expect(delTablero().every((q) => q.get('mesaPorCanal') === '1'), 'ventas pide el desglose por canal').toBe(true);
   });
 
   /** Regla del dueño, 13-sep-2026: «no debería decir preguntó precio en ningún caso para campaña». */
@@ -316,11 +328,131 @@ describe('VistaEmbudo — el canal (campaña)', () => {
 });
 
 /**
- * LAS CARDS DE LAS COLUMNAS DE CAMPAÑA (pedido del dueño, 13-sep-2026): «en cada
- * tarjeta superior debería decir cuántos de wspp cuántos de fb o ig hay en cada
- * columna». La cifra grande es la del canal elegido; la fila de abajo, la
- * composición de TODOS los canales de esa etapa, con el elegido resaltado. Y en «Te
- * esperan», «N nuevas hoy · N respondidos». Ventas conserva su cabecera de siempre.
+ * EL MISMO CANAL DE LA MESA, TAMBIÉN EN VENTAS (13-sep-2026 con «Todos», #1073; desde
+ * el 14-sep como campaña, ADR 0103 §9). Pedido del dueño: «falta los filtros y el nuevo
+ * diseño a escuela ventas, ajustémoslo bien» — WhatsApp de arranque y orden por tiempo.
+ * Lo que NO cambia en ventas: las columnas de siempre, «preguntó precio», el reloj de
+ * arena de la ventana y los chips de la Escuela. Lo que suma frente a campaña:
+ * «Formulario», el par `landing`.
+ */
+describe('VistaEmbudo — el canal (ventas)', () => {
+  const iconos = () => resumen()?.querySelector<HTMLElement>('[role="group"][aria-label="Canal"]');
+  const icono = (rotulo: string) =>
+    [...(iconos()?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((b) => b.getAttribute('aria-label') === rotulo);
+
+  it('🔴 ventas ofrece los mismos cinco de campaña, en el mismo orden, más Formulario al final', async () => {
+    await montarTablero();
+    const rotulos = [...(iconos()?.querySelectorAll('button') ?? [])].map((b) => b.getAttribute('aria-label'));
+    expect(rotulos).toEqual([
+      'Todos',
+      'WhatsApp',
+      'Mensajes de Instagram',
+      'Messenger',
+      'Comentarios de Facebook',
+      'Comentarios de Instagram',
+      'Formulario',
+    ]);
+  });
+
+  it('🔴 cada ícono pide su par canal · tipo con `mesaPorCanal=1`, y «Todos» no recorta', async () => {
+    await montarTablero();
+    // WhatsApp va al final: es con el que arranca, y tocarlo de entrada no pide nada nuevo.
+    const casos: [string, string | null, string | null][] = [
+      ['Mensajes de Instagram', 'instagram', 'mensaje'],
+      ['Messenger', 'facebook', 'mensaje'],
+      ['Comentarios de Facebook', 'facebook', 'comentario'],
+      ['Comentarios de Instagram', 'instagram', 'comentario'],
+      ['Formulario', 'landing', null],
+      ['Todos', null, null],
+      ['WhatsApp', 'whatsapp', null],
+    ];
+    for (const [rotulo, canal, tipo] of casos) {
+      const antes = delTablero().length;
+      tocar(icono(rotulo)!);
+      await esperarA(
+        () => delTablero().slice(antes).some((q) => q.get('canal') === canal && q.get('tipo') === tipo),
+        `el tablero de ventas pedido con «${rotulo}»`,
+      );
+      expect(icono(rotulo)?.getAttribute('aria-pressed'), rotulo).toBe('true');
+    }
+    expect(delTablero().every((q) => q.get('mesaPorCanal') === '1'), 'ventas pide siempre el desglose por canal').toBe(true);
+  });
+
+  /**
+   * 🔴 **EL TEST QUE SOSTIENE LA DECISIÓN**: elegir un ícono en ventas tiene que
+   * sacar de encima las tarjetas de otro canal, no sólo cambiar la URL — a
+   * diferencia de la fake de `beforeEach` (que no separa conversaciones por
+   * canal, porque eso lo prueban el desglose y sus cards), ésta sí reparte las
+   * tarjetas por canal: es lo más parecido a lo que hace `recorteDeCanalSql` en
+   * el server con `?canal=&tipo=`. Al entrar, sólo las de WhatsApp.
+   */
+  it('🔴 arranca con las tarjetas de WhatsApp; «Todos» trae las demás y elegir «Instagram» las vuelve a sacar', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+        pedidos.push(url);
+        if (url.includes('/api/conversaciones/tablero')) {
+          const q = new URL(url, 'http://hermes.test').searchParams;
+          const canalPedido = q.get('canal');
+          const tipoPedido = q.get('tipo');
+          const columnas: Record<string, unknown> = {};
+          const etapas = (q.get('columnas') ?? '').split(',').map((pedida) => pedida.split(':')[0]!);
+          for (const etapa of etapas) {
+            // El server real recorta el `todo` ENTERO por canal (`conTodo`, sin
+            // `mesaPorCanal`): acá se simula lo mismo, una de WhatsApp y otra
+            // de Instagram por etapa.
+            const todas = [
+              { ...tarjeta(etapa, 'verde', 0), canal: 'whatsapp', tipo: 'mensaje' },
+              { ...tarjeta(etapa, 'gris', 1), canal: 'instagram', tipo: 'mensaje' },
+            ];
+            const conversaciones = todas.filter(
+              (t) => (!canalPedido || t.canal === canalPedido) && (!tipoPedido || t.tipo === tipoPedido),
+            );
+            columnas[etapa] = { conversaciones, total: conversaciones.length, hayMas: false };
+          }
+          // Un desglose NO VACÍO (aunque ventas no lo filtre por canal): con
+          // `desglose: []` el tablero se lee «vacío» (`VistaEmbudo#tableroVacio`)
+          // y ni siquiera dibuja las columnas — lo mostró este mismo test en rojo.
+          return responder({
+            columnas,
+            conteos: Object.fromEntries(etapas.map((e) => [e, 2])),
+            desglose: desgloseDe(etapas),
+          });
+        }
+        if (url.includes('/api/whatsapp/lineas')) return responder({ lineas: [], veTodo: false });
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }) as unknown as typeof fetch,
+    );
+    vista = montar(<VistaEmbudo onAbrir={vi.fn()} />);
+    const verFicha = (nombre: string) => document.querySelector(`[aria-label="Ver la ficha de ${nombre}"]`);
+    await esperarA(() => tarjetas().length === 5, 'las cinco tarjetas de WhatsApp, con las que arranca');
+    expect(verFicha('Persona interesado 0'), 'la de WhatsApp, al entrar').not.toBeNull();
+    expect(verFicha('Persona interesado 1'), 'la de Instagram no entra con WhatsApp puesto').toBeNull();
+
+    tocar(icono('Todos')!);
+    await esperarA(() => tarjetas().length === 10, 'las diez tarjetas de ventas (whatsapp + instagram)');
+    expect(verFicha('Persona interesado 0'), 'la de WhatsApp, con «Todos»').not.toBeNull();
+    expect(verFicha('Persona interesado 1'), 'la de Instagram, con «Todos»').not.toBeNull();
+
+    tocar(icono('Mensajes de Instagram')!);
+    await esperarA(
+      () => delTablero().some((q) => q.get('canal') === 'instagram' && q.get('tipo') === 'mensaje'),
+      'el tablero de ventas pedido con Instagram',
+    );
+    await esperarA(() => tarjetas().length === 5, 'sólo las cinco tarjetas de Instagram');
+    expect(verFicha('Persona interesado 0'), 'la de WhatsApp desapareció').toBeNull();
+    expect(verFicha('Persona interesado 1'), 'la de Instagram sigue').not.toBeNull();
+  });
+});
+
+/**
+ * LAS CARDS DE LAS COLUMNAS (pedido del dueño, 13-sep-2026): «en cada tarjeta superior
+ * debería decir cuántos de wspp cuántos de fb o ig hay en cada columna». La cifra
+ * grande es la del canal elegido; la fila de abajo, la composición de TODOS los
+ * canales de esa etapa, con el elegido resaltado. Y en «Te esperan», lo del día:
+ * «N nuevas hoy · N respondidos» en campaña, «N nuevas hoy · N sin abrir» en ventas
+ * (desde el 14-sep-2026, «el nuevo diseño a escuela ventas»).
  */
 describe('VistaEmbudo — las cards de las columnas (campaña)', () => {
   const card = (titulo: string) => columna(titulo)?.querySelector<HTMLElement>('[data-card-columna]');
@@ -390,11 +522,23 @@ describe('VistaEmbudo — las cards de las columnas (campaña)', () => {
     expect(card('Te esperan')?.textContent).toMatch(/respondidos · 30 d/);
   });
 
-  it('🔴 en ventas no hay card: «Te esperan» conserva su cabecera y su desglose', async () => {
+  /**
+   * 🔴 VENTAS TAMBIÉN (14-sep-2026): las cinco columnas de la Escuela son cards, con
+   * Formulario en la composición, y «Te esperan» dice «N nuevas hoy · N sin abrir» —
+   * lo suyo, no «respondidos» (que en ventas sería «Contestaron», la columna de al
+   * lado) ni «volvieron» ni «ahora».
+   */
+  it('🔴 en ventas cada columna es una card, la composición suma Formulario y «Te esperan» dice «nuevas hoy · sin abrir»', async () => {
     await montarTablero();
-    expect(document.querySelectorAll('[data-card-te-esperan]')).toHaveLength(0);
-    expect(document.querySelectorAll('[data-card-columna]')).toHaveLength(0);
-    expect(columna('Te esperan')?.querySelector('header')?.textContent).toMatch(/volvieron/);
+    expect(document.querySelectorAll('[data-card-columna]')).toHaveLength(5);
+    expect(card('Contestaron')?.querySelector('[data-cifra-columna]')?.textContent).toBe('2');
+    expect(conteo('Contestaron', 'whatsapp')?.getAttribute('data-elegido')).toBe('true');
+    expect(conteo('Contestaron', 'facebook')?.textContent).toMatch(/(^|\D)3(\D|$)/);
+    expect(conteo('Contestaron', 'formulario')?.textContent).toMatch(/(^|\D)0(\D|$)/);
+    const texto = columna('Te esperan')?.querySelector('[data-card-te-esperan]')?.textContent ?? '';
+    expect(texto).toMatch(/(^|\D)2\s*nuevas hoy/);
+    expect(texto).toMatch(/(^|\D)1\s*sin abrir/);
+    expect(texto).not.toMatch(/respondid|volvieron|ahora/);
   });
 });
 
@@ -421,7 +565,7 @@ describe('VistaEmbudo — la fila de arriba', () => {
 
     expect(verdes!.getAttribute('aria-pressed')).toBe('true');
     expect(tarjetas()).toHaveLength(5);
-    expect(tarjetas().every((t) => t.className.includes('tarjeta-semaforo--verde'))).toBe(true);
+    expect(tarjetas().every((t) => t.getAttribute('data-luz') === 'verde')).toBe(true);
 
     tocar(verdes!);
     expect(tarjetas()).toHaveLength(10);
@@ -436,18 +580,26 @@ describe('VistaEmbudo — la fila de arriba', () => {
     expect(chipsTodas()).toHaveLength(0);
   });
 
-  it('🔴 cada columna dice cuántas de las suyas son nuevas hoy, junto a su total', async () => {
+  /**
+   * «N hoy» vivía en las cinco cabeceras (10-sep-2026). Con la card (14-sep) lo dice
+   * sólo «Te esperan», como en campaña: en las demás la cifra grande YA es la del rango
+   * puesto, y la mesa arranca en «Hoy».
+   */
+  it('🔴 «Te esperan» dice cuántas de las suyas son nuevas hoy; las demás cards no lo repiten', async () => {
     await montarTablero();
     for (const col of COLUMNAS_TRABAJO) {
-      const esperado = col.id === 'interesado' ? /(^|\D)2\s*hoy/ : /(^|\D)1\s*hoy/;
-      expect(columna(col.titulo)?.querySelector('header')?.textContent, `«${col.titulo}»`).toMatch(esperado);
+      const texto = columna(col.titulo)?.querySelector('header')?.textContent ?? '';
+      if (col.id === 'interesado') expect(texto, `«${col.titulo}»`).toMatch(/(^|\D)2\s*nuevas hoy/);
+      else expect(texto, `«${col.titulo}»`).not.toMatch(/hoy/);
     }
   });
 
-  it('🔴 con «Verdes» puesto, el «N hoy» de cada columna cuenta sólo las verdes', async () => {
+  it('🔴 con «Verdes» puesto, la card de «Te esperan» calla lo del día: describe otra lista', async () => {
     await montarTablero();
     tocar(botonDelResumen('Verdes')!);
-    expect(columna('Te esperan')?.querySelector('header')?.textContent).toMatch(/(^|\D)1\s*hoy/);
+    const texto = columna('Te esperan')?.querySelector('header')?.textContent ?? '';
+    expect(texto).not.toMatch(/nuevas hoy|sin abrir/);
+    expect(columna('Te esperan')?.querySelector('[data-cifra-columna]')?.textContent).toBe('1');
   });
 
   it('🔴 le dice al server desde cuándo es «hoy» para quien mira: sin eso, `nacioHoy` no llega', async () => {
@@ -579,20 +731,37 @@ describe('VistaEmbudo — la fila de arriba', () => {
   });
 
   /**
-   * «Sin abrir» y «volvieron» salen del desglose de 30 días, igual que la leyenda.
-   * Con un rango puesto se leían como parte de la lista de hoy («48 de 1.109 · 877
-   * sin abrir»): lo mostró la captura con los totales medidos.
+   * «Sin abrir» salía del desglose de 30 días, y con un rango puesto se leía como
+   * parte de la lista de hoy («48 de 1.109 · 877 sin abrir»: lo mostró la captura con
+   * los totales medidos). Con `mesaPorCanal` (14-sep-2026 en ventas) el desglose ES
+   * del rango, así que la card lo dice en cualquier rango y es cierto; con un server
+   * viejo sigue callando bajo un rango, como antes.
    */
-  it('🔴 con un rango puesto, «Te esperan» no dice su desglose de 30 días debajo de la lista de hoy', async () => {
+  it('🔴 con «Hoy» puesto y el desglose del rango, «Te esperan» dice los «sin abrir» DE HOY', async () => {
     servidorConRecortes = true;
     await montarTablero({}, 5); // arranca en «Hoy»: la fake sirve sólo las verdes
-    const cabecera = () => columna('Te esperan')?.querySelector('header')?.textContent ?? '';
+    const card = () => columna('Te esperan')?.querySelector('[data-card-te-esperan]')?.textContent ?? '';
     await esperarA(() => tarjetas().length === 5, 'la mesa de hoy, con la que arranca');
-    expect(cabecera()).not.toMatch(/sin abrir|volvieron/);
+    // La verde de hoy ya tiene respuesta: cero sin abrir, y se dice — es la foto del rango.
+    expect(card()).toMatch(/(^|\D)0\s*sin abrir/);
 
     tocar(botonDelResumen('30 d')!);
     await esperarA(() => tarjetas().length === 10, 'la mesa de 30 días');
-    expect(cabecera(), 'sin rango, la columna dice su desglose').toMatch(/volvieron/);
+    expect(card()).toMatch(/(^|\D)1\s*sin abrir/);
+    expect(card()).not.toMatch(/volvieron|ahora/);
+  });
+
+  it('con un server viejo (desglose de 30 d) «sin abrir» calla bajo un rango y vuelve en «30 d»', async () => {
+    servidorConRecortes = true;
+    servidorConMesaPorCanal = false;
+    await montarTablero({}, 5); // arranca en «Hoy»: la fake sirve sólo las verdes
+    const card = () => columna('Te esperan')?.querySelector('[data-card-te-esperan]')?.textContent ?? '';
+    await esperarA(() => tarjetas().length === 5, 'la mesa de hoy, con la que arranca');
+    expect(card()).not.toMatch(/sin abrir/);
+
+    tocar(botonDelResumen('30 d')!);
+    await esperarA(() => tarjetas().length === 10, 'la mesa de 30 días');
+    expect(card(), 'sin rango, la card dice su desglose').toMatch(/(^|\D)1\s*sin abrir/);
   });
 
   /**
@@ -613,21 +782,33 @@ describe('VistaEmbudo — la fila de arriba', () => {
     expect(card()).toMatch(/(^|\D)2\s*respondidos · 30 d/);
   });
 
-  it('🔴 con un rango puesto la leyenda DICE que cuenta 30 d, y tocar una luz NO cambia el rango (ni cambiar el rango la luz)', async () => {
+  it('🔴 con un rango puesto, tocar una luz NO cambia el rango (ni cambiar el rango la luz); y con el desglose del rango la leyenda ya no dice «30 d»', async () => {
     servidorConRecortes = true;
     await montarTablero({}, 5); // arranca en «Hoy»: la fake sirve sólo las verdes
     await esperarA(() => tarjetas().length === 5 && leyenda() != null, 'la mesa de hoy con su leyenda');
 
-    expect(leyenda()?.textContent).toMatch(/30 d/);
+    // Con `mesaPorCanal` el desglose es del rango también en ventas (14-sep-2026): la
+    // leyenda cuenta lo que se ve y dejó de avisar «En 30 d». Con un server viejo lo
+    // sigue diciendo (lo fija el test de campaña de arriba, con la misma fake).
+    expect(leyenda()?.textContent).not.toMatch(/30 d/);
     expect(chipsTodas()).toHaveLength(0);
 
-    // «Marco Hoy y toco Verdes»: antes esto mandaba la mesa a 30 días.
+    // En «Hoy» la fake sirve sólo verdes, y la regla del cero no ofrece un recorte que
+    // no recorta nada: la luz se toca en «30 d» (5 de 10) y después se cambia el rango
+    // con ella puesta. «Marco una luz y cambio el rango»: antes esto la apagaba.
+    tocar(botonDelResumen('30 d')!);
+    await esperarA(() => tarjetas().length === 10, 'la mesa de 30 días');
     tocar(botonDelResumen('Verdes')!);
     await reposar();
-    expect(botonDelResumen('Hoy')?.getAttribute('aria-pressed')).toBe('true');
+    expect(botonDelResumen('30 d')?.getAttribute('aria-pressed')).toBe('true');
     expect(botonDelResumen('Verdes')?.getAttribute('aria-pressed')).toBe('true');
 
-    // Y al revés: con Verdes puesto, pasar a 7 d lo conserva.
+    // Con Verdes puesto, volver a «Hoy» la conserva…
+    tocar(botonDelResumen('Hoy')!);
+    await esperarA(() => botonDelResumen('Verdes')?.getAttribute('aria-pressed') === 'true', '«Verdes» sigue puesto en Hoy');
+    expect(botonDelResumen('Hoy')?.getAttribute('aria-pressed')).toBe('true');
+
+    // …y pasar a 7 d también.
     tocar(botonDelResumen('7 d')!);
     // Se espera la leyenda del rango nuevo: mientras carga no se dibuja. Si el
     // rango hubiera apagado la luz, «Verdes» volvería sin marcar y esto no pasa.
@@ -700,10 +881,10 @@ describe('VistaEmbudo — el tablero de campaña', () => {
     expect(primeraDe('Te esperan')).toBe('Ver la ficha de Persona interesado 1');
   });
 
-  it('ventas conserva el orden por luz: la verde sube', async () => {
+  it('🔴 en ventas tampoco reordena el color («por tiempo», dueño, 14-sep-2026): la gris más reciente queda arriba', async () => {
     grisPrimero = true;
     await montarTablero();
-    expect(primeraDe('Te esperan')).toBe('Ver la ficha de Persona interesado 0');
+    expect(primeraDe('Te esperan')).toBe('Ver la ficha de Persona interesado 1');
   });
 });
 

@@ -2,22 +2,26 @@ import type { AlcanceDeCanal } from '../../dominio/conversaciones';
 import type { FilaDesglose } from '../../dominio/desglose';
 
 /**
- * ══ EL CANAL DE LA MESA DE CAMPAÑA — la fila de íconos del Pipeline (13-sep-2026) ══
+ * ══ EL CANAL DE LA MESA — la fila de íconos del Pipeline (13-sep-2026) ══════════
  *
  * Pedido del dueño: «que se entienda que no faltan leads por contestar, son
  * comentarios». «Te esperan» mezclaba en una sola cifra los chats de WhatsApp,
  * los DMs y los COMENTARIOS de Facebook e Instagram, y un número de mil y pico
  * se leía como mil y pico personas esperando una respuesta por WhatsApp. Ahora
- * la mesa se mira canal por canal, y **arranca en WhatsApp**.
+ * la mesa se mira canal por canal, y **arranca en WhatsApp** — en las DOS mesas.
  *
- * 🔴 **SÓLO EN CAMPAÑA** («estamos haciendo exclusivamente para campaña», Betto y
- * Américo). El Pipeline de ventas no dibuja esta fila ni recorta por canal.
+ * 🔴 **NACIÓ SÓLO PARA CAMPAÑA** («estamos haciendo exclusivamente para campaña»,
+ * Betto y Américo, 13-sep-2026) y al día siguiente el dueño la pidió para la
+ * Escuela con el mismo diseño: «falta los filtros y el nuevo diseño a escuela
+ * ventas, ajustémoslo bien» (14-sep-2026). La mecánica es UNA —esta tabla, un
+ * solo `insigniaDe`, un solo `ayudaDeCanal`—; lo que cambia por módulo es la
+ * lista que se ofrece (`canalesDeLaMesa`), y nada más.
  *
  * 🔴 **UNA FILA, DOS GRUPOS** (decisión del dueño): primero los MENSAJES —WhatsApp,
  * Instagram, Messenger— y después los COMENTARIOS —Facebook, Instagram—. Instagram
  * se PARTE: el riel de Mensajes lo dejaba en un solo ícono (`tipo: null`) y eso
  * volvía a mezclar justo lo que esta fila existe para separar. Formulario no va
- * «todavía»: en campaña no hay landing de la Escuela.
+ * «todavía» EN CAMPAÑA: ahí no hay landing de la Escuela.
  *
  * ⚠️ **Por eso esta lista YA NO es `OPCIONES_CANAL`** (la del riel de Mensajes):
  * las dos pantallas ofrecen cosas distintas a propósito, y cambiar aquélla cambia
@@ -28,9 +32,43 @@ import type { FilaDesglose } from '../../dominio/desglose';
  * ⚠️ **No hay un canal `messenger` ni un canal `instagram-comentario`**: los ids son
  * de esta fila. Lo que viaja es el par (`canal`, `tipo`), igual que en el dato
  * (`interactions.canal` sólo admite facebook|instagram|whatsapp).
+ *
+ * ══ Y EN VENTAS, LA MISMA FILA MÁS FORMULARIO (13 y 14-sep-2026) ══════════════
+ *
+ * La Escuela reusa los CINCO pares de arriba tal cual y agrega el que campaña
+ * dejó afuera a propósito: acá SÍ hay landing (ADR 0051) y «Te esperan» ya
+ * mezcla sus leads con los chats, así que el mismo defecto que esta fila
+ * resolvió para campaña («¿de qué mil, si es otra cosa?») corre también acá.
+ *
+ * 🔴 **VENTAS TAMBIÉN ARRANCA EN WHATSAPP** (decisión del dueño, 14-sep-2026). La
+ * primera versión de la fila en ventas (#1073, 13-sep) arrancaba en «Todos» para
+ * que el tablero se pidiera byte a byte como antes mientras nadie tocara un ícono;
+ * duró un día en `desarrollo` y no llegó a producción: el dueño eligió WhatsApp,
+ * porque lo que se trabaja al abrir son los chats, en la Escuela igual que en la
+ * campaña. Quien pone el arranque es `VistaEmbudo` (`CANAL_INICIAL`), no esta lista.
+ *
+ * 🔴 **FORMULARIO ES `canal: 'landing'`, Y NO ES UNA MARCA.** No tiene disco de
+ * color (`BadgeCanal`: «landing NO está en CANAL, no tiene color de marca ni
+ * disco») ni un `tipo` que lo separe de nada — a diferencia de Instagram y
+ * Facebook, del lado de `leads` no hay comentarios que partir. Va en su PROPIO
+ * grupo (`grupo: 'formulario'`), no en «mensajes»: un formulario no es un DM,
+ * es lo contrario — nadie le escribió todavía (por eso ADR 0051 le dedica su
+ * propia píldora en la tarjeta, y no lo cuenta como chat).
+ *
+ * ⚠️ **Con WhatsApp puesto, los formularios NO están en «Te esperan»**: se caen
+ * del UNION con cualquier canal que no sea `landing` (la regla de ADR 0051 en el
+ * server). No es una pérdida, es el filtro haciendo lo que dice: los leads se ven
+ * en «Todos» y en su propio ícono, y la composición de la card los cuenta siempre.
+ *
+ * ⚠️ **`recorteDeCanalSql` (server) ya venía escrito pensando en esto**: filtra
+ * por exclusión (`tipo NOT IN ('mensaje','comentario')`) en vez de por
+ * igualdad, con su propio comentario explicando que escribirlo por igualdad
+ * «en ventas se comería los formularios de "Te esperan" sin un error». El
+ * server no se tocó para ventas — ya era genérico, y `mesaPorCanal=1` corre igual
+ * con el módulo `ventas` (sus tests usan ese default).
  */
 
-export type GrupoDeCanal = 'mensajes' | 'comentarios';
+export type GrupoDeCanal = 'mensajes' | 'comentarios' | 'formulario';
 
 export interface CanalDeLaMesa {
   id: string;
@@ -42,8 +80,9 @@ export interface CanalDeLaMesa {
    * 1280, y distinto en los dos Instagram por lo mismo que `label`.
    */
   corto: string;
-  canal: 'whatsapp' | 'facebook' | 'instagram';
-  /** `null` en WhatsApp: ahí no hay comentarios que separar. */
+  /** `landing` es Formulario (sólo en ventas): no es una red, es un lead sin conversación (ADR 0051). */
+  canal: 'whatsapp' | 'facebook' | 'instagram' | 'landing';
+  /** `null` en WhatsApp y en Formulario: ninguno de los dos separa comentario de mensaje. */
   tipo: 'mensaje' | 'comentario' | null;
   grupo: GrupoDeCanal;
 }
@@ -56,14 +95,34 @@ const CANALES_DE_CAMPANA: readonly CanalDeLaMesa[] = [
   { id: 'instagram-comentario', label: 'Comentarios de Instagram', corto: 'Comentarios IG', canal: 'instagram', tipo: 'comentario', grupo: 'comentarios' },
 ];
 
-/** Con qué canal abre la mesa de campaña: lo que se trabaja al entrar son los chats de WhatsApp. */
+/** El par que campaña deja afuera a propósito («Form no lo pongamos aún») y ventas sí ofrece. */
+const FORMULARIO: CanalDeLaMesa = {
+  id: 'formulario',
+  label: 'Formulario',
+  corto: 'Formulario',
+  canal: 'landing',
+  tipo: null,
+  grupo: 'formulario',
+};
+
+/** Los cinco de campaña, tal cual, más Formulario — nunca una segunda copia de los cinco. */
+const CANALES_DE_VENTAS: readonly CanalDeLaMesa[] = [...CANALES_DE_CAMPANA, FORMULARIO];
+
+/** Con qué canal abre la mesa, en los dos módulos: lo que se trabaja al entrar son los chats de WhatsApp. */
 export const CANAL_INICIAL = 'whatsapp';
 
 /** El ícono que no recorta. No es un canal: es la suma. */
 export const TODOS_LOS_CANALES = 'todos';
 
-export function canalesDeLaMesa(): readonly CanalDeLaMesa[] {
-  return CANALES_DE_CAMPANA;
+/**
+ * Qué íconos ofrece la mesa de ESTE módulo.
+ *
+ * `modulo` es opcional y por defecto `'campana'` — así ningún llamador viejo
+ * (ni sus tests) se entera de que ventas existe: `canalesDeLaMesa()` sigue
+ * siendo exactamente la lista de campaña, sin Formulario.
+ */
+export function canalesDeLaMesa(modulo: 'ventas' | 'campana' = 'campana'): readonly CanalDeLaMesa[] {
+  return modulo === 'ventas' ? CANALES_DE_VENTAS : CANALES_DE_CAMPANA;
 }
 
 /**
@@ -74,12 +133,22 @@ export function canalesDeLaMesa(): readonly CanalDeLaMesa[] {
  * Pipeline con los DMs que no entraron por ninguna línea, y su cifra cuenta DMs
  * — por eso va con `tipo=mensaje`.
  *
- * Un id que la mesa no ofrece (Formulario, un valor viejo) no recorta: nunca se
- * inventa un canal que no está en la lista.
+ * Un id que la mesa de ESE módulo no ofrece (un valor viejo, o «Formulario» sin
+ * `modulo: 'ventas'`) no recorta: nunca se inventa un canal que no está en su
+ * lista. `modulo` por defecto `'campana'`, como `canalesDeLaMesa` — mismo motivo.
+ *
+ * El resultado sólo dice QUÉ par pedir. Viaja como `?canal=&tipo=` junto con
+ * `mesaPorCanal=1` en los dos módulos (`VistaEmbudo`): el par recorta las
+ * columnas y la marca hace que el desglose venga por canal, para la composición
+ * de cada card.
  */
-export function alcanceDeCanal(elegido: string, delPuente: 'facebook' | 'instagram' | null): AlcanceDeCanal | null {
+export function alcanceDeCanal(
+  elegido: string,
+  delPuente: 'facebook' | 'instagram' | null,
+  modulo: 'ventas' | 'campana' = 'campana',
+): AlcanceDeCanal | null {
   if (delPuente) return { canal: delPuente, tipo: 'mensaje' };
-  const elegida = CANALES_DE_CAMPANA.find((c) => c.id === elegido);
+  const elegida = canalesDeLaMesa(modulo).find((c) => c.id === elegido);
   return elegida ? { canal: elegida.canal, tipo: elegida.tipo } : null;
 }
 
@@ -136,17 +205,22 @@ export interface ConteoDeCanal {
 
 /**
  * «CUÁNTOS DE WSPP, CUÁNTOS DE FB O IG HAY EN CADA COLUMNA» (pedido del dueño,
- * 13-sep-2026): los cinco pares de la fila de íconos, en su orden, contados sobre
- * una etapa. Formulario no entra, igual que en la fila.
+ * 13-sep-2026): los pares de la fila de íconos de ESE módulo, en su orden, contados
+ * sobre una etapa. Los mismos que la fila ofrece y ninguno más: en campaña
+ * Formulario no entra, en ventas sí (`canalesDeLaMesa`).
  *
  * `null` = el desglose no trae `canal` (un server viejo, o un pedido sin
  * `mesaPorCanal`): ahí la card dice sólo la cifra y el título, en vez de una fila
  * de ceros que se leería como «no hay nada en Facebook».
  */
-export function conteoPorCanal(desglose: readonly FilaDesglose[] | undefined, etapa: string): ConteoDeCanal[] | null {
+export function conteoPorCanal(
+  desglose: readonly FilaDesglose[] | undefined,
+  etapa: string,
+  modulo: 'ventas' | 'campana' = 'campana',
+): ConteoDeCanal[] | null {
   if (!desglose || desglose.some((f) => f.canal === undefined)) return null;
   const deLaEtapa = desglose.filter((f) => f.etapa === etapa);
-  return CANALES_DE_CAMPANA.map((c) => ({
+  return canalesDeLaMesa(modulo).map((c) => ({
     id: c.id,
     n: deLaEtapa.reduce((suma, f) => (esDelPar(f, c) ? suma + f.n : suma), 0),
   }));
@@ -168,6 +242,8 @@ export function ayudaDeCanal(c: CanalDeLaMesa): string {
       return 'Sólo los comentarios en las publicaciones de Facebook';
     case 'instagram-comentario':
       return 'Sólo los comentarios en las publicaciones de Instagram';
+    case 'formulario':
+      return 'Sólo quienes llenaron el formulario de la landing, sin escribir todavía';
     default:
       return `Sólo ${c.label}`;
   }

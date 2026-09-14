@@ -2,18 +2,24 @@ import type { ReactNode } from 'react';
 import { insigniaDe, LogoDeCanal } from '../../components/BadgeCanal';
 import type { AlcanceDeCanal } from '../../dominio/conversaciones';
 import { cifra } from '../../lib/formato';
-import { canalesDeLaMesa, type ConteoDeCanal, type GrupoDeCanal } from './canalDeMesa';
+import type { CanalDeLaMesa, ConteoDeCanal, GrupoDeCanal } from './canalDeMesa';
 import { ICONO_DE_ETAPA } from './iconoDeEtapa';
-import { TITULO_NUEVAS_HOY, type ColumnaTablero } from './tablero';
+import type { ColumnaTablero } from './tablero';
 
 /**
- * LA CABECERA DE UNA COLUMNA DEL PIPELINE DE CAMPAÑA — «la tarjeta superior» (13-sep-2026).
+ * LA CABECERA DE UNA COLUMNA DEL PIPELINE — «la tarjeta superior» (13-sep-2026).
  *
  * Pedido del dueño: «en cada tarjeta superior debería decir cuántos de wspp cuántos de
  * fb o ig hay en cada columna». Dice, en este orden: QUÉ es la columna (ícono, título y
  * el (i)), CUÁNTAS hay en el canal que se está mirando (la cifra grande) y DE DÓNDE
  * vienen todas las de esa etapa (la composición por canal, con el elegido resaltado).
- * En «Te esperan», además, lo del día: «N nuevas hoy · N respondidos».
+ * En «Te esperan», además, lo del día: dos celdas que cada mesa llena con lo suyo
+ * (campaña: «N nuevas hoy · N respondidos»; ventas: «N nuevas hoy · N sin abrir»).
+ *
+ * Nació como `CabeceraColumnaCampana`, sólo para Betto y Américo; el 14-sep-2026 el
+ * dueño pidió «el nuevo diseño a escuela ventas» y pasó a ser la cabecera de las DOS
+ * mesas. No sabe de módulos: recibe los pares de la fila de íconos de esta mesa
+ * (`opciones`) y las celdas ya resueltas (`delDia`), y dibuja lo que le llega.
  *
  * 🔴 **La cifra y la composición cuentan cosas distintas, y es a propósito.** La cifra
  * es la lista de abajo (el canal elegido); la composición es la etapa entera, con todos
@@ -29,14 +35,23 @@ import { TITULO_NUEVAS_HOY, type ColumnaTablero } from './tablero';
  * la cifra y el título, nada más.
  */
 
-export function CabeceraColumnaCampana({
+/** Una celda de «lo del día»: la cifra y su rótulo, con la ayuda que dice de qué es. */
+export interface CeldaDelDia {
+  n: number;
+  rotulo: string;
+  ayuda: string;
+}
+
+export function CabeceraColumna({
   columna,
   cifras,
   conteos,
+  opciones,
   alcance,
   delDia,
   pista,
   colapsar,
+  aviso,
   chips,
 }: {
   columna: ColumnaTablero;
@@ -44,21 +59,25 @@ export function CabeceraColumnaCampana({
   cifras: { principal: number; de: number | null };
   /** La composición por canal de la etapa (`conteoPorCanal`). `null` = server viejo: no se dibuja. */
   conteos: readonly ConteoDeCanal[] | null;
+  /** Los pares que ofrece la fila de íconos de ESTA mesa (`canalesDeLaMesa(modulo)`): los que la composición dibuja. */
+  opciones: readonly CanalDeLaMesa[];
   /** El canal que se está mirando, para resaltarlo. `null` = «Todos»: no se resalta ninguno. */
   alcance: AlcanceDeCanal | null;
   /**
-   * Sólo en «Te esperan». `hoy: null` = el server no cuenta `nacioHoy` (no es un cero);
-   * `respondidos: null` = la card calla esa cifra (un recorte puesto, o sin desglose).
+   * Lo del día, sólo en «Te esperan»: hasta dos celdas ya resueltas por quien llama.
+   * Vacío o `null` = la card calla (un recorte puesto, un server sin desglose).
    */
-  delDia: { hoy: number | null; respondidos: { n: number; rotulo: string } | null } | null;
-  /** El (i) de la columna y el botón de colapsar: los mismos que en ventas. */
+  delDia: readonly CeldaDelDia[] | null;
+  /** El (i) de la columna y el botón de colapsar. */
   pista: ReactNode;
   colapsar: ReactNode;
+  /** Lo que cambia MIENTRAS se arrastra («Suelta para registrar la venta»); casi siempre nada. */
+  aviso?: ReactNode;
   /** Los chips de recorte de la columna, si los ofrece. */
   chips: ReactNode;
 }) {
   const Icono = ICONO_DE_ETAPA[columna.id];
-  const conDelDia = delDia != null && (delDia.hoy != null || delDia.respondidos != null);
+  const celdas = delDia ?? [];
   return (
     <header
       data-card-columna={columna.id}
@@ -100,36 +119,23 @@ export function CabeceraColumnaCampana({
         )}
       </p>
 
-      {conteos && <ComposicionPorCanal conteos={conteos} alcance={alcance} />}
+      {aviso}
+
+      {conteos && <ComposicionPorCanal conteos={conteos} opciones={opciones} alcance={alcance} />}
 
       {/* LO DEL DÍA, sólo en «Te esperan»: dos cifras en dos celdas y no una tira. A
           1280 la columna deja ~199 px útiles, y «82 nuevas hoy · 40 respondidos · 30 d»
           en un renglón se partía en dos a la mitad de una frase. */}
-      {conDelDia && (
+      {celdas.length > 0 && (
         <div className="mt-2.5 grid grid-cols-2 gap-2 border-t border-border/70 pt-2.5">
-          {delDia.hoy != null && (
-            <div title={TITULO_NUEVAS_HOY} className="min-w-0">
+          {celdas.map((celda) => (
+            <div key={celda.rotulo} title={celda.ayuda} className="min-w-0">
               <p className="font-heading text-[15px] font-bold leading-none tabular-nums text-foreground">
-                {cifra(delDia.hoy)}
+                {cifra(celda.n)}
               </p>
-              <p className="mt-1 whitespace-nowrap text-[10.5px] leading-none text-muted-foreground">
-                {delDia.hoy === 1 ? 'nueva' : 'nuevas'} hoy
-              </p>
+              <p className="mt-1 whitespace-nowrap text-[10.5px] leading-none text-muted-foreground">{celda.rotulo}</p>
             </div>
-          )}
-          {delDia.respondidos && (
-            <div
-              title="Les respondiste y no volvieron a escribir: la columna «Respondidos», en la misma ventana"
-              className="min-w-0"
-            >
-              <p className="font-heading text-[15px] font-bold leading-none tabular-nums text-foreground">
-                {cifra(delDia.respondidos.n)}
-              </p>
-              <p className="mt-1 whitespace-nowrap text-[10.5px] leading-none text-muted-foreground">
-                {delDia.respondidos.rotulo}
-              </p>
-            </div>
-          )}
+          ))}
         </div>
       )}
 
@@ -138,26 +144,28 @@ export function CabeceraColumnaCampana({
   );
 }
 
+/** Los tres grupos de la fila, en su orden: el filete va ENTRE grupos, nunca antes del primero. */
+const GRUPOS: readonly GrupoDeCanal[] = ['mensajes', 'comentarios', 'formulario'];
+
 /**
- * LA COMPOSICIÓN POR CANAL — los cinco pares de la fila de íconos de arriba, con la
- * misma convención: primero los MENSAJES, un filete y después los COMENTARIOS; el
- * comentario va con un aro (hueco = en público, `BadgeCanal`). Color, logo y nombre
- * salen de `insigniaDe`, la fuente única (#37).
+ * LA COMPOSICIÓN POR CANAL — los pares de la fila de íconos de arriba, con la misma
+ * convención: primero los MENSAJES, un filete y después los COMENTARIOS —y en ventas
+ * otro filete y FORMULARIO—; el comentario va con un aro (hueco = en público,
+ * `BadgeCanal`). Color, logo y nombre salen de `insigniaDe`, la fuente única (#37);
+ * Formulario no es una marca y va con el trazo de la casa, como en la fila.
  *
  * ⚠️ Un canal en cero se dibuja igual, más tenue: la fila es la misma en las cinco
  * columnas, y un hueco movería los demás canales de lugar entre una columna y otra.
  */
 function ComposicionPorCanal({
   conteos,
+  opciones,
   alcance,
 }: {
   conteos: readonly ConteoDeCanal[];
+  opciones: readonly CanalDeLaMesa[];
   alcance: AlcanceDeCanal | null;
 }) {
-  const opciones = canalesDeLaMesa();
-  const deGrupo = (grupo: GrupoDeCanal) =>
-    conteos.filter((c) => opciones.find((o) => o.id === c.id)?.grupo === grupo);
-
   const celda = (conteo: ConteoDeCanal) => {
     const op = opciones.find((o) => o.id === conteo.id);
     if (!op) return null;
@@ -174,7 +182,9 @@ function ComposicionPorCanal({
         style={elegido && color ? { backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` } : undefined}
         className={
           'inline-flex items-center gap-0.5 rounded-full py-0.5 pl-0.5 pr-1.5 text-[11px] font-semibold tabular-nums ' +
-          (elegido ? 'text-foreground' : vacio ? 'text-muted-foreground/60' : 'text-muted-foreground')
+          (elegido ? 'text-foreground' : vacio ? 'text-muted-foreground/60' : 'text-muted-foreground') +
+          // Formulario elegido: sin color de marca que tintar, se marca con el gris de la casa.
+          (elegido && !color ? ' bg-secondary' : '')
         }
       >
         <span
@@ -182,7 +192,7 @@ function ComposicionPorCanal({
           className={'flex size-3.5 items-center justify-center rounded-full ' + (vacio && !elegido ? 'opacity-45' : '')}
           style={{ color, boxShadow: op.tipo === 'comentario' && color ? `inset 0 0 0 1px ${color}` : undefined }}
         >
-          {insignia && <LogoDeCanal canal={insignia.logo} soloGlifo size={op.tipo === 'comentario' ? 8 : 10} />}
+          <LogoDeCanal canal={insignia?.logo ?? op.canal} soloGlifo size={op.tipo === 'comentario' ? 8 : 10} />
         </span>
         <span className="sr-only">{op.label}: </span>
         {cifra(conteo.n)}
@@ -193,11 +203,16 @@ function ComposicionPorCanal({
     );
   };
 
+  const grupos = GRUPOS.map((grupo) =>
+    conteos.filter((c) => opciones.find((o) => o.id === c.id)?.grupo === grupo),
+  ).filter((delGrupo) => delGrupo.length > 0);
+
   return (
     <ul aria-label="De qué canal son" className="mt-2 flex flex-wrap items-center gap-x-0.5 gap-y-1">
-      {deGrupo('mensajes').map(celda)}
-      <li aria-hidden className="mx-0.5 h-3 w-px bg-border" />
-      {deGrupo('comentarios').map(celda)}
+      {grupos.map((delGrupo, i) => [
+        i > 0 ? <li key={`filete-${i}`} aria-hidden className="mx-0.5 h-3 w-px bg-border" /> : null,
+        ...delGrupo.map(celda),
+      ])}
     </ul>
   );
 }

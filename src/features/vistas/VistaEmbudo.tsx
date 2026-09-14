@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   ArrowRight,
   BadgeDollarSign,
-  Check,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -83,7 +82,7 @@ import {
   TODOS_LOS_CANALES,
 } from './canalDeMesa';
 import { respondidosDeLaMesa, resumirTablero } from './resumen';
-import { CabeceraColumnaCampana } from './CabeceraColumnaCampana';
+import { CabeceraColumna, type CeldaDelDia } from './CabeceraColumna';
 import { ICONO_DE_ETAPA } from './iconoDeEtapa';
 
 /**
@@ -256,17 +255,23 @@ export function VistaEmbudo({
    */
   const [canal, setCanal] = useState<'facebook' | 'instagram' | null>(null);
   /**
-   * ══ EL CANAL DE LA MESA — la fila de íconos (13-sep-2026, `canalDeMesa.ts`) ══
+   * ══ EL CANAL DE LA MESA — la fila de íconos (13-sep-2026, `canalDeMesa.ts`; ══
+   * en las dos mesas desde el 14-sep, ADR 0103 §9)
    *
    * «Te esperan» sumaba chats, DMs y COMENTARIOS en una cifra, y mil y pico se
    * leían como mil y pico personas esperando por WhatsApp. La mesa se mira canal
-   * por canal y **arranca en WhatsApp**, cada vez que se entra: no se guarda,
-   * igual que el rango, porque lo que se trabaja al abrir son los chats.
+   * por canal en LOS DOS módulos y **arranca en WhatsApp** en los dos (decisión
+   * del dueño, 14-sep-2026: lo que se trabaja al abrir son los chats), cada vez
+   * que se entra: no se guarda, igual que el rango. `canalesDeLaMesa` y
+   * `alcanceDeCanal` reciben el módulo y resuelven contra SU lista (ventas suma
+   * Formulario); la mecánica es una sola.
+   *
+   * ⚠️ La primera versión de ventas (#1073, un día en `desarrollo`) arrancaba en
+   * «Todos» para no cambiar el pedido byte a byte; nunca llegó a producción.
    */
+  const moduloDeLaMesa: 'ventas' | 'campana' = esDeCampana ? 'campana' : 'ventas';
   const [canalElegido, setCanalElegido] = useState<string>(CANAL_INICIAL);
-  // 🔴 Sólo en campaña («exclusivamente para campaña»): en ventas no hay fila de
-  // íconos, y lo único que acota por canal es el puente del Dashboard.
-  const alcanceCanal = alcanceDeCanal(esDeCampana ? canalElegido : TODOS_LOS_CANALES, canal);
+  const alcanceCanal = alcanceDeCanal(canalElegido, canal, moduloDeLaMesa);
 
   /**
    * ══ LA FRANJA DE TIEMPO — «¿a quiénes les escribí hoy?» (`franja.ts`) ═════
@@ -329,7 +334,7 @@ export function VistaEmbudo({
    * dos juegos tengan el mismo largo (`tablero.test.ts`), pero por lo que ese
    * test dice —el ancho de la mesa a 1280— y ya no por una restricción de React.
    */
-  const columnas = columnasDe(esDeCampana ? 'campana' : 'ventas');
+  const columnas = columnasDe(moduloDeLaMesa);
   const tablero = useTablero(
     columnas.map((c) => pedidoDe(c.id)),
     // El rango viaja como CLAVE (con el día, para «Hoy») y sus instantes se
@@ -346,9 +351,10 @@ export function VistaEmbudo({
       // Los otros dos rangos, detrás (`useTablero`). Con un server que no sabe de
       // rangos (sin `recortesDisponibles`), nada: «Hoy» y «7 d» le darían 400.
       precargar: precargaDeRangos,
-      // El desglose por canal y en el rango (13-sep-2026), SÓLO en campaña: es lo que
-      // cuenta la composición de cada columna. Ventas sigue con el de siempre.
-      mesaPorCanal: Boolean(esDeCampana),
+      // El desglose por canal y en el rango (13-sep-2026; en las dos mesas desde el
+      // 14-sep): es lo que cuenta la composición de cada card. Un server que no lo
+      // sabe lo ignora y contesta el desglose de siempre, sin `mesaPorCanal: true`.
+      mesaPorCanal: true,
     },
   );
   const porColumna = tablero.porColumna as Record<
@@ -366,7 +372,7 @@ export function VistaEmbudo({
    * que queda al tocarlo. Un server viejo ya lo manda recortado por canal, y de 30
    * días: ahí se usa tal cual llega.
    */
-  const desgloseDelRango = Boolean(esDeCampana) && tablero.mesaPorCanal;
+  const desgloseDelRango = tablero.mesaPorCanal;
   const desgloseTodosLosCanales = tablero.desglose;
   const desglose = desgloseDelRango ? filasDelCanal(desgloseTodosLosCanales, alcanceCanal) : desgloseTodosLosCanales;
   const conteos = tablero.conteos;
@@ -437,8 +443,9 @@ export function VistaEmbudo({
   const repartidas = repartirColumnas(
     columnas.map((col) => [col.id, porColumna[col.id]!.items] as const),
     overrides,
-    // En campaña manda el tiempo: «el color no reordena» (dueño, 13-sep-2026).
-    { ordenarPorLuz: !esDeCampana },
+    // Manda el tiempo: «el color no reordena» (dueño, 13-sep-2026 para campaña y
+    // 14-sep para la Escuela: «por tiempo»). El orden es el del server.
+    { ordenarPorLuz: false },
   );
 
   // «ATENDER SIGUIENTE» (#807, S.3): sobre TODO lo que el tablero ya cargó,
@@ -774,20 +781,17 @@ export function VistaEmbudo({
         // Se nombra como DM («Messenger», «Instagram»), porque es lo que se pide:
         // `tipo=mensaje` (`canalDeMesa.ts#alcanceDeCanal`).
         canal={canal ? { etiqueta: nombreDeCanal(canal, 'mensaje'), onQuitar: () => setCanal(null) } : null}
-        // La fila de íconos, SÓLO en campaña. Tocar uno reemplaza el canal del
-        // puente: un eje por vez.
-        canales={
-          esDeCampana
-            ? {
-                opciones: canalesDeLaMesa(),
-                elegido: canal ? null : canalElegido,
-                onElegir: (id) => {
-                  setCanal(null);
-                  setCanalElegido(id);
-                },
-              }
-            : null
-        }
+        // La fila de íconos, EN LOS DOS MÓDULOS desde el 13-sep-2026: cada uno con
+        // su lista (`canalesDeLaMesa(moduloDeLaMesa)` — ventas suma Formulario).
+        // Tocar uno reemplaza el canal del puente: un eje por vez.
+        canales={{
+          opciones: canalesDeLaMesa(moduloDeLaMesa),
+          elegido: canal ? null : canalElegido,
+          onElegir: (id) => {
+            setCanal(null);
+            setCanalElegido(id);
+          },
+        }}
         // La pista nombra las dos compuertas de VENTAS (curso de interés y
         // venta registrada): en campaña no existe ninguna de las dos, así que
         // ahí no se dice nada en vez de explicar reglas de otro tablero.
@@ -955,23 +959,42 @@ export function VistaEmbudo({
             // Va en el renglón de abajo y no en el del título a propósito: ahí, a
             // 1280, dejaba «Nunca contestaron» en «Nunca…».
             const hoy = conFranja ? null : contarHoy(desglose, [col.id], recorte);
-            const conHoy = hoy != null && hoy > 0;
-            // «Sin abrir» y «volvieron» salen del desglose de 30 días: sólo describen
-            // la columna cuando su número es el universo (`cifras.de == null`). Con
-            // cualquier cosa que la achique —su chip, una luz, un recorte del día,
-            // Hoy o 7 d—, «48 de 1.109 · 877 sin abrir» se leía como parte de la
-            // lista recortada. Es la cabecera de VENTAS: campaña ya no los dice
-            // («volvieron quítalo», «sin abrir no está funcionando», 13-sep-2026).
-            const conDesgloseDeBandeja =
-              esTeEsperan && bandeja.hayDetalle && bandeja.total > 0 && cifras.de == null;
-            // «N RESPONDIDOS» EN «TE ESPERAN» (campaña, 13-sep-2026): la columna de al
-            // lado, contada en la misma foto. Con un chip, una luz o un recorte del día
-            // calla, igual que callaban «sin abrir» y «volvieron»: ahí la card describe
-            // otra lista.
-            const respondidos =
-              esDeCampana && esTeEsperan && recorte === 'todas'
-                ? respondidosDeLaMesa(desglose, mesa.rango, desgloseDelRango)
-                : null;
+            /**
+             * LO DEL DÍA EN LA CARD DE «TE ESPERAN» — dos celdas, y cada mesa dice lo
+             * suyo. La primera es la misma en las dos: «N nuevas hoy». La segunda:
+             *
+             *  · CAMPAÑA: «N respondidos» (13-sep-2026, «en vez de contestaron pon los
+             *    que ya fueron respondidos»): la columna de al lado, en la misma foto.
+             *  · VENTAS: «N sin abrir» (nadie les contestó nunca) — el trabajo que la
+             *    cabecera vieja decía en un renglón junto a «volvieron» y «ahora». Se
+             *    queda sólo ése: es la deuda; «volvieron» es su complemento sobre la
+             *    cifra grande, y «ahora» ya lo dice el reloj de cada tarjeta. En la
+             *    Escuela se responde desde Hermes, así que la cuenta es honesta — a
+             *    diferencia de campaña, donde mentía y se fue (ver el reinicio).
+             *
+             * Con un chip, una luz o un recorte del día la card calla las dos: ahí
+             * describe otra lista. Con el rango de la mesa se dicen igual, porque con
+             * `mesaPorCanal` el desglose ES del rango; con un server viejo (desglose de
+             * 30 días), «sin abrir» sólo se dice sin rango, como antes.
+             */
+            const celdasDelDia: CeldaDelDia[] = [];
+            if (esTeEsperan && recorte === 'todas') {
+              if (hoy != null) {
+                celdasDelDia.push({ n: hoy, rotulo: hoy === 1 ? 'nueva hoy' : 'nuevas hoy', ayuda: TITULO_NUEVAS_HOY });
+              }
+              if (esDeCampana) {
+                const respondidos = respondidosDeLaMesa(desglose, mesa.rango, desgloseDelRango);
+                if (respondidos) {
+                  celdasDelDia.push({
+                    n: respondidos.n,
+                    rotulo: respondidos.rotulo,
+                    ayuda: 'Les respondiste y no volvieron a escribir: la columna «Respondidos», en la misma ventana',
+                  });
+                }
+              } else if (bandeja.hayDetalle && bandeja.total > 0 && (desgloseDelRango || !hayRango(mesa.rango))) {
+                celdasDelDia.push({ n: bandeja.nuevas, rotulo: 'sin abrir', ayuda: 'Nadie les contestó nunca: hay que abrirlas' });
+              }
+            }
 
             // El (i) de la columna: reemplaza al texto fijo que iba siempre debajo del
             // título, y la pista se cuenta al pasar el mouse.
@@ -1118,117 +1141,29 @@ export function VistaEmbudo({
                   </button>
                 ) : (
                   <>
-                  {esDeCampana ? (
-                    /* LA CABECERA DE CAMPAÑA (13-sep-2026): ícono, título, la cifra del
-                       canal elegido y la composición por canal de la etapa, en CADA
-                       columna; en «Te esperan», lo del día. Ventas conserva la suya. */
-                    <CabeceraColumnaCampana
-                      columna={col}
-                      cifras={cifras}
-                      conteos={desgloseDelRango ? conteoPorCanal(desgloseTodosLosCanales, col.id) : null}
-                      alcance={alcanceCanal}
-                      delDia={esTeEsperan ? { hoy, respondidos } : null}
-                      pista={pistaDeColumna}
-                      colapsar={botonColapsar}
-                      chips={chipsDeColumna}
-                    />
-                  ) : (
-                  <header className="px-1.5 pb-2 pt-1">
-                    <div className="flex items-baseline gap-1.5">
-                      <span
-                        className={
-                          'shrink-0 font-heading text-xl font-bold tabular-nums ' +
-                          (esPerdidos ? 'text-muted-foreground' : 'text-foreground')
-                        }
-                      >
-                        {cifra(cifras.principal)}
-                      </span>
-                      {/* El tamaño real del montón, cuando el recorte lo achica. Sin
-                          esto, «47» se leería como si la columna entera fueran 47. */}
-                      {cifras.de != null && (
-                        <span
-                          // `nowrap`: con el título truncándose al lado, «de 7,505» se
-                          // partía en dos renglones y la cabecera crecía (lo mostró
-                          // la captura con «Verdes» puesto).
-                          className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground"
-                          title={`${cifra(cifras.principal)} de ${cifra(cifras.de)} en total`}
-                        >
-                          de {cifra(cifras.de)}
-                        </span>
-                      )}
-                      {/* `min-w-0 truncate`: con el (i) en las cinco columnas y la
-                          cifra «de N» de un recorte, «Nunca contestaron» no entra
-                          en los ~217 px de contenido de una columna a 1280. Se
-                          corta con puntos suspensivos y el `title` lo dice
-                          entero, en vez de empujar el botón de colapsar afuera. */}
-                      <h3
-                        title={col.titulo}
-                        className={
-                          'min-w-0 truncate font-heading text-[13px] font-bold ' +
-                          (esCierre ? 'text-navy-ink' : esPerdidos ? 'text-muted-foreground' : 'text-foreground')
-                        }
-                      >
-                        {col.titulo}
-                      </h3>
-                      {esCierre && enEtapa.length > 0 && (
-                        <Check size={13} strokeWidth={3} className="self-center text-success" />
-                      )}
-                      {pistaDeColumna}
-                      {botonColapsar}
-                    </div>
-                    {/* La pista ya no va en un renglón fijo: la cuenta el (i) de
-                        arriba, en las cinco columnas (10-sep-2026). Lo único que
-                        queda acá es lo que cambia MIENTRAS se arrastra. */}
-                    {esCierre && arrastrada != null && etapaArrastrada !== 'cierre' && (
-                      <p className="mt-0.5 text-xs font-semibold leading-tight text-navy-ink">
-                        Suelta para registrar la venta
-                      </p>
-                    )}
-
-                    {/*
-                      LO QUE SE BAJÓ DE LA TIRA. «Te esperan» son DOS trabajos, no
-                      uno: `sin abrir` se abre y `volvieron a escribir` se sigue —
-                      es el porqué con el que nació `BandejaDeuda`, y perderlo al
-                      volverla columna habría sido cambiar un rótulo por un dato.
-                      Va como texto y no como chips a propósito: recortar por esto
-                      pide parámetros nuevos en la cola, y esto es front puro.
-                      ⚠️ `hayDetalle` es false mientras el server no manda desglose
-                      (entre N4 y N5): ahí calla en vez de decir dos ceros.
-                    */}
-                    {(conHoy || conDesgloseDeBandeja) && (
-                        <p className="mt-1 flex flex-wrap items-baseline gap-x-1.5 font-mono text-[11px] tabular-nums leading-tight text-muted-foreground">
-                          {conHoy && (
-                            <span className="font-semibold text-foreground" title={TITULO_NUEVAS_HOY}>
-                              {cifra(hoy)} hoy
-                            </span>
-                          )}
-                          {conHoy && conDesgloseDeBandeja && (
-                            <span aria-hidden className="text-muted-foreground/40">·</span>
-                          )}
-                          {conDesgloseDeBandeja && (
-                            <>
-                              {bandeja.vivas > 0 && (
-                                <span className="font-semibold text-temp-fresco" title="Escribieron hace menos de 24 h">
-                                  {cifra(bandeja.vivas)} ahora
-                                </span>
-                              )}
-                              <span title="Nadie les contestó nunca">
-                                {cifra(bandeja.nuevas)} sin abrir
-                              </span>
-                              <span aria-hidden className="text-muted-foreground/40">·</span>
-                              <span title="Ya les hablaste y volvieron a escribir">
-                                {cifra(bandeja.retomadas)} volvieron
-                              </span>
-                            </>
-                          )}
+                  {/* LA CABECERA (13-sep-2026, campaña; 14-sep, las dos mesas): ícono,
+                      título, la cifra del canal elegido y la composición por canal de la
+                      etapa, en CADA columna; en «Te esperan», lo del día. La pista ya no
+                      va en un renglón fijo: la cuenta el (i) (10-sep-2026); lo único que
+                      va debajo del título es lo que cambia MIENTRAS se arrastra. */}
+                  <CabeceraColumna
+                    columna={col}
+                    cifras={cifras}
+                    conteos={desgloseDelRango ? conteoPorCanal(desgloseTodosLosCanales, col.id, moduloDeLaMesa) : null}
+                    opciones={canalesDeLaMesa(moduloDeLaMesa)}
+                    alcance={alcanceCanal}
+                    delDia={celdasDelDia}
+                    pista={pistaDeColumna}
+                    colapsar={botonColapsar}
+                    aviso={
+                      esCierre && arrastrada != null && etapaArrastrada !== 'cierre' ? (
+                        <p className="mt-1.5 text-xs font-semibold leading-tight text-navy-ink">
+                          Suelta para registrar la venta
                         </p>
-                    )}
-
-                    {/* Se dibuja solo si hay algo más que «Todas»: un eje solitario que
-                        no recorta nada es un botón que no hace nada. */}
-                    {chipsDeColumna}
-                  </header>
-                  )}
+                      ) : undefined
+                    }
+                    chips={chipsDeColumna}
+                  />
 
                   {/* `--piso-movil`: la píldora de campaña del celular flota encima
                       (ADR 0113); sin ella la variable no existe y esto es 0. */}
@@ -1265,21 +1200,20 @@ export function VistaEmbudo({
 
                     {enEtapa.length === 0 && !esDestino && (
                       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 pb-10">
-                        {/* En campaña, el ícono de la columna, grande y tenue (la maqueta del
-                            dueño). El texto sigue diciendo CÓMO se llena: una columna en cero
-                            que no lo explica es la mitad del problema de esta pantalla. */}
-                        {esDeCampana &&
-                          (() => {
-                            const IconoVacio = ICONO_DE_ETAPA[col.id];
-                            return IconoVacio ? (
-                              <span
-                                aria-hidden
-                                className="flex size-12 items-center justify-center rounded-full bg-card text-muted-foreground/60 shadow-[0_1px_2px_rgba(14,42,82,0.05)]"
-                              >
-                                <IconoVacio size={22} strokeWidth={1.5} />
-                              </span>
-                            ) : null;
-                          })()}
+                        {/* El ícono de la columna, grande y tenue (la maqueta del dueño). El
+                            texto sigue diciendo CÓMO se llena: una columna en cero que no lo
+                            explica es la mitad del problema de esta pantalla. */}
+                        {(() => {
+                          const IconoVacio = ICONO_DE_ETAPA[col.id];
+                          return IconoVacio ? (
+                            <span
+                              aria-hidden
+                              className="flex size-12 items-center justify-center rounded-full bg-card text-muted-foreground/60 shadow-[0_1px_2px_rgba(14,42,82,0.05)]"
+                            >
+                              <IconoVacio size={22} strokeWidth={1.5} />
+                            </span>
+                          ) : null;
+                        })()}
                         <p className="max-w-[24ch] text-center text-[11px] leading-relaxed text-muted-foreground">
                           {vacioDeColumna(recorte, col.vacio, origenDelVacio(mesa, col.id), col.id)}
                         </p>

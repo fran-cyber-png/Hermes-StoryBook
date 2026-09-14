@@ -1,6 +1,17 @@
 [
   {
     "fecha": "2026-09-14",
+    "resumen": "Sincronizado a mano desde el botón de Novedades. 12 archivo(s) tocados bajo src/.",
+    "detalle": "",
+    "archivos": [
+      "...eceraColumnaCampana.tsx => CabeceraColumna.tsx}",
+      "src/features/vistas"
+    ],
+    "commit": "",
+    "tipo": "sync-manual-boton"
+  },
+  {
+    "fecha": "2026-09-14",
     "resumen": "Primera sincronización con Goberna-Lab/hermes (main). El recorte había quedado atrás desde el 3-sep-2026: se trajo src/ al día completo.",
     "detalle": "457 archivos tocados. Cambios grandes en canales (ColaUnificada, ResponderPanel casi se duplicaron; aparecieron RielDeCanales, PastillasDelComentario, CabeceraDeChat, YaRespondido), una feature nueva de móvil (features/movil/), dominio de países/orígenes nuevo, y soporte PWA. Se borraron componentes que el producto real ya no tiene (editor de diagramas de Notas, bot.ts, BloqueMeta/QuienEs de panel).",
     "archivos": [
